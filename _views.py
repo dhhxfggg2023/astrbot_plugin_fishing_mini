@@ -291,11 +291,14 @@ class ViewsMixin:
     def _help_pages(self) -> list[tuple[str, list[str]]]:
         """帮助分页内容：(标题, 行列表)。每页都尽量短，避免刷屏。"""
         cfg = self.cfg
-        cd = (
-            "无冷却"
-            if int(cfg["cooldown_seconds"]) <= 0
-            else f'{int(cfg["cooldown_seconds"])}s'
-        )
+        # 体力取代了老的冷却：每钓一次 1 点，随时间恢复，能攒着
+        if _stamina_enabled(cfg):
+            stamina_line = (
+                f"　体力上限 {int(cfg['stamina_max'])} 点"
+                f"（每 {int(cfg['stamina_regen_seconds'])} 秒回 1 点）"
+            )
+        else:
+            stamina_line = "　本服不限体力（想钓就钓）"
         interactive = "/".join(
             sorted(self.interactive_rarities, key=lambda r: RARITY_RANK.get(r, 0))
         )
@@ -336,25 +339,28 @@ class ViewsMixin:
         ]
 
         fee_line = (
-            f"　下竿免费（空钩不花钱）　冷却 {cd}　签到 {cfg['sign_reward']}"
+            f"　下竿免费（空钩不花钱）　签到 {cfg['sign_reward']}"
             if int(cfg["fish_cost"]) <= 0
-            else f"　钓费 {cfg['fish_cost']}/竿　冷却 {cd}　签到 {cfg['sign_reward']}"
+            else f"　钓费 {cfg['fish_cost']}/竿　签到 {cfg['sign_reward']}"
         )
         pages: list[tuple[str, list[str]]] = [
             (
                 "基础",
                 [
                     "　/钓鱼　　　　　下竿（写 钓/抛竿 也行）",
+                    "　/钓鱼 10　　　 连钓 10 次（扣 10 点体力 + 10 个饵）",
                     "　/钓鱼 拉　　　 拉线（也可写 收线/提竿）",
+                    "　/钓鱼 体力　　 看体力（攒着最多 20 点）",
                     "　/钓鱼 背包　　 看背包",
                     "　/钓鱼 卖光光　 清空背包换金币",
                     "　/钓鱼 换饵 蚯蚓　换鱼饵（换饵 空钩 不花钱）",
-                    "　/钓鱼 金币　　 档案",
+                    "　/钓鱼 档案　　 等级/金币/统计",
                     "　/钓鱼 签到　　 每日金币",
                     "　/钓鱼 今日　　 今日天气与行情",
                     "　/钓鱼 排行　　 群内排行榜",
                     "　/钓鱼 锁定 1　 锁定不想卖的鱼",
                     "　/钓鱼 事件 1　 水面上偶尔会有事发生",
+                    stamina_line,
                     fee_line,
                 ],
             ),
@@ -430,6 +436,23 @@ class ViewsMixin:
             ]
         )
         return pages
+
+    def _stamina_text(self, player: dict[str, Any]) -> str:
+        """体力页：/钓鱼 体力（只陈述状态，不显示任何概率）"""
+        cfg = self.cfg
+        if not _stamina_enabled(cfg):
+            return "⚡ 本服未启用体力限制：想钓就钓，不用等"
+        cap = int(cfg["stamina_max"])
+        current = _refresh_stamina(player, cfg)
+        lines = [f"⚡ 体力 {current}/{cap}"]
+        if current >= cap:
+            lines.append("　已满　攒着不亏，随时可以 /钓鱼 10 连钓")
+        else:
+            wait = _stamina_wait_seconds(player, cfg)
+            lines.append(f"　下一点恢复：还需 {wait} 秒")
+        if current >= 2:
+            lines.append(f"　满体力能连钓 {current} 次（/钓鱼 {current}）")
+        return "\n".join(lines)
 
     def _help_text(self, page: int = 1) -> str:
         """分页帮助，避免一次性输出过多文字。"""

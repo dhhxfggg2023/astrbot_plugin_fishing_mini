@@ -84,6 +84,9 @@ _CFG["bait_hook_rates"] = ",".join(f"{b}:1.0" for b in ("none","bread","worm","b
 # 杂物与鱼互斥：默认关掉杂物掉率，保证「下竿必然上鱼」这类断言稳定；
 # 杂物本身的用例会自己把 item_drop_chance 调成 1.0 / 0.0 来验证。
 _CFG["item_drop_chance"] = 0.0
+# 体力系统默认关掉（regen = 0 即「本服不限体力」），否则连续抛竿的用例会被
+# 「体力不够」挡住；体力本身的用例会自己开一组带体力上限的配置来验证。
+_CFG["stamina_regen_seconds"] = 0
 
 
 class FakeContext:
@@ -1979,6 +1982,203 @@ async def main():
     check(plugin5._find_fish_by_name("sss") is None, "不存在的名字返回 None")
 
     # =====================================================================
+    print("\n[6i] 体力与连钓（/钓鱼 <数字>）")
+
+    import time as _time
+
+    stam_cfg = dict(_CFG)
+    stam_cfg["stamina_max"] = 5
+    stam_cfg["stamina_regen_seconds"] = 45
+    stam_cfg["multi_cast_max"] = 4
+    stam_cfg["easter_egg_chance"] = 0.0
+    stam_cfg["story_chance"] = 0.0
+    stam_cfg["fish_cost"] = 0
+    stam_plugin = make_plugin(stam_cfg)
+    check(
+        mod._stamina_enabled(stam_plugin.cfg),
+        "体力上限与恢复间隔都 > 0 时启用体力",
+    )
+
+    # --- 体力结算（纯函数，不依赖抛竿）---
+    now = 1_700_000_000
+    fresh = {"stamina": -1, "stamina_ts": 0}
+    check(
+        mod._refresh_stamina(fresh, stam_plugin.cfg, now=now) == 5,
+        f"老存档/新玩家的体力按满体力初始化 -> {fresh['stamina']}",
+    )
+    travel = {"stamina": 0, "stamina_ts": now - 90}
+    check(
+        mod._refresh_stamina(travel, stam_plugin.cfg, now=now) == 2,
+        f"时间旅行 90 秒恢复 2 点（45 秒 1 点）-> {travel['stamina']}",
+    )
+    check(
+        travel["stamina_ts"] == now,
+        f"恢复后时间戳只推进整点（余数不浪费）-> {travel['stamina_ts'] - now}",
+    )
+    odd = {"stamina": 1, "stamina_ts": now - 60}
+    check(
+        mod._refresh_stamina(odd, stam_plugin.cfg, now=now) == 2
+        and now - odd["stamina_ts"] == 15,
+        f"不足一点的 15 秒零头保留 -> 余 {now - odd['stamina_ts']} 秒",
+    )
+    full = {"stamina": 4, "stamina_ts": now - 500}
+    check(
+        mod._refresh_stamina(full, stam_plugin.cfg, now=now) == 5
+        and full["stamina_ts"] == now,
+        "体力不会溢出上限，且满体力时时间戳刷新（不偷偷攒时间）",
+    )
+    check(
+        mod._stamina_wait_seconds({"stamina": 3, "stamina_ts": now - 10}, stam_plugin.cfg, now=now) == 35,
+        "距离下一点还有 35 秒",
+    )
+    free_cfg = dict(stam_cfg)
+    free_cfg["stamina_regen_seconds"] = 0
+    check(
+        not mod._stamina_enabled(free_cfg),
+        "恢复间隔填 0 = 本服不限体力（站长想关就能关）",
+    )
+
+    # --- 抛竿扣 1 点；不够就拒绝且不扣饵 ---
+    p = mod._default_player("89030")
+    p["gold"] = 1000
+    p["equipped_bait"] = "worm"
+    p["baits"] = {"worm": 20}
+    await stam_plugin._save_player(p)
+    out = await cast(stam_plugin, FakeEvent("89030"))
+    check("连钓" not in text_of(out), "单竿还是单竿（没被连钓逻辑吃掉）")
+    p = await stam_plugin._load_player("89030")
+    check(p["stamina"] == 4, f"抛一竿扣 1 点体力 -> {p['stamina']}/5")
+    check(p["baits"]["worm"] == 19, f"顺手扣掉 1 个饵 -> {p['baits']['worm']}")
+
+    p["stamina"] = 0
+    p["stamina_ts"] = int(_time.time())
+    await stam_plugin._save_player(p)
+    out = await cast(stam_plugin, FakeEvent("89030"))
+    check(
+        "体力不够" in text_of(out) and "秒恢复" in text_of(out),
+        f"体力为 0 时拒绝抛竿 -> {text_of(out).splitlines()[0]}",
+    )
+    p = await stam_plugin._load_player("89030")
+    check(p["baits"]["worm"] == 19, "被体力拦下时不会白扣鱼饵")
+
+    # --- 连钓：体力 / 饵一次扣 N 份 ---
+    p["stamina"] = 5
+    p["stamina_ts"] = int(_time.time())
+    await stam_plugin._save_player(p)
+    out = await cmd(stam_plugin, FakeEvent("89030"), "3", "", "")
+    body = text_of(out)
+    check("连钓 3 次" in body, f"连钓结果标题 -> {body.splitlines()[0]}")
+    check(
+        body.count("\n") >= 3 and ("上鱼" in body and "空竿" in body),
+        "逐条列出每竿结果 + 汇总行",
+    )
+    p = await stam_plugin._load_player("89030")
+    check(p["stamina"] == 2, f"连钓 3 次扣 3 点体力 -> {p['stamina']}/5")
+    check(p["baits"]["worm"] == 16, f"连钓 3 次扣 3 个饵 -> {p['baits']['worm']}")
+    check(p["total_caught"] == 4, f"连钓的渔获照常计入累计 -> {p['total_caught']}")
+
+    # --- 体力不足整批拒绝 ---
+    p["stamina"] = 1
+    await stam_plugin._save_player(p)
+    out = await cmd(stam_plugin, FakeEvent("89030"), "3", "", "")
+    check(
+        "体力不够" in text_of(out),
+        f"体力不够时整批拒绝 -> {text_of(out).splitlines()[0]}",
+    )
+    p = await stam_plugin._load_player("89030")
+    check(p["stamina"] == 1 and p["baits"]["worm"] == 16, "整批拒绝时不扣体力也不扣饵")
+
+    # --- 饵不足整批拒绝 ---
+    p["stamina"] = 5
+    p["baits"] = {"worm": 1}
+    await stam_plugin._save_player(p)
+    out = await cmd(stam_plugin, FakeEvent("89030"), "3", "", "")
+    check(
+        "只剩 1 个" in text_of(out),
+        f"饵不够时整批拒绝 -> {text_of(out).splitlines()[0]}",
+    )
+    p = await stam_plugin._load_player("89030")
+    check(p["baits"]["worm"] == 1 and p["stamina"] == 5, "整批拒绝时不扣饵也不扣体力")
+
+    # --- 超过单次上限 ---
+    out = await cmd(stam_plugin, FakeEvent("89030"), "99", "", "")
+    check(
+        "最多连钓 4 次" in text_of(out),
+        f"超过 multi_cast_max 被拦下 -> {text_of(out).splitlines()[0]}",
+    )
+
+    # --- 背包只剩 2 格：截断到 2 次，且只扣 2 份 ---
+    p["stamina"] = 5
+    p["baits"] = {"worm": 9}
+    cap_bag = mod._backpack_capacity(p, stam_plugin.cfg)
+    p["inventory"] = [mod._new_instance("carp", 1.0) for _ in range(cap_bag - 2)]
+    await stam_plugin._save_player(p)
+    out = await cmd(stam_plugin, FakeEvent("89030"), "3", "", "")
+    body = text_of(out)
+    check(
+        "只钓 2 次" in body and "体力与鱼饵也只扣 2 份" in body,
+        f"背包快满时截断并说明 -> {[l for l in body.splitlines() if '截断' in l or '只钓' in l]}",
+    )
+    p = await stam_plugin._load_player("89030")
+    check(p["stamina"] == 3, f"截断后只扣实际次数 -> 体力 {p['stamina']}")
+    check(p["baits"]["worm"] == 7, f"截断后只扣实际次数 -> 饵 {p['baits']['worm']}")
+
+    # --- /钓鱼 1 等价单竿（走完整流程）---
+    p["stamina"] = 5
+    p["baits"] = {"worm": 5}
+    p["inventory"] = []
+    await stam_plugin._save_player(p)
+    out = await cmd(stam_plugin, FakeEvent("89030"), "1", "", "")
+    check("连钓" not in text_of(out), "/钓鱼 1 走单竿流程（不是连钓面板）")
+
+    # --- /钓鱼 体力 ---
+    out = await cmd(stam_plugin, FakeEvent("89030"), "体力", "", "")
+    body = text_of(out)
+    check("⚡ 体力" in body and "/5" in body, f"/钓鱼 体力 显示存量 -> {body.splitlines()[0]}")
+    check("秒" in body or "已满" in body, "体力页带恢复提示")
+
+    # --- 不限体力时（regen = 0）不挡人、也不显示体力行 ---
+    free_plugin = make_plugin(free_cfg)
+    pf = mod._default_player("89031")
+    pf["gold"] = 100
+    await free_plugin._save_player(pf)
+    await cast(free_plugin, FakeEvent("89031"))
+    pf = await free_plugin._load_player("89031")
+    check(
+        pf["total_caught"] == 1,
+        f"不限体力模式下照常钓鱼（体力字段不参与判定）-> 累计 {pf['total_caught']}",
+    )
+    out = await cmd(free_plugin, FakeEvent("89031"), "体力", "", "")
+    check("未启用体力" in text_of(out), "不限体力时体力页明确说明")
+
+    # --- 连钓不弹拉线：高逃脱率下会「跑掉」，但绝不注册互动会话 ---
+    esc_cfg = dict(stam_cfg)
+    esc_cfg["interactive_rarities"] = "常见"
+    esc_cfg["rarity_escape_chance"] = "常见:0.95"
+    esc_plugin = make_plugin(esc_cfg)
+    pe = mod._default_player("89032")
+    pe["gold"] = 1000
+    pe["equipped_bait"] = "worm"
+    pe["baits"] = {"worm": 9}
+    pe["stamina"] = 5
+    await esc_plugin._save_player(pe)
+    out = await cmd(esc_plugin, FakeEvent("89032"), "4", "", "")
+    body = text_of(out)
+    check(
+        "跑了" in body and "跑掉" in body,
+        f"连钓里高稀有度按逃脱率直接判定 -> {[l for l in body.splitlines() if '跑' in l][:2]}",
+    )
+    check(
+        not esc_plugin._pending_pulls,
+        "连钓不会注册拉线互动（不会留下等玩家「拉」的会话）",
+    )
+    pe = await esc_plugin._load_player("89032")
+    check(
+        pe["stamina"] == 1 and pe["baits"]["worm"] == 5,
+        f"跑掉也照常扣体力与饵（这一竿确实抛了）-> 体力 {pe['stamina']} 饵 {pe['baits']['worm']}",
+    )
+
+    # =====================================================================
     print("\n[10j] 彩蛋事件 / 里程碑 / 最佳渔获纪录")
     plugin6 = make_plugin()
     ev6 = FakeEvent("89006")
@@ -2152,7 +2352,8 @@ async def main():
     ]
     stale = {
         "fish_cost": 8,
-        "cooldown_seconds": 60,
+        "stamina_regen_seconds": 99,     # 旧配置里的数值与新版默认不同 → 应被同步
+        "stamina_max": 5,
         "location_defs": _old_loc,
         "rod_defs": [
             "bamboo|竹竿|🎋|0|0.00|0.00|村口杂货铺送的，能用",
@@ -2518,7 +2719,7 @@ async def main():
 
     bait_cfg = dict(_CFG)
     bait_cfg["fish_cost"] = 0
-    bait_cfg["cooldown_seconds"] = 0
+    bait_cfg["stamina_regen_seconds"] = 0     # 这一节只验证扣饵，体力放开
     bait_cfg["easter_egg_chance"] = 0.0
     bait_cfg["item_drop_chance"] = 0.0
     plugin_b = make_plugin(bait_cfg)
@@ -3165,7 +3366,8 @@ async def main():
         (("商店", "", ""), "商店"),
         (("图鉴", "", ""), "图鉴"),
         (("图鉴", "详", ""), "图鉴"),
-        (("金币", "", ""), "档案"),
+        (("档案", "", ""), "档案"),
+        (("体力", "", ""), "体力"),
         (("水族馆", "", ""), "水族馆"),
         (("钓点", "", ""), "钓点"),
         (("鱼竿", "", ""), "鱼竿"),
@@ -3177,6 +3379,16 @@ async def main():
     check("订单" in text_of(out), "/钓鱼 订单")
     out = await cmd(plugin, ev, "乱写的", "", "")
     check("不认识" in text_of(out), "未知子命令有提示")
+    # 老指令「金币」名不符实（它显示的其实是档案），现在只给改名提示
+    out = await cmd(plugin, ev, "金币", "", "")
+    check(
+        "改名" in text_of(out) and "档案" in text_of(out),
+        f"/钓鱼 金币 提示改名 -> {text_of(out).splitlines()[0]}",
+    )
+    check(
+        "📇 档案" not in text_of(out),
+        "旧指令不再直接吐出档案（避免两个名字干同一件事）",
+    )
 
     # 每条子命令只回一条消息（曾经因为分派器多 yield 一次而整段重复）
     dups = []
@@ -3208,9 +3420,9 @@ async def main():
     p["collectibles"] = {c["id"]: 2 for c in mod.COLLECTIBLES}
     await plugin._save_player(p)
     for args in (
-        ("背包", "", ""), ("图鉴", "", ""), ("金币", "", ""), ("水族馆", "", ""),
+        ("背包", "", ""), ("图鉴", "", ""), ("档案", "", ""), ("水族馆", "", ""),
         ("商店", "", ""), ("钓点", "", ""), ("鱼竿", "", ""), ("杂物", "", ""),
-        ("订单", "", ""),
+        ("订单", "", ""), ("体力", "", ""),
     ):
         out = await cmd(plugin, ev, *args)
         n = len(text_of(out).splitlines())

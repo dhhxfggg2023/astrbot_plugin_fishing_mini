@@ -19,10 +19,20 @@
     "type": "int",
     "default": 0
   },
-  "cooldown_seconds": {
-    "description": "钓鱼冷却秒数，0 表示不启用冷却",
+  "stamina_max": {
+    "description": "体力上限：每钓一次消耗 1 点，体力会随时间攒着（0 = 不限体力）",
+    "type": "int",
+    "default": 20
+  },
+  "stamina_regen_seconds": {
+    "description": "恢复 1 点体力所需秒数（默认 45，即原来的冷却时间；0 = 不限体力）",
     "type": "int",
     "default": 45
+  },
+  "multi_cast_max": {
+    "description": "一次最多连钓几次（/钓鱼 10 这种写法），防止一次钓太多把机器人卡住",
+    "type": "int",
+    "default": 20
   },
   "sign_reward": {
     "description": "每日签到奖励金币",

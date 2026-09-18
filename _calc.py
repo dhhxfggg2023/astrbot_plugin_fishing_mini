@@ -638,6 +638,9 @@ def _default_player(user_id: str) -> dict[str, Any]:
         "perfect_pulls": 0,
         "clutch_wins": 0,
         "last_fish_time": 0,
+        # 体力：-1 = 还没初始化（首次结算时补满，老存档升级后不会被卡）
+        "stamina": -1,
+        "stamina_ts": 0,
         "last_sign_date": "",
         "last_income_date": "",
         "rod_level": 1,
@@ -690,6 +693,78 @@ def _level_progress(player: dict[str, Any]) -> tuple[int, int, int]:
     here = _level_threshold(level)
     nxt = _level_threshold(level + 1)
     return level, max(0, caught - here), max(1, nxt - here)
+
+def _stamina_enabled(cfg: dict[str, Any]) -> bool:
+    """体力系统是否生效。
+
+    ``stamina_max`` 或 ``stamina_regen_seconds`` 有一个是 0 就等于「本服不限体力」——
+    这是站长想要「回到随便钓」时的开关，不用改代码。
+    """
+    return (
+        _safe_int(cfg.get("stamina_max"), 20, 0) > 0
+        and _safe_int(cfg.get("stamina_regen_seconds"), 45, 0) > 0
+    )
+
+def _refresh_stamina(player: dict[str, Any], cfg: dict[str, Any], now: int | None = None) -> int:
+    """结算体力并返回当前值（惰性结算，不需要后台定时器）。
+
+    规则（都能在 WebUI 里调）：
+      * 每钓一次消耗 1 点；体力可以攒着，上限 ``stamina_max``（默认 20）
+      * 每 ``stamina_regen_seconds`` 秒恢复 1 点（默认 45，即原来的冷却时间）
+      * 满体力时**不累积时间**（否则攒满之后停一会儿就能连钓两轮）
+      * 不足 1 点的零头保留在 ``stamina_ts`` 里，不会因为频繁查询被吃掉
+      * 老存档没有 ``stamina`` 字段时按**满体力**初始化（更新后不会被挡在门外）
+    返回当前体力；不限体力时返回 ``stamina_max``（0 = 不限制）。
+    """
+    cap = _safe_int(cfg.get("stamina_max"), 20, 0)
+    regen = _safe_int(cfg.get("stamina_regen_seconds"), 45, 0)
+    moment = int(time.time() if now is None else now)
+
+    if cap <= 0 or regen <= 0:
+        player["stamina"] = cap if cap > 0 else 0
+        player["stamina_ts"] = moment
+        return player["stamina"]
+
+    current = _safe_int(player.get("stamina"), -1, -1)
+    if current < 0:
+        # 未初始化（新玩家或老存档）：直接给满，别让更新变成惩罚
+        player["stamina"] = cap
+        player["stamina_ts"] = moment
+        return cap
+
+    if current >= cap:
+        player["stamina"] = cap
+        player["stamina_ts"] = moment
+        return cap
+
+    last = _safe_int(player.get("stamina_ts"), 0, 0) or moment
+    if last > moment:          # 系统时间被改回过去：以现在为基准，别把体力算飞
+        last = moment
+    gained = (moment - last) // regen
+    if gained <= 0:
+        player["stamina"] = current
+        player["stamina_ts"] = last
+        return current
+
+    current = min(cap, current + gained)
+    player["stamina"] = current
+    # 只推进「整点」的时间，零头留着，下次接着算
+    player["stamina_ts"] = moment if current >= cap else last + gained * regen
+    return current
+
+def _stamina_wait_seconds(player: dict[str, Any], cfg: dict[str, Any], now: int | None = None) -> int:
+    """距离下一点体力恢复还有多少秒（不限体力或已满时返回 0）。"""
+    if not _stamina_enabled(cfg):
+        return 0
+    cap = _safe_int(cfg.get("stamina_max"), 20, 0)
+    regen = _safe_int(cfg.get("stamina_regen_seconds"), 45, 0)
+    moment = int(time.time() if now is None else now)
+    if _safe_int(player.get("stamina"), -1, -1) >= cap:
+        return 0
+    last = _safe_int(player.get("stamina_ts"), 0, 0) or moment
+    if last > moment:
+        last = moment
+    return max(0, regen - (moment - last) % regen)
 
 def _backpack_capacity(player: dict[str, Any], cfg: dict[str, Any]) -> int:
     """背包容量 = 基础容量 + 已购买的扩容档位。"""
@@ -1273,6 +1348,9 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
 
         # --- 时间 ---
         player["last_fish_time"] = _safe_int(raw.get("last_fish_time"), 0, 0)
+        # --- 体力（老存档没有这两个字段 → -1 表示「下次结算补满」）---
+        player["stamina"] = _safe_int(raw.get("stamina"), -1, -1)
+        player["stamina_ts"] = _safe_int(raw.get("stamina_ts"), 0, 0)
         for key in ("last_sign_date", "last_income_date"):
             value = raw.get(key, "")
             player[key] = value if isinstance(value, str) else ""

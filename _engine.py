@@ -118,15 +118,16 @@ class EngineMixin:
                             f"可补货）"
                         )
 
-            # --- 冷却 ---
-            cooldown = int(cfg["cooldown_seconds"])
-            if cooldown > 0:
-                elapsed = now - _safe_int(player.get("last_fish_time"), 0, 0)
-                remain = cooldown - elapsed
-                if remain > 0:
+            # --- 体力（取代原来的冷却时间：每钓一次 1 点，攒着最多 stamina_max 点）---
+            limited = _stamina_enabled(cfg)
+            if limited:
+                stamina = _refresh_stamina(player, cfg)
+                if stamina < 1:
+                    wait = _stamina_wait_seconds(player, cfg)
+                    cap = _safe_int(cfg.get("stamina_max"), 20, 0)
                     yield event.plain_result(
-                        f"⏳ 钓鱼冷却中：还要等 {int(remain) + 1} 秒"
-                        f"（每次下竿间隔 {cooldown} 秒）"
+                        f"⚡ 体力不够了（0/{cap}），再过 {wait} 秒恢复 1 点\n"
+                        f"　体力可以攒着，上限 {cap} 点（/钓鱼 体力 查看）"
                     )
                     return
 
@@ -150,12 +151,14 @@ class EngineMixin:
                 )
                 return
 
-            # --- 扣费 / 扣饵（各一次）---
+            # --- 扣费 / 扣饵 / 扣体力（各一次）---
             if total_cost:
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) - total_cost
             if bait_id != "none":
                 baits = player.setdefault("baits", {})
                 baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - 1)
+            if limited:
+                player["stamina"] = max(0, _safe_int(player.get("stamina"), 0, 0) - 1)
 
             # ---- 这一竿的结果：中鱼 / 钩上物件 / 空手而归（一竿只出一样）----
             # 顺序见 _roll_cast_outcome：先判中鱼（上鱼率 == 配置的咬钩率 × 钓点系数），
@@ -296,6 +299,270 @@ class EngineMixin:
             ) in ("传说", "神话"):
                 await self._broadcast(event, broadcast_catch)
 
+    async def _do_multi_cast(self, event: AstrMessageEvent, user_id: str, times: int):
+        """连钓 N 次（``/钓鱼 10``）。
+
+        与单竿的差别：
+          * 体力与鱼饵按**实际钓的次数**一次扣除（不够就整批拒绝，不做半途扣款）
+          * 不弹拉线互动：传说/神话按逃脱率直接判定（过了就是钓上来了）
+          * 插曲、彩蛋、群播报都不触发 —— 连钓求的是快，不是刷屏
+          * 成就 / 里程碑 / 排行榜在最后统一结算一次
+        """
+        cfg = self.cfg
+        limit = max(1, _safe_int(cfg.get("multi_cast_max"), 20, 1))
+        if times > limit:
+            yield event.plain_result(
+                f"🔒 一次最多连钓 {limit} 次（你填的是 {times}）\n"
+                f"　想钓更多就分几次，体力本来就可以攒着"
+            )
+            return
+
+        lock = self._lock_for(user_id)
+        if lock.locked():
+            yield event.plain_result("🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉")
+            return
+
+        async with lock:
+            player = await self._load_player(user_id)
+            now = time.time()
+
+            # 记录昵称与来源平台（与单竿一致，排行榜要用）
+            try:
+                name = event.get_sender_name()
+                if isinstance(name, str) and name:
+                    player["last_name"] = name[:24]
+            except Exception:
+                pass
+            try:
+                player["last_platform"] = str(event.get_platform_name() or "")
+                self._recent_platforms[user_id] = player["last_platform"]
+            except Exception:
+                pass
+
+            if self._ensure_weather(player) or self._ensure_market(player):
+                await self._save_player(player)
+
+            # --- 体力 ---
+            limited = _stamina_enabled(cfg)
+            cap = _safe_int(cfg.get("stamina_max"), 20, 0)
+            if limited:
+                stamina = _refresh_stamina(player, cfg)
+                if stamina < times:
+                    wait = _stamina_wait_seconds(player, cfg)
+                    yield event.plain_result(
+                        f"⚡ 体力不够：连钓 {times} 次要 {times} 点，"
+                        f"你现在 {stamina}/{cap}\n"
+                        f"　再过 {wait} 秒恢复 1 点（体力能攒着，/钓鱼 体力 查看）"
+                    )
+                    return
+
+            # --- 鱼饵：用当前装备的那一种；空钩不消耗饵 ---
+            bait_id = "none"
+            equipped = player.get("equipped_bait", "none")
+            if (
+                isinstance(equipped, str)
+                and equipped in self.baits
+                and equipped != "none"
+            ):
+                owned = _safe_int((player.get("baits") or {}).get(equipped), 0, 0)
+                if owned <= 0:
+                    # 和单竿一样：没货就真的换回空钩，写进存档
+                    player["equipped_bait"] = "none"
+                elif owned < times:
+                    yield event.plain_result(
+                        f"🎒 {self._bait_label(equipped)}只剩 {owned} 个，"
+                        f"连钓 {times} 次要 {times} 个\n"
+                        f"　/钓鱼 商店 买 {self.baits[equipped]['name']} 补货，"
+                        f"或先 /钓鱼 {owned} 把这几个用掉"
+                    )
+                    return
+                else:
+                    bait_id = equipped
+
+            # --- 钓费 / 背包容量 ---
+            unit_cost = max(0, _safe_int(cfg["fish_cost"], 0, 0))
+            cost_all = unit_cost * times
+            if cost_all and _safe_int(player.get("gold"), 0, 0) < cost_all:
+                yield event.plain_result(
+                    f"💸 连钓 {times} 次要 {_fmt_gold(cost_all)} 金币，"
+                    f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                )
+                return
+            bag_cap = _backpack_capacity(player, cfg)
+            free = max(0, bag_cap - len(player.get("inventory") or []))
+            if free <= 0:
+                yield event.plain_result(
+                    f"🎒 背包满了（{bag_cap}）！先 /钓鱼 卖 或 /钓鱼 水族馆 放"
+                )
+                return
+            planned = min(times, free)
+            truncated = planned < times
+
+            # --- 扣费 / 扣饵 / 扣体力：只按实际开钓的次数扣 ---
+            if unit_cost:
+                player["gold"] = (
+                    _safe_int(player.get("gold"), 0, 0) - unit_cost * planned
+                )
+            if bait_id != "none":
+                baits = player.setdefault("baits", {})
+                baits[bait_id] = max(
+                    0, _safe_int(baits.get(bait_id), 0, 0) - planned
+                )
+            if limited:
+                player["stamina"] = max(
+                    0, _safe_int(player.get("stamina"), 0, 0) - planned
+                )
+
+            loc = self._location(player)
+            rod = self._rod(player)
+            weather = self._weather(player)
+            bait = self.baits.get(bait_id) or {}
+            rod_value = _safe_number(rod.get("value_bonus"), 0.0)
+            loc_value = _safe_number(loc.get("value_mult"), 1.0)
+            codex_mult = self._codex_mult(player)
+            bait_luck = (
+                _safe_number(bait.get("luck"), 0.0)
+                + _safe_number(rod.get("luck_bonus"), 0.0)
+                + _safe_number((weather or {}).get("luck"), 0.0)
+            )
+            # 手气储备：连钓当成一次「抛竿」，整批共用，用完即清
+            luck = _safe_number(player.get("luck_charges"), 0.0)
+            player["luck_charges"] = 0.0
+
+            lines = [f"🎣 连钓 {planned} 次"]
+            if truncated:
+                lines.append(
+                    f"⚠️ 背包只剩 {free} 个位置，本次只钓 {planned} 次"
+                    f"（体力与鱼饵也只扣 {planned} 份）"
+                )
+            stats = {"fish": 0, "item": 0, "nothing": 0, "escaped": 0}
+            gained = 0
+
+            for index in range(1, planned + 1):
+                outcome, drop = self._roll_cast_outcome(
+                    bait_id,
+                    bait_id != "none" or unit_cost > 0,
+                    loc.get("id"),
+                )
+                if outcome == "item" and drop is not None:
+                    stats["item"] += 1
+                    lines.append(f"{index}. {drop['emoji']} {drop['name']}（杂物）")
+                    for extra in self._collect_bookkeeping(player, drop):
+                        lines.append(f"　　{extra}")
+                    continue
+                if outcome != "fish":
+                    stats["nothing"] += 1
+                    lines.append(f"{index}. 💨 空竿")
+                    continue
+
+                fish = self._roll_species(bait_id, loc["id"], weather)
+                spec = self._interaction_window(fish, weather)
+                if spec is not None:
+                    # 不弹拉线：按逃脱率一次性判定（过了就算稳稳钓上来）
+                    escape = _clamp(
+                        _safe_number(spec.get("escape"), 0.0), 0.0, 0.95
+                    )
+                    if random.random() < escape:
+                        stats["escaped"] += 1
+                        lines.append(
+                            f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
+                            f"（{self._rarity_name(fish['rarity'])}）"
+                        )
+                        continue
+
+                variant = self._roll_variant()
+                quality_mult = _roll_quality_mult(
+                    self.cfg["quality_weights"],
+                    bait_luck=bait_luck,
+                    extra_luck=luck,
+                )
+                catch = _new_instance(
+                    fish["id"],
+                    quality_mult,
+                    value_bonus=rod_value,
+                    location_mult=loc_value,
+                    variant=variant,
+                    codex_mult=codex_mult,
+                )
+                if catch is None:
+                    stats["nothing"] += 1
+                    lines.append(f"{index}. 💨 空竿")
+                    continue
+
+                self._record_catch(player, catch)
+                stats["fish"] += 1
+                value = _instance_value(catch)
+                gained += value
+                lines.append(
+                    f"{index}. {_fish_emoji(fish)}{fish['name']}"
+                    + (" ✨变异" if variant else "")
+                    + f" {self._rarity_name(fish['rarity'])} {_fmt_gold(value)}金"
+                )
+
+            # --- 统一结算：成就 / 里程碑 / 存档 / 排行榜 ---
+            new_ach = self._check_achievements(player)
+            milestone = self._milestone_text(player)
+            saved = await self._save_player(player)
+            await self._touch_leaderboard(player)
+
+            summary = (
+                f"——————\n"
+                f"✅ 上鱼 {stats['fish']} 条｜空竿 {stats['nothing']} 次"
+                f"｜杂物 {stats['item']} 个"
+            )
+            if stats["escaped"]:
+                summary += f"｜跑掉 {stats['escaped']} 条"
+            lines.append(summary)
+            tail = f"🧮 渔获估值 {_fmt_gold(gained)} 金"
+            if limited:
+                tail += (
+                    f"　⚡ 体力 "
+                    f"{_refresh_stamina(player, cfg)}/{cap}"
+                )
+            lines.append(tail)
+
+            yield event.plain_result("\n".join(lines))
+            if new_ach:
+                yield event.plain_result("🎉 " + "；".join(new_ach))
+            if milestone:
+                yield event.plain_result(milestone)
+            if not saved:
+                yield event.plain_result(
+                    "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）"
+                )
+
+    def _record_catch(self, player: dict[str, Any], catch: dict[str, Any]) -> None:
+        """渔获入账（不含成就/存档）：背包、累计、图鉴、变异计数、最佳纪录。
+
+        单竿（`_finalize_catch`）与连钓（`_do_multi_cast`）共用，
+        避免两条路径的记账逻辑各写一份、日子久了长歪。
+        """
+        player.setdefault("inventory", []).append(catch)
+        player["total_caught"] = _safe_int(player.get("total_caught"), 0, 0) + 1
+
+        # 图鉴：变异体是独立条目（fish_id#variant）
+        variant = catch.get("variant")
+        codex_key = _codex_key(catch["fish_id"], variant)
+        collection = player.setdefault("collection", {})
+        entry = collection.get(codex_key)
+        if not isinstance(entry, dict):
+            entry = {"count": 0, "best_value": 0, "first_ts": catch["ts"]}
+            collection[codex_key] = entry
+        entry["count"] = _safe_int(entry.get("count"), 0, 0) + 1
+        entry["best_value"] = max(
+            _safe_int(entry.get("best_value"), 0, 0), _instance_value(catch)
+        )
+        if not _safe_int(entry.get("first_ts"), 0, 0):
+            entry["first_ts"] = catch["ts"]
+
+        # 变异计数
+        if variant:
+            variants = player.setdefault("variants", {})
+            variants[variant] = _safe_int(variants.get(variant), 0, 0) + 1
+
+        # 最佳渔获记录（长期目标：不断刷新自己的纪录）
+        self._update_best_records(player, catch)
+
     async def _finalize_catch(
         self,
         event: AstrMessageEvent,
@@ -307,31 +574,7 @@ class EngineMixin:
     ) -> None:
         """把渔获写进背包 / 图鉴 / 成就并保存。"""
         try:
-            player.setdefault("inventory", []).append(catch)
-            player["total_caught"] = _safe_int(player.get("total_caught"), 0, 0) + 1
-
-            # 图鉴：变异体是独立条目（fish_id#variant）
-            variant = catch.get("variant")
-            codex_key = _codex_key(catch["fish_id"], variant)
-            collection = player.setdefault("collection", {})
-            entry = collection.get(codex_key)
-            if not isinstance(entry, dict):
-                entry = {"count": 0, "best_value": 0, "first_ts": catch["ts"]}
-                collection[codex_key] = entry
-            entry["count"] = _safe_int(entry.get("count"), 0, 0) + 1
-            entry["best_value"] = max(
-                _safe_int(entry.get("best_value"), 0, 0), _instance_value(catch)
-            )
-            if not _safe_int(entry.get("first_ts"), 0, 0):
-                entry["first_ts"] = catch["ts"]
-
-            # 变异计数
-            if variant:
-                variants = player.setdefault("variants", {})
-                variants[variant] = _safe_int(variants.get(variant), 0, 0) + 1
-
-            # 最佳渔获记录（长期目标：不断刷新自己的纪录）
-            self._update_best_records(player, catch)
+            self._record_catch(player, catch)
 
             # 奇遇事件（低概率小惊喜，不影响平衡）
             # 先结算彩蛋再查成就，这样「意外之喜」能在当竿立刻解锁
@@ -343,6 +586,7 @@ class EngineMixin:
                 coll[key] = _safe_int(coll.get(key), 0, 0) + 1
 
             new_achievements = self._check_achievements(player, catch)
+            variant = catch.get("variant")
             if perfect and "perfect_pull" not in player["achievements"]:
                 player["achievements"].append("perfect_pull")
                 new_achievements.append(ACHIEVEMENTS["perfect_pull"])
@@ -381,6 +625,39 @@ class EngineMixin:
         except Exception as e:
             logger.error(f"写入渔获失败（玩家 {user_id}）：{e}", exc_info=True)
 
+    def _collect_bookkeeping(
+        self, player: dict[str, Any], drop: dict[str, Any]
+    ) -> list[str]:
+        """杂物记账（不含成就与存档），返回要追加的提示行。
+
+        单竿走 `_apply_collectible`（再补成就与存档），连钓在循环里只记账、
+        最后统一结算——两条路径共用这一份规则，避免各写一份。
+        """
+        items = player.setdefault("items", {})
+        items[drop["id"]] = _safe_int(items.get(drop["id"]), 0, 0) + 1
+        coll = player.setdefault("collectibles", {})
+        coll[drop["id"]] = _safe_int(coll.get(drop["id"]), 0, 0) + 1
+
+        lines: list[str] = []
+        if drop["id"] == "drift_bottle":
+            if random.random() < float(self.cfg["bottle_note_chance"]):
+                note = random.choice(BOTTLE_NOTES)
+                notes = player.setdefault("bottle_notes", [])
+                if note not in notes:
+                    notes.append(note)
+                    player["bottle_notes"] = notes[-30:]
+                    lines.append(f"📜 瓶里有张纸条：{note}")
+                else:
+                    lines.append(f"📜 又是这张纸条：{note}")
+            else:
+                lines.append("📜 摇了摇……瓶子是空的。")
+        elif _safe_int(drop.get("value"), 0, 0) >= 25:
+            # 值钱的杂物直接折算成金币，省得再手动卖
+            gold = int(drop["value"])
+            player["gold"] = _safe_int(player.get("gold"), 0, 0) + gold
+            lines.append(f"💰 这东西值钱，直接换了 {_fmt_gold(gold)} 金币")
+        return lines
+
     async def _apply_collectible(
         self, player: dict[str, Any], drop: dict[str, Any], user_id: str
     ) -> str:
@@ -390,33 +667,11 @@ class EngineMixin:
         不是鱼」，别让玩家以为同时还钓到了鱼。
         """
         try:
-            items = player.setdefault("items", {})
-            items[drop["id"]] = _safe_int(items.get(drop["id"]), 0, 0) + 1
-            coll = player.setdefault("collectibles", {})
-            coll[drop["id"]] = _safe_int(coll.get(drop["id"]), 0, 0) + 1
-
             lines = [
                 f"{drop['emoji']} 钩子空了，倒是带上来一个 {drop['name']}（这一竿没有鱼）",
                 f"　{drop['desc']}　已收进杂物收藏",
             ]
-
-            if drop["id"] == "drift_bottle":
-                if random.random() < float(self.cfg["bottle_note_chance"]):
-                    note = random.choice(BOTTLE_NOTES)
-                    notes = player.setdefault("bottle_notes", [])
-                    if note not in notes:
-                        notes.append(note)
-                        player["bottle_notes"] = notes[-30:]
-                        lines.append(f"📜 瓶里有张纸条：{note}")
-                    else:
-                        lines.append(f"📜 又是这张纸条：{note}")
-                else:
-                    lines.append("📜 摇了摇……瓶子是空的。")
-            elif _safe_int(drop.get("value"), 0, 0) >= 25:
-                # 值钱的杂物直接折算成金币，省得再手动卖
-                gold = int(drop["value"])
-                player["gold"] = _safe_int(player.get("gold"), 0, 0) + gold
-                lines.append(f"💰 这东西值钱，直接换了 {_fmt_gold(gold)} 金币")
+            lines.extend(self._collect_bookkeeping(player, drop))
 
             new_ach = self._check_achievements(player)
             await self._save_player(player)

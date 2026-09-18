@@ -1864,6 +1864,24 @@ class CommandsMixin:
     # 档案 / 签到 / 管理员
     # =========================================================================
 
+    async def _cmd_stamina(self, event: AstrMessageEvent, user_id: str):
+        """体力：/钓鱼 体力
+
+        体力是惰性结算的（按时间戳现算），所以这里只读不写 ——
+        看一眼体力不会产生存档写入，也不会把「恢复零头」抹掉。
+        """
+        player = await self._load_player(user_id)
+        yield event.plain_result(self._stamina_text(player))
+
+    async def _cmd_gold_renamed(self, event: AstrMessageEvent, user_id: str):
+        """旧指令 /钓鱼 金币 的迁移提示：它原本显示的是档案，名不符实。"""
+        player = await self._load_player(user_id)
+        yield event.plain_result(
+            f"📇 这个指令改名了：/钓鱼 档案\n"
+            f"　金币只是档案里的一项（你现在 "
+            f"{_fmt_gold(player.get('gold', 0))} 金币）"
+        )
+
     async def _cmd_profile(self, event: AstrMessageEvent, user_id: str):
         player = await self._load_player(user_id)
         inventory = player.get("inventory") or []
@@ -1893,9 +1911,17 @@ class CommandsMixin:
         aq_cap = self._aquarium_capacity(player)
 
         lines = [
-            "📊 档案",
+            "📇 档案",
             f"💰 {_fmt_gold(player.get('gold', 0))}　🎣 {self._rod_label(player)}"
             f"　📍 {self._location_label(player)}",
+        ]
+        if _stamina_enabled(self.cfg):
+            stamina_cap = int(self.cfg["stamina_max"])
+            lines.append(
+                f"⚡ 体力 {_refresh_stamina(player, self.cfg)}/{stamina_cap}"
+                f"　（每 {int(self.cfg['stamina_regen_seconds'])} 秒回 1 点）"
+            )
+        lines.extend([
             f"🧰 鱼饵 {self._bait_label(player.get('equipped_bait', 'none'))}"
             f"　背包 {len(inventory)}/{cap}　水族馆 {len(aquarium)}/{aq_cap}",
             f"🧮 渔获估值 {_fmt_gold(total_value)}"
@@ -1909,7 +1935,7 @@ class CommandsMixin:
             f"　📋 订单 {_safe_int(player.get('total_orders'), 0, 0)}",
             f"🎒 饵：{bait_text}",
             f"🧰 道具：{item_text}",
-        ]
+        ])
         luck = _safe_number(player.get("luck_charges"), 0.0)
         if luck > 0:
             lines.append(f"🔮 手气储备 {_luck_stars(luck, 0.5)}")

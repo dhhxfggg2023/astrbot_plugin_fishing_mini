@@ -86,6 +86,9 @@ def load_config() -> dict:
     # 杂物与鱼互斥（一竿只出一样）：这条链路要验证的是「上鱼」，
     # 所以把杂物掉率关掉，否则有 14% 的概率这一竿出的是杂物，断言会偶发失败。
     config["item_drop_chance"] = 0.0
+    # 体力：这组用例连续抛竿很多次，关掉体力判定（regen = 0 = 不限体力），
+    # 免得跑到一半被「体力不够」拦住；体力本身在 test_local 的 [6i] 里专门验证。
+    config["stamina_regen_seconds"] = 0
     return config
 
 
@@ -269,13 +272,22 @@ async def main():
         ("/钓鱼 商店", "商店"),
         ("/钓鱼 图鉴", "图鉴"),
         ("/钓鱼 水族馆", "水族馆"),
-        ("/钓鱼 金币", "档案"),
+        ("/钓鱼 档案", "档案"),
+        ("/钓鱼 体力", "体力"),
         ("/钓鱼 签到", "签到"),
     ]
     for cmd, kw in subs:
         replies, matched, _ = await send(plugin, cmd, "90001", "群友甲")
         check(matched, f"{cmd} 被匹配")
         check(kw in text_of(replies), f"{cmd} -> 含「{kw}」")
+
+    # 老指令「金币」显示的一直是档案（名不符实），现在只回一句改名提示
+    replies, matched, _ = await send(plugin, "/钓鱼 金币", "90001", "群友甲")
+    check(matched, "/钓鱼 金币 仍被匹配（不静默当未知指令）")
+    check(
+        "改名" in text_of(replies) and "档案" in text_of(replies),
+        f"/钓鱼 金币 -> 改名提示：{text_of(replies).splitlines()[0]}",
+    )
 
     # 单条消息类子命令只应回一条：曾经因为分派器重复 yield 导致整段刷两遍
     dupes = []

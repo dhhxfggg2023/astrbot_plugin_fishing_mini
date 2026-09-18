@@ -2,14 +2,16 @@
 
 所有功能都挂在 ``/钓鱼`` 这一条指令下，避免与其他插件撞名：
 
-- ``/钓鱼``              下竿
+- ``/钓鱼``              下竿（每次消耗 1 点体力，体力会随时间攒回来）
+- ``/钓鱼 10``           连钓 10 次（扣 10 点体力 + 10 个饵）
 - ``/钓鱼 拉``           拉线（只有最高两档鱼种需要，见「互动玩法」）
 - ``/钓鱼 背包``         背包
 - ``/钓鱼 卖 …``         卖鱼
 - ``/钓鱼 图鉴``         收集进度
 - ``/钓鱼 水族馆 …``     水族馆 / 投喂 / 领取收益 / 扩建
 - ``/钓鱼 商店 …``       鱼饵与道具
-- ``/钓鱼 金币 / 签到``  档案与签到
+- ``/钓鱼 体力``         看体力
+- ``/钓鱼 档案 / 签到``  个人档案与签到
 - ``/钓鱼 帮助``         简洁说明
 
 ================================ 数值设计 ================================
@@ -134,7 +136,12 @@ DEFAULTS: dict[str, Any] = {
     "defaults_sync_mode": "auto",
     "initial_gold": 100,
     "fish_cost": 0,
-    "cooldown_seconds": 45,
+    # 体力：每钓一次消耗 1 点，攒着最多 stamina_max 点；每 stamina_regen_seconds 秒回 1 点。
+    # 任一项填 0 = 本服不限体力（相当于关掉这套机制）。
+    "stamina_max": 20,
+    "stamina_regen_seconds": 45,
+    # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
+    "multi_cast_max": 20,
     "sign_reward": 30,
     "sell_discount": 1.0,
     "enable_group_broadcast": True,
@@ -1753,7 +1760,15 @@ class FishingPlugin(
         # 数值型做范围收敛，避免玩家把游戏改崩
         cfg["initial_gold"] = max(0, _safe_int(cfg["initial_gold"], 100, 0))
         cfg["fish_cost"] = max(0, _safe_int(cfg["fish_cost"], 0, 0))
-        cfg["cooldown_seconds"] = max(0, _safe_int(cfg["cooldown_seconds"], 60, 0))
+        cfg["stamina_max"] = int(
+            _clamp(_safe_int(cfg.get("stamina_max"), 20, 0), 0, 999)
+        )
+        cfg["stamina_regen_seconds"] = int(
+            _clamp(_safe_int(cfg.get("stamina_regen_seconds"), 45, 0), 0, 86400)
+        )
+        cfg["multi_cast_max"] = int(
+            _clamp(_safe_int(cfg.get("multi_cast_max"), 20, 1), 1, 100)
+        )
         cfg["sign_reward"] = max(0, _safe_int(cfg["sign_reward"], 20, 0))
         cfg["sell_discount"] = _clamp(_safe_number(cfg["sell_discount"], 1.0), 0.0, 5.0)
         cfg["enable_group_broadcast"] = bool(cfg["enable_group_broadcast"])
@@ -3077,6 +3092,23 @@ class FishingPlugin(
             async for result in self._do_cast(event, user_id, ""):
                 yield result
             return
+        # ---- /钓鱼 <数字> = 连钓 N 次（1 等价于单竿，走完整流程含拉线）----
+        if a1.isdigit():
+            times = _to_int(a1, 0)
+            if times <= 0:
+                yield event.plain_result("🤔 连钓次数要写正整数，例如 /钓鱼 10")
+                return
+            if times == 1:
+                first = True
+                async for result in self._do_cast(event, user_id, ""):
+                    yield self._with_at(event, result) if first else result
+                    first = False
+                return
+            first = True
+            async for result in self._do_multi_cast(event, user_id, times):
+                yield self._with_at(event, result) if first else result
+                first = False
+            return
         # ---- 指定鱼饵下竿（支持「/钓鱼 蚯蚓」）----
         bait_id = self._find_bait(a1)
         if bait_id is not None:
@@ -3129,8 +3161,13 @@ class FishingPlugin(
             handler = self._cmd_event(event, user_id, a2)
         elif key in ("换饵", "换鱼饵", "装备饵", "上饵", "bait", "equip_bait"):
             handler = self._cmd_equip_bait(event, user_id, a2, after_first)
-        elif key in ("金币", "档案", "me", "gold"):
+        elif key in ("体力", "体力值", "活力", "stamina"):
+            handler = self._cmd_stamina(event, user_id)
+        elif key in ("档案", "profile", "me"):
             handler = self._cmd_profile(event, user_id)
+        elif key in ("金币", "gold"):
+            # 老名字：它显示的一直是「档案」，名不符实，现在只给迁移提示
+            handler = self._cmd_gold_renamed(event, user_id)
         elif key in ("签到", "sign"):
             handler = self._cmd_sign(event, user_id)
         elif key in ("订单", "任务", "order", "orders"):
@@ -3419,7 +3456,7 @@ CAST_WORDS = {
 SUBCOMMAND_WORDS = {
     "帮助", "菜单", "指令", "背包", "鱼篓", "卖", "清理", "一键卖出",
     "图鉴", "收集", "水族馆", "锁定", "解锁", "今日", "排行", "排行榜",
-    "商店", "鱼饵", "道具", "用", "使用", "金币", "档案", "签到",
+    "商店", "鱼饵", "道具", "用", "使用", "档案", "体力", "签到",
     "订单", "任务", "钓点", "地点", "地图", "鱼竿", "杂物", "漂流瓶",
     "查", "查询",
     "扩容", "扩建背包", "背包扩容", "鱼篓扩容", "去", "前往",
