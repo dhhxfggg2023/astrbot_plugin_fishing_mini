@@ -165,6 +165,14 @@ def _safe_total(player: dict) -> int:
     return int(player.get("total_caught") or 0)
 
 
+async def give_level(plugin, uid: str, level: int) -> dict:
+    """把玩家的累计钓获拉到「刚好 level 级」（等级曲线可调，所以现算阈值）。"""
+    p = await plugin._load_player(uid)
+    p["total_caught"] = mod._level_threshold(level)
+    await plugin._save_player(p)
+    return p
+
+
 async def cast(plugin, event, *args, pull=True):
     """抛竿（若咬钩则自动拉线），返回回复列表。"""
     uid = event.get_sender_id()
@@ -394,6 +402,8 @@ async def main():
     p = await plugin._load_player("30001")
     p["gold"] = 100000
     await plugin._save_player(p)
+    # 龙纹竿要 16 级才给买（新机制）：先把等级提上去
+    await give_level(plugin, "30001", 16)
     out = await cmd(plugin, ev, "鱼竿", "买", "龙纹竿")
     print("    " + text_of(out).splitlines()[0])
     p = await plugin._load_player("30001")
@@ -476,6 +486,8 @@ async def main():
     plugin = make_plugin()
     cfg2 = dict(plugin.cfg)
     cfg2["item_drop_chance"] = 1.0
+    # 钓点难度系数 ≥1.0 的地图必出鱼（新手村就是），要测「没中鱼」得挑个难点的图
+    cfg2["location_hook_factors"] = "novice:0.5"
     plugin_d = make_plugin(cfg2)
     got = collections.Counter()
     for _ in range(400):
@@ -1392,6 +1404,7 @@ async def main():
 
     p["gold"] = 100000
     await plugin._save_player(p)
+    await give_level(plugin, "89001", 2)     # 蚯蚓要 2 级才能买
     out = await cmd(plugin, ev, "商店买蚯蚓2", "", "")
     p = await plugin._load_player("89001")
     check(
@@ -1542,6 +1555,7 @@ async def main():
     p["gold"] = 100000
     p["inventory"] = fill(6)
     await plugin2._save_player(p)
+    await give_level(plugin2, "89002", 2)    # 蚯蚓要 2 级
     out = await cmd(plugin2, ev2, "商店买蚯蚓2", "", "")
     p = await plugin2._load_player("89002")
     check(p["baits"].get("worm") == 2, f"「商店买蚯蚓2」= 买 2 个 -> {p['baits'].get('worm')}")
@@ -1572,6 +1586,7 @@ async def main():
     ev3 = FakeEvent("89003")
     p = mod._default_player("89003")
     p["gold"] = 100000
+    p["total_caught"] = mod._level_threshold(2)   # 蚯蚓要 2 级
     await plugin3._save_player(p)
     await cmd(plugin3, ev3, "商店", "买", "蚯蚓", "3")
     p = await plugin3._load_player("89003")
@@ -1590,6 +1605,332 @@ async def main():
     p = await plugin3._load_player("89003")
     check(p["gold"] == gold_before, "金币不足时不扣款")
     check("金币不足" in text_of(out), "金币不足有提示")
+
+    # =====================================================================
+    print("\n[6e] 等级 / 鱼竿解锁购买权限：未解锁不上架，直接买会被明确拒绝")
+
+    gate = make_plugin()
+    ev_g = FakeEvent("89010")
+    gp = mod._default_player("89010")
+    gp["gold"] = 999999
+    await gate._save_player(gp)
+
+    # --- 低等级：商店只上架已解锁的饵，未解锁的整条不出现 ---
+    out = await cmd(gate, ev_g, "商店", "", "")
+    body = text_of(out)
+    check("面包屑" in body, "1 级能买到的饵正常上架（面包屑）")
+    check(
+        "蚯蚓" not in body and "秘制饵" not in body and "虾饵" not in body,
+        "未解锁的饵完全不显示（蚯蚓要 2 级、秘制饵要 34 级）",
+    )
+    check("🔒" in body and "陆续上架" in body, "列表末尾只有一句模糊提示，不点名不写等级")
+
+    # --- 低等级：鱼竿列表同理 ---
+    out = await cmd(gate, ev_g, "鱼竿", "", "")
+    body = text_of(out)
+    check("竹竿" in body, "1 级的竿正常显示")
+    check(
+        "神话竿" not in body and "星辉竿" not in body and "龙纹竿" not in body,
+        "未解锁的鱼竿不显示",
+    )
+    check("陆续上架" in body, "鱼竿列表也有模糊提示")
+
+    # --- 直接点名买：必须明确拒绝（不能静默失败、不能假装不存在）---
+    out = await cmd(gate, ev_g, "商店", "买", "秘制饵", "")
+    body = text_of(out)
+    check(
+        "🔒" in body and "34 级" in body and "34" in body,
+        f"买未解锁的饵 -> 明确说明要 34 级（{body.splitlines()[0][:40]}）",
+    )
+    gp = await gate._load_player("89010")
+    check(not gp["baits"].get("secret"), "被拒绝时没有发货")
+    check(gp["gold"] == 999999, "被拒绝时不扣钱")
+
+    out = await cmd(gate, ev_g, "鱼竿", "买", "神话竿")
+    body = text_of(out)
+    check("🔒" in body and "38 级" in body, f"买未解锁的竿 -> 明确说明要 38 级（{body.splitlines()[0][:40]}）")
+
+    # --- 等级够了但缺鱼竿：拒绝理由要说清是缺竿 ---
+    await give_level(gate, "89010", 20)
+    out = await cmd(gate, ev_g, "商店", "买", "玉米粒", "")
+    body = text_of(out)
+    check(
+        "🔒" in body and "溪流竿" in body,
+        f"等级够但没竿 -> 提示得先有溪流竿（{body.splitlines()[0][:40]}）",
+    )
+
+    # --- 解锁之后：重新出现在列表里，并且能买 ---
+    await give_level(gate, "89010", 10)
+    gp = await gate._load_player("89010")
+    gp["rods"] = ["bamboo", "stream"]       # 拿到溪流竿
+    await gate._save_player(gp)
+    out = await cmd(gate, ev_g, "商店", "", "")
+    body = text_of(out)
+    check("玉米粒" in body, "拿到溪流竿 + 10 级后，玉米粒重新上架")
+    check("秘制饵" not in body, "还没解锁的更高级饵依旧不显示")
+
+    out = await cmd(gate, ev_g, "商店", "买", "玉米粒", "2")
+    gp = await gate._load_player("89010")
+    check(gp["baits"].get("corn") == 2, f"解锁后能正常购买 -> {gp['baits'].get('corn')} 个")
+
+    out = await cmd(gate, ev_g, "鱼竿", "", "")
+    body = text_of(out)
+    check(
+        "溪流竿" in body and "龙纹竿" not in body,
+        "鱼竿列表按等级逐步上架（10 级有溪流竿、没有龙纹竿）",
+    )
+
+    # --- 已拥有的东西不受新限制影响：换饵 / 装竿都不能被解锁条件卡住 ---
+    gp = await gate._load_player("89010")
+    gp["baits"]["secret"] = 3                # 假设他早就存了秘制饵
+    gp["rods"] = ["bamboo", "stream", "mythic"]
+    gp["equipped_rod"] = "bamboo"
+    await gate._save_player(gp)
+    out = await cmd(gate, ev_g, "换饵", "秘制饵", "")
+    gp = await gate._load_player("89010")
+    check(gp["equipped_bait"] == "secret", "已持有的未解锁饵仍可换（只限制购买）")
+    out = await cmd(gate, ev_g, "鱼竿", "用", "神话竿")
+    gp = await gate._load_player("89010")
+    check(gp["equipped_rod"] == "mythic", "已持有的未解锁竿仍可装备")
+    out = await cmd(gate, ev_g, "鱼竿", "", "")
+    check("神话竿" in text_of(out), "已拥有的竿即便没到等级也照常显示")
+
+    # --- 旧格式配置向后兼容：7 段鱼竿 / 8 段鱼饵 -> 不设解锁限制 ---
+    legacy_cfg = dict(gate.cfg)
+    legacy_cfg["content_auto_merge"] = False   # 别把新版默认内容补进来，测的是纯旧格式
+    legacy_cfg["rod_defs"] = [
+        "bamboo|竹竿|🎋|0|0.00|0.00|老格式没有解锁等级",
+        "oldrod|老竿|🎣|100|0.10|0.05|同样是老格式",
+    ]
+    legacy_cfg["bait_defs"] = [
+        "none|空钩|🪝|0|0|0|1,1,1,1,1|老格式说明",
+        "oldbait|老饵|🍞|2|5|0.10|1,1.2,1.4,1.6,1.8|老格式说明",
+    ]
+    legacy = make_plugin(legacy_cfg)
+    check(
+        all(r["unlock_level"] == 1 for r in legacy.rods),
+        f"旧格式鱼竿解析为 1 级（不锁）-> {[r['unlock_level'] for r in legacy.rods]}",
+    )
+    check(
+        legacy.baits["oldbait"]["unlock_level"] == 1
+        and not legacy.baits["oldbait"]["need_rod"],
+        "旧格式鱼饵不设解锁条件",
+    )
+    lp = mod._default_player("89011")
+    check(
+        not legacy._unlock_shortage(lp, legacy.rods[1])
+        and not legacy._unlock_shortage(lp, legacy.baits["oldbait"]),
+        "旧格式条目在 1 级新号眼里也是可买的",
+    )
+
+    # =====================================================================
+    print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
+
+    real_curve = dict(mod.LEVEL_CURVE)
+    try:
+        th = {lv: mod._level_threshold(lv) for lv in (2, 5, 10, 20, 30, 45, 50)}
+        check(th[2] == 5, f"2 级要 {th[2]} 条（base=5）")
+        check(
+            th[10] == 62 and th[20] == 207 and th[30] == 520,
+            f"指数曲线实算：10 级 {th[10]} / 20 级 {th[20]} / 30 级 {th[30]}",
+        )
+        check(
+            1700 <= th[45] <= 1850 and 2550 <= th[50] <= 2750,
+            f"45 级 {th[45]} 条、50 级 {th[50]} 条（实测值 ±5% 内）",
+        )
+        increasing = all(
+            mod._level_threshold(lv + 1) > mod._level_threshold(lv)
+            for lv in range(1, mod.MAX_LEVEL)
+        )
+        check(increasing, "每一级都比上一级要求更多（严格递增）")
+
+        # 指数曲线：前段比旧的二次曲线松，但后段反超（这才是「卡住最高进度」）
+        mod.LEVEL_CURVE.update({"base": 5.0, "ratio": 1.0, "growth": 0.6})
+        old = {lv: mod._level_threshold(lv) for lv in (10, 20, 30, 45, 50)}
+        check(
+            th[45] > old[45] and th[50] > old[50],
+            f"高段比旧二次曲线更陡：45 级 {old[45]}→{th[45]}、"
+            f"50 级 {old[50]}→{th[50]}",
+        )
+        check(
+            th[10] < old[10] and th[30] < old[30],
+            f"前段更平缓、方便新人追进度：10 级 {old[10]}→{th[10]}、"
+            f"30 级 {old[30]}→{th[30]}",
+        )
+        # 指数特征：每一级的增量本身也在变大
+        mod.LEVEL_CURVE.update({"base": 5.0, "ratio": 1.08, "growth": 0.0})
+        early_step = mod._level_threshold(21) - mod._level_threshold(20)
+        late_step = mod._level_threshold(46) - mod._level_threshold(45)
+        check(
+            late_step > early_step * 2,
+            f"每级增量随等级放大（指数特征）：20→21 级 +{early_step} 条，"
+            f"45→46 级 +{late_step} 条",
+        )
+
+        # 等比底数可调：调大 -> 同等级要求更多
+        mod.LEVEL_CURVE.update({"base": 5.0, "ratio": 1.12, "growth": 0.0})
+        check(
+            mod._level_threshold(30) > th[30],
+            f"ratio 调到 1.12 后 30 级要 {mod._level_threshold(30)} 条（> {th[30]}）",
+        )
+
+        # ratio = 1.0 不能除零崩掉
+        mod.LEVEL_CURVE.update({"base": 5.0, "ratio": 1.0, "growth": 0.0})
+        check(
+            mod._level_threshold(10) == 45,
+            f"ratio=1 退化成等差不崩：10 级 {mod._level_threshold(10)} 条",
+        )
+    finally:
+        mod.LEVEL_CURVE.clear()
+        mod.LEVEL_CURVE.update(real_curve)
+
+    # 等级提升 -> 等级换算与进度口径一致
+    lp = mod._default_player("89012")
+    lp["total_caught"] = mod._level_threshold(12)
+    lv, into, need = mod._level_progress(lp)
+    check(
+        lv == 12 and into == 0 and need == mod._level_threshold(13) - mod._level_threshold(12),
+        f"升级进度按真实曲线算 -> 12 级，本级 {into}/{need}",
+    )
+
+    # =====================================================================
+    print("\n[6g] 钓点难度系数：前几张图必出鱼，越深越容易空竿")
+
+    factor_plugin = make_plugin()
+    # 1) 系数 >= 1.0 的钓点：2000 竿必定出鱼（一件杂物都不能有）
+    forced = {"fish": 0, "item": 0, "nothing": 0}
+    for _ in range(2000):
+        outcome, _d = factor_plugin._roll_cast_outcome("none", True, "novice")
+        forced[outcome] += 1
+    check(
+        forced["fish"] == 2000 and forced["item"] == 0 and forced["nothing"] == 0,
+        f"新手村（系数 1.0）2000 竿必出鱼 -> {forced}",
+    )
+    for loc_id in ("bamboo", "canal"):
+        got = [factor_plugin._roll_cast_outcome("none", True, loc_id)[0] for _ in range(200)]
+        check(
+            all(g == "fish" for g in got),
+            f"{loc_id} 也是必出鱼（前 3 张图新手期不空竿）",
+        )
+
+    # 2) 系数 < 1.0：实际上鱼率 ≈ 饵率 × 系数
+    deep = make_plugin({**dict(factor_plugin.cfg),
+                        "bait_hook_rates": "worm:0.8",
+                        "location_hook_factors": "aurora:0.5"})
+    hits = sum(1 for _ in range(4000) if deep._roll_cast_outcome("worm", True, "aurora")[0] == "fish")
+    rate = hits / 4000
+    check(
+        abs(rate - 0.4) <= 0.05,
+        f"深水图（系数 0.5）上鱼率 {rate:.3f} ≈ 饵率 0.8 × 0.5 = 0.40",
+    )
+
+    # 3) 配置里没写的钓点 -> 回退 1.0（必出，不误伤）
+    check(
+        factor_plugin._location_hook_factor("not_a_location") == 1.0,
+        "没配置的钓点按 1.0（必出）处理",
+    )
+    check(
+        factor_plugin._location_hook_factor(None) is None,
+        "不传钓点时不套用系数（内部采样用）",
+    )
+
+    # 4) 解析容错：全角标点 / 百分号 / 未知钓点
+    tol = make_plugin({**dict(factor_plugin.cfg),
+                       "location_hook_factors": "新手村:0.5，lake:0.5,不存在的图:0.9"})
+    check(
+        abs(tol._location_hook_factor("novice") - 0.5) < 1e-9,
+        f"中文钓点名能认 -> novice={tol._location_hook_factor('novice')}",
+    )
+    check(
+        abs(tol._location_hook_factor("lake") - 0.5) < 1e-9,
+        "全角逗号能认 -> lake=0.5",
+    )
+    check(
+        tol._location_hook_factor("reef") == 1.0,
+        "漏配的钓点回退 1.0（不会因为漏写就变成空竿）",
+    )
+
+    # 5) 真实抛竿链路：深水图确实会空竿，且空竿文案点出「水太深」
+    empty_plugin = make_plugin({**dict(factor_plugin.cfg),
+                                "bait_hook_rates": "worm:0.0",
+                                "location_hook_factors": "aurora:0.5"})
+    ep = mod._default_player("89013")
+    ep["gold"] = 1000
+    ep["equipped_bait"] = "worm"
+    ep["baits"] = {"worm": 9}
+    ep["locations"] = ["novice", "aurora"]
+    ep["current_location"] = "aurora"
+    await empty_plugin._save_player(ep)
+    out = await cast(empty_plugin, FakeEvent("89013"))
+    check(
+        "水太深" in text_of(out),
+        f"深水图空竿文案点明原因 -> {text_of(out).splitlines()[0][:34]}",
+    )
+    body = text_of(out)
+    check(
+        "商店" not in body and "换个更对口的饵" not in body,
+        f"空竿文案不再带「去哪儿买饵」的教程尾巴 -> {body.splitlines()[-1][:30]}",
+    )
+
+    # =====================================================================
+    print("\n[6h] 减少显示：未解锁的钓点/未收集的图鉴条目都不逐条列出")
+
+    slim = make_plugin()
+    ev_s = FakeEvent("89020")
+    sp = mod._default_player("89020")
+    sp["gold"] = 1000
+    # 只在新手村钓到两条鱼，其余图鉴空着
+    sp["collection"] = {
+        "carp": {"count": 3, "best_value": 120, "first_ts": 1},
+        "crucian": {"count": 1, "best_value": 60, "first_ts": 1},
+    }
+    await slim._save_player(sp)
+
+    # --- A: 钓点列表：未解锁只留 🔒 + 名称 ---
+    out = await cmd(slim, ev_s, "钓点", "", "")
+    body = text_of(out)
+    locked_line = next((l for l in body.splitlines() if "山间湖泊" in l), "")
+    check(
+        locked_line.startswith("🔒") and locked_line.rstrip().endswith("山间湖泊"),
+        f"未解锁钓点只显示「🔒+名称」-> {locked_line!r}",
+    )
+    check(
+        "图鉴" not in locked_line and "金" not in locked_line and "级" not in locked_line,
+        "未解锁钓点不再显示图鉴进度 / 金币 / 等级",
+    )
+    unlocked_line = next(
+        (l for l in body.splitlines() if "新手村" in l and "×1.00" in l), ""
+    )
+    check(
+        "×1.00" in unlocked_line and "池塘" in unlocked_line,
+        f"已解锁钓点仍显示完整信息 -> {unlocked_line.strip()[:34]}",
+    )
+
+    # 但「解锁」被拒绝时依旧详细（缺什么一次列全）
+    out = await cmd(slim, ev_s, "钓点", "解锁", "山间湖泊")
+    body = text_of(out)
+    check(
+        "还差" in body and ("图鉴" in body or "金币" in body or "等级" in body),
+        f"解锁被拒时仍然详细说明缺什么 -> {body.splitlines()[0][:34]}",
+    )
+
+    # --- B: 图鉴 <钓点名> 不列未收集条目 ---
+    out = await cmd(slim, ev_s, "图鉴", "新手村", "")
+    body = text_of(out)
+    check("❔" not in body and "???" not in body, "图鉴（单钓点）不再列 ❔ 占位条目")
+    check("鲤鱼" in body, "已收集的鱼照常显示")
+    check("还差" in body and "种" in body, f"末尾给出「还差 N 种」汇总 -> {body.splitlines()[-2][:30]}")
+
+    out = await cmd(slim, ev_s, "图鉴", "详", "")
+    body = text_of(out)
+    check("❔" not in body and "???" not in body, "图鉴（详）不再列 ❔ 占位条目")
+    check("还差" in body and f"{len(mod.FISH_POOL)}" in body, "图鉴（详）末尾给出总汇总")
+    check("鲤鱼" in body or "鲫鱼" in body, "图鉴（详）照常列出已收集的鱼")
+
+    out = await cmd(slim, ev_s, "图鉴", "", "")
+    body = text_of(out)
+    check("新手村" in body and "/" in body, "主视图的进度（x/y）保留")
+
 
     # --- 水族馆展出加成只能领一次（修复无限叠加漏洞）---
     plugin4 = make_plugin()
@@ -2264,8 +2605,13 @@ async def main():
     check("当前鱼饵" in text_of(out) and "蚯蚓" in text_of(out), "不带参数时列出存量")
     check("玉米粒" in text_of(out), "列出背包里所有有货的饵")
 
+    out = await cmd(plugin_b, ev_b, "换饵", "面包屑", "")
+    check("还没有" in text_of(out), "换「没货但已解锁」的饵 -> 提示先买")
     out = await cmd(plugin_b, ev_b, "换饵", "秘制饵", "")
-    check("还没有" in text_of(out), "换没有的饵会提示先买")
+    check(
+        "🔒" in text_of(out) and "34 级" in text_of(out),
+        f"换「还没解锁」的饵 -> 给出解锁条件（{text_of(out).splitlines()[0][:34]}）",
+    )
     out = await cmd(plugin_b, ev_b, "换饵", "不存在的饵", "")
     check("没有" in text_of(out), "换不认识的饵有提示")
 

@@ -65,17 +65,6 @@ class ViewsMixin:
             self._btn("再来一竿", "/钓鱼"),
         ]]
 
-    def _shop_rows(self) -> list[list[dict[str, Any]]]:
-        """商店视图的按钮：一键买常用饵。"""
-        cheap = sorted(
-            (b for b in self._bait_list() if b != "none"),
-            key=lambda b: self.baits[b].get("price", 0),
-        )[:3]
-        return [[
-            self._btn(f"买{self.baits[b]['name']}", f"/钓鱼 商店 买 {self.baits[b]['name']} 10")
-            for b in cheap
-        ]] or []
-
     def _location_rows(self) -> list[list[dict[str, Any]]]:
         """钓点视图的按钮：图鉴 / 查看背包。"""
         return [[
@@ -263,6 +252,7 @@ class ViewsMixin:
         return "\n".join(lines)
 
     def _shop_view(self, player: dict[str, Any]) -> str:
+        """商店货架：**只上架已解锁的东西**（未达等级/缺鱼竿的整条不显示）。"""
         baits = player.get("baits") or {}
         items = player.get("items") or {}
         lines = [
@@ -270,8 +260,12 @@ class ViewsMixin:
             f"🎣 当前鱼饵：{self._bait_label(player.get('equipped_bait', 'none'))}",
             "— 鱼饵 —",
         ]
+        hidden = 0
         for bait_id in self._bait_list():
             bait = self.baits[bait_id]
+            if self._unlock_shortage(player, bait):
+                hidden += 1
+                continue
             owned = _safe_int(baits.get(bait_id), 0, 0)
             lines.append(
                 f"　{self._bait_label(bait_id)} {bait['price']}金/个"
@@ -281,11 +275,17 @@ class ViewsMixin:
         lines.append("— 道具 —")
         for item_id in self._item_list():
             item = self.items[item_id]
+            if self._unlock_shortage(player, item):
+                hidden += 1
+                continue
             owned = _safe_int(items.get(item_id), 0, 0)
             lines.append(
                 f"　{self._item_label(item_id)} {item['price']}金　持有{owned}"
                 f"　{item['desc']}"
             )
+        if hidden:
+            # 只说「还有」，不剧透清单、也不写等级数字
+            lines.append("🔒 还有更多鱼饵与道具，等级更高 / 换上更好的竿之后会陆续上架")
         return "\n".join(lines)
 
     def _help_pages(self) -> list[tuple[str, list[str]]]:
@@ -315,12 +315,18 @@ class ViewsMixin:
         rod_lines = [
             f"　{rod['emoji']}{rod['name']}　{_fmt_gold(rod['price'])}金"
             f"　价值+{rod['value_bonus']:.0%}　手气{_luck_stars(rod['luck_bonus'], 0.2)}"
+            + (f"　需{rod['unlock_level']}级" if rod.get("unlock_level", 1) > 1 else "")
             for rod in sorted(self.rods, key=lambda r: _safe_int(r.get("price"), 0, 0))
         ]
         bait_lines = [
             f"　{self.baits[b]['emoji']}{self.baits[b]['name']}　"
             f"{self.baits[b]['price']}金/个　"
             f"手气{_luck_stars(self.baits[b]['luck'], 0.7)}"
+            + (
+                f"　需{self._rod_need_text(self.baits[b])}"
+                if self._rod_need_text(self.baits[b])
+                else ""
+            )
             for b in self._bait_list()
         ]
         item_lines = [
@@ -373,13 +379,22 @@ class ViewsMixin:
 
         pages.extend(
             [
-                ("鱼竿", rod_lines + ["　/钓鱼 鱼竿 买 <名> ｜ 用 <名>"]),
+                ("鱼竿", rod_lines + [
+                    "　🔒 的竿要等级达标才能买",
+                    "　/钓鱼 鱼竿 买 <名> ｜ 用 <名>",
+                ]),
                 (
                     "鱼饵与道具",
                     bait_lines
-                    + ["　— 道具 —"]
+                    + [
+                        "　— 道具 —",
+                    ]
                     + item_lines
-                    + ["　/钓鱼 商店 买 <名> [个数]", "　/钓鱼 用 <道具> [栏位]"],
+                    + [
+                        "　部分鱼饵要等级 + 对应鱼竿才能买",
+                        "　/钓鱼 商店 买 <名> [个数]",
+                        "　/钓鱼 用 <道具> [栏位]",
+                    ],
                 ),
                 (
                     "养成与赚钱",

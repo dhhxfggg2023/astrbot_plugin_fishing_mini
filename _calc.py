@@ -117,7 +117,13 @@ def _inventory_value(fish_list: list[dict[str, Any]]) -> int:
     return sum(_instance_value(x) for x in fish_list)
 
 def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
-    """解析鱼饵定义。返回 {bait_id: {...}}，一定包含 none（空钩）。"""
+    """解析鱼饵定义。返回 {bait_id: {...}}，一定包含 none（空钩）。
+
+    新格式（10 段）：
+        ``id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明``
+    旧格式（8~9 段）：没有解锁等级/需要鱼竿 —— 一律视为 1 级、无鱼竿要求
+    （向后兼容：老配置不会因为格式不同而把鱼饵锁死）。
+    """
     baits: dict[str, dict[str, Any]] = {}
     items = raw if isinstance(raw, list) else DEFAULTS["bait_defs"]
     for entry in items:
@@ -137,7 +143,14 @@ def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
             mults.append(_clamp(_safe_number(token, 1.0), 0.01, 50.0))
         while len(mults) < len(RARITY_ORDER):
             mults.append(1.0)
-        desc = parts[7] if len(parts) > 7 else ""
+        if len(parts) >= 10:
+            unlock = max(1, _to_int(parts[7], 1))
+            need_rod = parts[8]
+            desc = parts[9]
+        else:
+            unlock = 1
+            need_rod = ""
+            desc = parts[7] if len(parts) > 7 else ""
         baits[bait_id] = {
             "id": bait_id,
             "name": name,
@@ -148,6 +161,8 @@ def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
             "rarity_mult": {
                 rarity: mults[idx] for idx, rarity in enumerate(RARITY_ORDER)
             },
+            "unlock_level": unlock,
+            "need_rod": need_rod,
             "desc": desc,
         }
 
@@ -160,10 +175,14 @@ def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
             "stock": 0,
             "luck": 0.0,
             "rarity_mult": {r: 1.0 for r in RARITY_ORDER},
+            "unlock_level": 1,
+            "need_rod": "",
             "desc": "什么也不挂，全凭本事",
         }
-    # 空钩永远免费
+    # 空钩永远免费、永远能买（不参与解锁限制）
     baits["none"]["price"] = 0
+    baits["none"]["unlock_level"] = 1
+    baits["none"]["need_rod"] = ""
     return baits
 
 def _parse_effects(text: str) -> dict[str, float]:
@@ -299,7 +318,7 @@ def _parse_named_floats(
         return result
     for name, text in _norm_pairs(raw):
         if name not in result:
-            _tunable_warn(key, f"里的「{name}」不是已知品质")
+            _tunable_warn(key, f"里的「{name}」不认识（已忽略这一项）")
             continue
         number = _try_float(text)
         if number is None or number < 0:
@@ -332,7 +351,7 @@ def _parse_named_ranges(
         return result
     for name, text in _norm_pairs(raw):
         if name not in result:
-            _tunable_warn(key, f"里的「{name}」不是已知品质")
+            _tunable_warn(key, f"里的「{name}」不认识（已忽略这一项）")
             continue
         bounds = _split_range(text)
         if bounds is None:
@@ -478,7 +497,12 @@ def _parse_hook_rates(
     return result, unknown
 
 def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
-    """解析鱼竿定义：``id|名称|emoji|价格|价值加成|幸运加成|描述``。"""
+    """解析鱼竿定义。
+
+    新格式（8 段）：``id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述``
+    旧格式（7 段）：``id|名称|emoji|价格|价值加成|幸运加成|描述`` —— 没有解锁等级，
+    一律视为 1 级（向后兼容：老配置不会因为格式不同而把鱼竿锁死）。
+    """
     rods: list[dict[str, Any]] = []
     entries = raw if isinstance(raw, list) else DEFAULTS["rod_defs"]
     for entry in entries:
@@ -487,6 +511,12 @@ def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
         parts = [p.strip() for p in entry.split("|")]
         if len(parts) < 6 or not parts[0] or not parts[1]:
             continue
+        if len(parts) >= 8:
+            unlock = max(1, _to_int(parts[6], 1))
+            desc = parts[7]
+        else:
+            unlock = 1
+            desc = parts[6] if len(parts) > 6 else ""
         rods.append(
             {
                 "id": parts[0],
@@ -495,20 +525,23 @@ def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
                 "price": max(0, _to_int(parts[3], 0)),
                 "value_bonus": _clamp(_safe_number(parts[4], 0.0), 0.0, 5.0),
                 "luck_bonus": _clamp(_safe_number(parts[5], 0.0), 0.0, 2.0),
-                "desc": parts[6] if len(parts) > 6 else "",
+                "unlock_level": unlock,
+                "desc": desc,
             }
         )
     if not rods:
         rods = [
             {"id": "bamboo", "name": "竹竿", "emoji": "🎋", "price": 0,
-             "value_bonus": 0.0, "luck_bonus": 0.0, "desc": "备用的旧竿"}
+             "value_bonus": 0.0, "luck_bonus": 0.0, "unlock_level": 1,
+             "desc": "备用的旧竿"}
         ]
     # 确保有免费的入门竿
     if not any(r["price"] <= 0 for r in rods):
         rods.insert(
             0,
             {"id": "bamboo", "name": "竹竿", "emoji": "🎋", "price": 0,
-             "value_bonus": 0.0, "luck_bonus": 0.0, "desc": "备用的旧竿"},
+             "value_bonus": 0.0, "luck_bonus": 0.0, "unlock_level": 1,
+             "desc": "备用的旧竿"},
         )
     return rods
 
@@ -617,15 +650,25 @@ def _default_player(user_id: str) -> dict[str, Any]:
     }
 
 
-#: 升级曲线参数：升到 L 级需要的累计钓获 = base*(L-1) + growth*(L-1)^2
-#: 越往后每一级要得越多（不是等差数列），站长可在配置里调。
+#: 升级曲线参数：升到 L 级需要的累计钓获
+#:   = base × (ratio^(L-1) − 1) / (ratio − 1) + growth × (L-1)²
+#: 指数项负责「越往后越难」（把最高进度玩家卡在下一级之前），
+#: 二次项默认 0，留着做微调。base/ratio/growth 都能在 WebUI 里改。
 
 def _level_threshold(level: int) -> int:
-    """升到 ``level`` 级需要的累计钓获。"""
+    """升到 ``level`` 级需要的累计钓获（指数曲线，见 LEVEL_CURVE）。"""
     n = max(0, int(level) - 1)
+    if n <= 0:
+        return 0
     base = _safe_number(LEVEL_CURVE.get("base"), 5.0)
-    growth = _safe_number(LEVEL_CURVE.get("growth"), 0.6)
-    return int(round(base * n + growth * n * n))
+    ratio = _safe_number(LEVEL_CURVE.get("ratio"), 1.08)
+    growth = _safe_number(LEVEL_CURVE.get("growth"), 0.0)
+    if abs(ratio - 1.0) < 1e-9:
+        # ratio = 1 时等比公式会除以 0，退化成等差数列
+        geometric = base * n
+    else:
+        geometric = base * (ratio**n - 1.0) / (ratio - 1.0)
+    return int(round(geometric + growth * n * n))
 
 def _player_level(player: dict[str, Any]) -> int:
     """当前等级：按累计钓获查曲线，上限 MAX_LEVEL。"""
@@ -636,13 +679,17 @@ def _player_level(player: dict[str, Any]) -> int:
     return level
 
 def _level_progress(player: dict[str, Any]) -> tuple[int, int, int]:
-    """返回 (当前等级, 本级已钓条数, 升级所需条数)。"""
+    """返回 (当前等级, 本级已钓条数, 升到下一级还要几条)。
+
+    按真实曲线算，不再用「每级固定 N 条」的旧口径 —— 指数曲线下每级跨度不同。
+    """
     caught = _safe_int(player.get("total_caught"), 0, 0)
     level = _player_level(player)
     if level >= MAX_LEVEL:
         return level, 0, 0
-    into = caught % max(1, FISH_PER_LEVEL)
-    return level, into, FISH_PER_LEVEL
+    here = _level_threshold(level)
+    nxt = _level_threshold(level + 1)
+    return level, max(0, caught - here), max(1, nxt - here)
 
 def _backpack_capacity(player: dict[str, Any], cfg: dict[str, Any]) -> int:
     """背包容量 = 基础容量 + 已购买的扩容档位。"""

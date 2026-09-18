@@ -161,13 +161,14 @@ DEFAULTS: dict[str, Any] = {
     "order_unlock_level": 3,
     "order_refresh_min_hours": 3,
     "order_refresh_max_hours": 6,
+    # 鱼竿：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级）
     "rod_defs": [
-        "bamboo|竹竿|🎋|0|0.00|0.00|村口杂货铺送的，能用",
-        "carbon|碳素竿|🎣|400|0.05|0.03|轻巧顺手，新手进阶首选",
-        "stream|溪流竿|🪝|1600|0.09|0.05|韧性好，适合溪流与湖泊",
-        "dragon|龙纹竿|🐉|5400|0.17|0.11|竿身刻龙，专治大鱼",
-        "starlight|星辉竿|✨|11000|0.23|0.16|夜里会泛微光，深海也用得上",
-        "mythic|神话竿|🌈|22000|0.30|0.22|传说钓具，据说能引来神话之鱼"
+        "bamboo|竹竿|🎋|0|0.00|0.00|1|村口杂货铺送的，能用",
+        "carbon|碳素竿|🎣|400|0.05|0.03|4|轻巧顺手，新手进阶首选",
+        "stream|溪流竿|🪝|1600|0.09|0.05|9|韧性好，适合溪流与湖泊",
+        "dragon|龙纹竿|🐉|5400|0.17|0.11|16|竿身刻龙，专治大鱼",
+        "starlight|星辉竿|✨|11000|0.23|0.16|26|夜里会泛微光，深海也用得上",
+        "mythic|神话竿|🌈|22000|0.30|0.22|38|传说钓具，据说能引来神话之鱼"
     ],
     # 钓点定义由 LOCATIONS 生成（见文件下方 _location_def_lines()），此处留空占位
     "location_defs": [],
@@ -180,8 +181,15 @@ DEFAULTS: dict[str, Any] = {
     "story_chance": 0.06,
     # ---- 数据管理（都在 WebUI 里操作，不用发指令）----
     "level_xp_base": 5.0,           # 升级曲线：每级基础竿数
-    "level_xp_growth": 0.6,        # 升级曲线：二次增长系数（越后面越贵）
+    "level_xp_ratio": 1.08,         # 升级曲线：等比底数（指数项，越大越陡）
+    "level_xp_growth": 0.0,         # 升级曲线：二次增长系数（默认 0，留着做微调）
     # 上钩率：空钩基本靠运气，带饵才容易上鱼（"id:概率" 逗号分隔，站长可调）
+    # 钓点难度系数：≥1.0 = 这个钓点必出鱼；<1.0 = 上钩率 × 系数（越深越容易空竿）
+    "location_hook_factors": (
+        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.94,reed:0.90,sea:0.86,dock:0.82,"
+        "night:0.78,mangrove:0.74,swamp:0.70,cave:0.66,ruins:0.62,abyss:0.58,"
+        "trench:0.54,glacier:0.50,aurora:0.44"
+    ),
     # 前往下一个钓点需要上一个钓点图鉴开到多少比例
     "location_codex_gate": 0.8,
     "bait_hook_rates": "none:0.30,bread:0.72,worm:0.80,bloodworm:0.86,corn:0.90,shrimp:0.94,livebait:0.96,secret:1.0",
@@ -204,15 +212,17 @@ DEFAULTS: dict[str, Any] = {
     "pond_income_cap_hours": 12,
     "pond_income_cap_coins": 3000,
     "aquarium_slots": ["精致缸|1600", "生态缸|5400", "深海缸|16000"],
+    # 鱼饵：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明
+    # 「需要鱼竿」填鱼竿 id 或名称，表示**拥有**那根竿才能买；解锁等级是新号也能用的门槛
     "bait_defs": [
-        "none|空钩|🪝|0|0|0|1,1,1,1,1|什么也不挂，全凭本事（免费）",
-        "bread|面包屑|🍞|1|10|0.06|1,1.1,1.3,1.4,1.5|厨房剩的，便宜大碗",
-        "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|万用饵，两块钱一钩",
-        "bloodworm|红虫|🪰|4|5|0.22|1,1.4,2.0,2.4,3.0|小鱼最爱，上钩快",
-        "corn|玉米粒|🌽|6|5|0.30|1,1.5,2.3,3.0,4.0|素饵之王，草鱼克星",
-        "shrimp|虾饵|🦐|12|3|0.40|1,1.8,2.6,3.6,4.6|肉食鱼最爱，稀有度明显上升",
-        "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|活蹦乱跳，专勾大鱼",
-        "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|祖传配方，闻着就不一样",
+        "none|空钩|🪝|0|0|0|1,1,1,1,1|1||什么也不挂，全凭本事（免费）",
+        "bread|面包屑|🍞|1|10|0.06|1,1.1,1.3,1.4,1.5|1||厨房剩的，便宜大碗",
+        "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|2||万用饵，两块钱一钩",
+        "bloodworm|红虫|🪰|4|5|0.22|1,1.4,2.0,2.4,3.0|5||小鱼最爱，上钩快",
+        "corn|玉米粒|🌽|6|5|0.30|1,1.5,2.3,3.0,4.0|9|stream|素饵之王，草鱼克星",
+        "shrimp|虾饵|🦐|12|3|0.40|1,1.8,2.6,3.6,4.6|15|dragon|肉食鱼最爱，稀有度明显上升",
+        "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|22|starlight|活蹦乱跳，专勾大鱼",
+        "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|34|mythic|祖传配方，闻着就不一样",
     ],
     "item_defs": [
         "feed_basic|普通饲料|🌾|20|打基础的口粮|meat=2;spirit=1",
@@ -891,6 +901,25 @@ LEGACY_EXTRA_WEIGHT: dict[str, float] = {
 # 否则一次写错会永久污染后续解析。统一从 DEFAULTS 现算，避免两处硬编码。
 
 _RARITY_TEMPLATE_ZERO = {name: 0.0 for name in RARITY_ORDER}
+#: 钓点难度系数的模板：没配置的钓点一律按 1.0（= 必出鱼）处理
+_LOCATION_TEMPLATE_ONE = {loc_id: 1.0 for loc_id in LOCATION_TIER_ORDER}
+#: 中文钓点名 -> 钓点 id（解析前先把中文名换回 id，站长写「新手村:1.0」也认）
+_LOCATION_NAME_TO_ID = {
+    str(loc.get("name")): loc["id"] for loc in LOCATIONS if loc.get("name")
+}
+#: 按名字长度倒序，避免短名字先替换把长名字切坏
+_LOCATION_ALIASES: tuple[tuple[str, str], ...] = tuple(
+    sorted(_LOCATION_NAME_TO_ID.items(), key=lambda kv: -len(kv[0]))
+)
+
+
+def _normalize_location_keys(raw: str) -> str:
+    """把配置串里的中文钓点名换成钓点 id（只做整词替换，认不出就原样保留）。"""
+    text = raw or ""
+    for name, loc_id in _LOCATION_ALIASES:
+        if name and name in text:
+            text = text.replace(name, loc_id)
+    return text
 
 
 def _builtin_defaults() -> dict[str, Any]:
@@ -942,6 +971,11 @@ def _builtin_defaults() -> dict[str, Any]:
         ),
         "default_escape_rate": _safe_number(
             DEFAULTS.get("default_escape_rate"), 0.25
+        ),
+        "location_hook_factors": _parse_named_floats(
+            str(DEFAULTS.get("location_hook_factors") or ""),
+            _LOCATION_TEMPLATE_ONE,
+            "内置默认",
         ),
         "hostile_keywords": _parse_word_list(
             str(DEFAULTS.get("hostile_keywords") or ""), (), "内置默认"
@@ -1155,8 +1189,8 @@ ORDER_RARITY_BY_LEVEL: list[tuple[int, tuple[str, ...]]] = [
 # 三·九、等级（由累计钓获换算，用于解锁钓点 / 订单 / 交互品质门槛）
 # =============================================================================
 
-#: 每级需要的累计钓获
-FISH_PER_LEVEL = 15
+#: 等级曲线由 LEVEL_CURVE（base/ratio/growth）决定，见 _calc.py 的 _level_threshold：
+#: 升到 L 级需要的累计钓获 = base × (ratio^(L-1) − 1) / (ratio − 1) + growth × (L-1)²
 #: 等级上限
 
 
@@ -1378,6 +1412,8 @@ DEFAULT_ESCAPE_RATE: float = 0.25
 #: 鱼基准价的全局倍率与单条覆盖
 FISH_VALUE_MULT: float = 1.0
 FISH_VALUE_OVERRIDES: dict[str, float] = {}
+#: 各钓点的上钩难度系数：>=1.0 = 必出鱼，<1.0 = 上钩率乘这个系数
+LOCATION_HOOK_FACTORS: dict[str, float] = {}
 #: 解析告警去重（同一配置项只提示一次，避免刷日志）
 _TUNABLE_WARNED: set[str] = set()
 
@@ -1492,6 +1528,14 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
     if escape is not None:
         DEFAULT_ESCAPE_RATE = _clamp(escape, 0.0, 0.95)
 
+    factors = _parse_named_floats(
+        _normalize_location_keys(_cfg_str(cfg, "location_hook_factors")),
+        BUILTIN["location_hook_factors"],
+        "location_hook_factors",
+    )
+    LOCATION_HOOK_FACTORS.clear()
+    LOCATION_HOOK_FACTORS.update(factors)
+
     mult = _try_float(cfg.get("fish_value_mult"))
     if mult is not None:
         FISH_VALUE_MULT = _clamp(mult, 0.0, 100.0)
@@ -1527,7 +1571,9 @@ DATA_VERSION = 4
 #: 单次投喂上限（相对鱼种品质）
 
 
-LEVEL_CURVE: dict[str, float] = {"base": 5.0, "growth": 0.6}
+#: 升级曲线：base × (ratio^(L-1) − 1) / (ratio − 1) + growth × (L-1)²
+#: 指数项负责"越往后越难"（卡住最高进度玩家），二次项默认 0，留着做微调
+LEVEL_CURVE: dict[str, float] = {"base": 5.0, "ratio": 1.08, "growth": 0.0}
 
 
 
@@ -1654,6 +1700,7 @@ class FishingPlugin(
         self.bait_hook_map: dict[str, float] = {}
         #: 已经就「上钩率缺项」告警过的鱼饵，避免刷屏
         self._hook_warned: set[str] = set()
+        self._hook_factor_warned: set[str] = set()
         self.interactive_rarities: set[str] = set()
         # 新增：鱼竿 / 钓点 / 背包扩容（可由配置覆盖）
         self.rods: list[dict[str, Any]] = []
@@ -1777,10 +1824,15 @@ class FishingPlugin(
         cfg["level_xp_base"] = _clamp(
             _safe_number(cfg.get("level_xp_base"), 5.0), 1.0, 100.0
         )
+        # 等比底数：>1 才有指数增长（1.0 = 退化成线性，方便站长自己试手感）
+        cfg["level_xp_ratio"] = _clamp(
+            _safe_number(cfg.get("level_xp_ratio"), 1.08), 1.0, 2.0
+        )
         cfg["level_xp_growth"] = _clamp(
-            _safe_number(cfg.get("level_xp_growth"), 0.6), 0.0, 20.0
+            _safe_number(cfg.get("level_xp_growth"), 0.0), 0.0, 20.0
         )
         LEVEL_CURVE["base"] = cfg["level_xp_base"]
+        LEVEL_CURVE["ratio"] = cfg["level_xp_ratio"]
         LEVEL_CURVE["growth"] = cfg["level_xp_growth"]
         cfg["content_auto_merge"] = bool(cfg.get("content_auto_merge", True))
         cfg["button_mode"] = str(cfg.get("button_mode") or "自动")
@@ -2538,21 +2590,53 @@ class FishingPlugin(
         except Exception as e:
             logger.debug(f"更新排行榜索引失败：{e}")
 
+    def _location_hook_factor(self, loc_id: str | None) -> float | None:
+        """钓点难度系数。
+
+        - ``>= 1.0`` → 这个钓点**必出鱼**（前几张图，新手期绝不空竿）
+        - ``< 1.0``  → 实际上钩率 = 鱼饵上钩率 × 系数（越深越容易空竿）
+        - 配置里没写的钓点 → 回退 1.0（当必出处理，避免漏配误伤）
+
+        ``loc_id=None`` 表示「不套用钓点系数」（只给单测/内部按裸概率采样用），
+        返回 None 让调用方跳过这一步。
+        """
+        if not loc_id:
+            return None
+        table = LOCATION_HOOK_FACTORS or {}
+        if loc_id in table:
+            return _clamp(_safe_number(table.get(loc_id), 1.0), 0.0, 5.0)
+        if loc_id not in self._hook_factor_warned:
+            self._hook_factor_warned.add(loc_id)
+            logger.warning(
+                f"location_hook_factors 里没有钓点 {loc_id} 的难度系数，"
+                f"按 1.0（必出鱼）处理；想让它变难就加一项，例如 {loc_id}:0.7"
+            )
+        return 1.0
+
     def _roll_cast_outcome(
-        self, bait_id: str, can_loot: bool
+        self, bait_id: str, can_loot: bool, loc_id: str | None = None
     ) -> tuple[str, dict[str, Any] | None]:
         """这一竿的结果：``("fish", None)`` / ``("item", 杂物)`` / ``("nothing", None)``。
 
         判定顺序就是玩家直觉里的顺序（用户明确要求）：
         1. 先看有没有中鱼 —— 中了就是鱼，**不会被杂物抢走**，
-           所以「上鱼率 == bait_hook_rates 里设置的值」；
+           所以「上鱼率 == bait_hook_rates 里设置的值 × 钓点系数」；
         2. 没中鱼才看钩子上有没有带物件（``item_drop_chance``）；
         3. 都没有就是空手而归。
+
+        钓点系数（``location_hook_factors``）在这里生效：``>= 1.0`` 的钓点
+        （默认前 3 张图）直接必出鱼，``< 1.0`` 的按比例压低上钩率 ——
+        越往后的地图越容易空竿。
 
         ``can_loot=False``（完全免费的空钩）时不出物件，避免零成本白刷杂物。
         抽成独立方法是为了让三段概率可被单测稳定采样。
         """
         hook = self._hook_rate(bait_id)
+        factor = self._location_hook_factor(loc_id)
+        if factor is not None:
+            if factor >= 1.0:
+                return "fish", None          # 该钓点必出鱼
+            hook = hook * factor
         if hook >= 1.0 or random.random() < hook:
             return "fish", None
         if can_loot:
@@ -2821,6 +2905,68 @@ class FishingPlugin(
             if text == rod["name"] or lowered == rod["id"]:
                 return rod
         return None
+
+    # -------------------------------------------------------------------------
+    # 等级解锁购买权限（鱼竿 / 鱼饵）
+    # -------------------------------------------------------------------------
+
+    def _unlock_shortage(
+        self, player: dict[str, Any], item: dict[str, Any]
+    ) -> list[str]:
+        """返回「还差什么才能买」的文案列表（空列表 = 可以买）。
+
+        - 解锁等级：``unlock_level``（鱼竿与鱼饵都有）
+        - 需要鱼竿：鱼饵的 ``need_rod``，填鱼竿 id 或名称，**拥有**即可（不要求装备）
+        已经拥有的东西不受影响（只限制购买，不回收、不禁用）。
+        """
+        lacks: list[str] = []
+        need_level = max(1, _safe_int(item.get("unlock_level"), 1, 1))
+        level = _player_level(player)
+        if level < need_level:
+            lacks.append(f"{need_level} 级（你现在 {level} 级）")
+        rod_ref = str(item.get("need_rod") or "").strip()
+        if rod_ref:
+            rod = self.rod_by_id.get(rod_ref) or self._find_rod(rod_ref)
+            owned: list[str] = player.get("rods") or [DEFAULT_ROD]
+            if rod is not None and rod["id"] not in owned:
+                lacks.append(f"先有 {rod['emoji']}{rod['name']}")
+            elif rod is None:
+                # 配了一个不存在的鱼竿：当没要求，别把玩家卡死
+                logger.warning(
+                    f"{item.get('id')} 的「需要鱼竿」写的是 {rod_ref!r}，没有这款鱼竿，已忽略"
+                )
+        return lacks
+
+    def _unlock_refuse_text(self, player: dict[str, Any], item: dict[str, Any]) -> str:
+        """买不了时的完整拒绝文案（空串 = 可以买）。
+
+        玩家直接点名买未解锁的东西时要给出**明确原因**，
+        不能静默失败、也不能假装这东西不存在。
+        """
+        name = str(item.get("name") or "这个")
+        need_level = max(1, _safe_int(item.get("unlock_level"), 1, 1))
+        level = _player_level(player)
+        if level < need_level:
+            return f"🔒 {name}要 {need_level} 级才能买，你现在 {level} 级"
+        rod_ref = str(item.get("need_rod") or "").strip()
+        if rod_ref:
+            rod = self.rod_by_id.get(rod_ref) or self._find_rod(rod_ref)
+            owned: list[str] = player.get("rods") or [DEFAULT_ROD]
+            if rod is not None and rod["id"] not in owned:
+                return f"🔒 {name}得先有 {rod['emoji']}{rod['name']}"
+        return ""
+
+    def _rod_need_text(self, item: dict[str, Any]) -> str:
+        """解锁条件摘要（给鱼竿/鱼饵列表用，不管玩家当前等级）。"""
+        bits: list[str] = []
+        need_level = max(1, _safe_int(item.get("unlock_level"), 1, 1))
+        if need_level > 1:
+            bits.append(f"{need_level} 级")
+        rod_ref = str(item.get("need_rod") or "").strip()
+        if rod_ref:
+            rod = self.rod_by_id.get(rod_ref) or self._find_rod(rod_ref)
+            bits.append(f"需 {rod['name'] if rod else rod_ref}")
+        return "、".join(bits)
 
     #: 权重低于此值的算「隐藏生物」，不计入钓点图鉴完成度
     CODEX_HIDDEN_WEIGHT = 0.5

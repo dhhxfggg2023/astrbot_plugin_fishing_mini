@@ -158,10 +158,12 @@ class EngineMixin:
                 baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - 1)
 
             # ---- 这一竿的结果：中鱼 / 钩上物件 / 空手而归（一竿只出一样）----
-            # 顺序见 _roll_cast_outcome：先判中鱼（上鱼率==配置的咬钩率），
+            # 顺序见 _roll_cast_outcome：先判中鱼（上鱼率 == 配置的咬钩率 × 钓点系数），
             # 没中鱼才可能钩上杂物；完全免费的空钩不出杂物。
+            # 钓点系数 >= 1.0 的地图（默认前 3 张）必出鱼，越深越容易空竿。
+            cast_loc = self._location(player)
             outcome, drop = self._roll_cast_outcome(
-                bait_id, bait_id != "none" or total_cost > 0
+                bait_id, bait_id != "none" or total_cost > 0, cast_loc.get("id")
             )
             if outcome != "fish":
                 player["last_fish_time"] = int(now)
@@ -184,20 +186,12 @@ class EngineMixin:
                     if bait_id == "none"
                     else f"🎣 咬了一口又吐掉了——{self._bait_label(bait_id)} 白搭了"
                 )
-                cheap = min(
-                    (b for b in self._bait_list() if b != "none"),
-                    key=lambda b: self.baits[b].get("price", 0),
-                    default=None,
-                )
-                if bait_id == "none" and cheap:
-                    tail = (
-                        "　挂个鱼饵上钩率会高很多：/钓鱼 商店 买 "
-                        f"{self.baits[cheap]['name']}"
-                        f"（{self.baits[cheap]['price']} 金/个）"
-                    )
-                else:
-                    tail = "　换个更对口的饵，或者挑鱼多的钓点再试"
-                yield event.plain_result(f"{tip}\n{tail}")
+                # 深水钓点本来就难：空竿时点一句，别让玩家以为是自己的问题
+                # （只描述现象，不带「去哪儿买什么」的教程尾巴）
+                factor = self._location_hook_factor(cast_loc.get("id"))
+                if factor is not None and factor < 0.75:
+                    tip = f"🌊 {cast_loc['emoji']}{cast_loc['name']} 水太深了，鱼不太愿意开口"
+                yield event.plain_result(tip)
                 return
 
             # ---- 抽鱼种（按当前钓点的鱼池 + 今日天气）----

@@ -396,39 +396,22 @@ class CommandsMixin:
                 return
 
             # ---- 查看 ----
+            # 已解锁：完整信息（价值倍率 + 描述）；未解锁：只留 🔒 + 名称，
+            # 不提前报图鉴进度/金币/等级（想看还差什么就写 解锁 <名>，那边会详细说明）
             lines = [f"🗺️ 钓点　当前 {self._location_label(player)}　等级 {level}"]
             for loc in sorted(
                 self.locations,
                 key=lambda l: (_safe_int(l.get("level_gate"), 1, 1),
                                _safe_int(l.get("gold_gate"), 0, 0)),
             ):
-                is_unlocked = loc["id"] in unlocked
-                here = "📍" if loc["id"] == current else "　"
-                if is_unlocked:
+                if loc["id"] in unlocked:
+                    here = "📍" if loc["id"] == current else "　"
                     lines.append(
                         f"{here}{loc['emoji']}{loc['name']}　×{loc['value_mult']:.2f}"
                         f"　{loc['desc']}"
                     )
                 else:
-                    prev_id = self._prev_location_id(loc["id"])
-                    if prev_id:
-                        prev_cfg = self.location_by_id.get(prev_id) or {}
-                        got, need = self._location_codex_progress(player, prev_id)
-                        ratio = _clamp(
-                            _safe_number(self.cfg.get("location_codex_gate"), 0.8),
-                            0.0,
-                            1.0,
-                        )
-                        gate_need = int(need * ratio + 0.999)
-                        mark = "✅" if got >= gate_need else "🔒"
-                        lines.append(
-                            f"{mark}{loc['emoji']}{loc['name']}　图鉴 "
-                            f"{got}/{need}（需 {gate_need}）"
-                            f"　{_fmt_gold(loc['gold_gate'])}金"
-                            f"　{loc['level_gate']}级"
-                        )
-                    else:
-                        lines.append(f"🔒{loc['emoji']}{loc['name']}")
+                    lines.append(f"🔒{loc['emoji']}{loc['name']}")
             lines.append("💡 点按钮看图鉴，或写：/钓鱼 去 <钓点名>")
             async for reply in self._say(event, "\n".join(lines), self._location_rows()):
                 yield reply
@@ -455,6 +438,13 @@ class CommandsMixin:
                     return
                 if rod["id"] in owned:
                     yield event.plain_result(f"✅ 你已经有 {rod['name']} 了")
+                    return
+                # 等级门槛：不够就明确告诉他还差多少
+                refuse = self._unlock_refuse_text(player, rod)
+                if refuse:
+                    yield event.plain_result(
+                        f"{refuse}\n　多钓几竿就升级了，升级后回来 /钓鱼 鱼竿 买 {rod['name']}"
+                    )
                     return
                 price = int(rod["price"])
                 if _safe_int(player.get("gold"), 0, 0) < price:
@@ -493,13 +483,21 @@ class CommandsMixin:
                 return
 
             lines = [f"🎣 鱼竿　当前 {self._rod_label(player)}"]
+            hidden = 0
             for rod in self.rods:
+                owned_rod = rod["id"] in owned
+                # 没解锁的竿不显示（等级够了才上架），已拥有的永远显示
+                if not owned_rod and self._unlock_shortage(player, rod):
+                    hidden += 1
+                    continue
                 here = "📍" if rod["id"] == equipped else "　"
-                tag = "已拥有" if rod["id"] in owned else f"{_fmt_gold(rod['price'])}金"
+                tag = "已拥有" if owned_rod else f"{_fmt_gold(rod['price'])}金"
                 lines.append(
                     f"{here}{rod['emoji']}{rod['name']}　{tag}　"
                     f"价值+{rod['value_bonus']:.0%}　手气{_luck_stars(rod['luck_bonus'], 0.2)}"
                 )
+            if hidden:
+                lines.append("🔒 还有更多鱼竿，等级更高之后会陆续上架")
             lines.append("💡 /钓鱼 鱼竿 买 <名称> ｜ /钓鱼 鱼竿 用 <名称>")
             yield event.plain_result("\n".join(lines))
 
@@ -1055,45 +1053,53 @@ class CommandsMixin:
                 entry.get("best_value"), 0, 0
             )
 
-        # ---- 详 [页码]：完整清单，按品质从低到高、每页 15 种 ----
+        # ---- 详 [页码]：已收集的清单（按品质从低到高、每页 15 种）----
         if lower in ("详", "详细", "all", "detail") or (len(toks) == 1 and arg.isdigit()):
             page = (
                 _to_int(toks[1], 1)
                 if lower in ("详", "详细", "all", "detail") and len(toks) > 1
                 else (_to_int(arg, 1) if arg.isdigit() else 1)
             )
-            ordered = sorted(
-                FISH_POOL,
-                key=lambda f: (RARITY_RANK.get(f["rarity"], 0), f["value"]),
-            )
+            # 未收集的不再逐条列 ❔ 占位，只列已经钓到的；还差多少在末尾一句带过
+            collected = [
+                fish
+                for fish in sorted(
+                    FISH_POOL,
+                    key=lambda f: (RARITY_RANK.get(f["rarity"], 0), f["value"]),
+                )
+                if entry_of(fish["id"])[0] > 0
+            ]
             per_page = 15
-            total_pages = max(1, (len(ordered) + per_page - 1) // per_page)
+            total_pages = max(1, (len(collected) + per_page - 1) // per_page)
             page = max(1, min(page, total_pages))
             start = (page - 1) * per_page
             lines = [
                 f"📖 鱼种图鉴（详）{len(owned)}/{len(FISH_POOL)}"
                 f"　第 {page}/{total_pages} 页"
             ]
-            for fish in ordered[start : start + per_page]:
+            if not collected:
+                lines.append("　（还没钓到鱼，先去 /钓鱼 下竿）")
+            for fish in collected[start : start + per_page]:
                 total, best = entry_of(fish["id"])
-                if total > 0:
-                    now = held.get(fish["id"], 0)
-                    lines.append(
-                        f"　{_fish_emoji(fish)}{fish['name']}"
-                        f"　{self._rarity_name(fish['rarity'])}"
-                        f"　共{total} 最高{_fmt_gold(best)}"
-                        + (f" 存{now}" if now else "")
-                    )
-                else:
-                    lines.append(
-                        f"　❔ ???　{self._rarity_name(fish['rarity'])}"
-                    )
-            tail_page = page % total_pages + 1
-            lines.append(f"💡 /钓鱼 图鉴 详 {tail_page} 看下一页")
+                now = held.get(fish["id"], 0)
+                lines.append(
+                    f"　{_fish_emoji(fish)}{fish['name']}"
+                    f"　{self._rarity_name(fish['rarity'])}"
+                    f"　共{total} 最高{_fmt_gold(best)}"
+                    + (f" 存{now}" if now else "")
+                )
+            lack = len(FISH_POOL) - len(collected)
+            lines.append(
+                f"📌 还差 {lack} 种（共 {len(FISH_POOL)} 种）" if lack
+                else f"🏅 全部 {len(FISH_POOL)} 种都收集齐了！"
+            )
+            if total_pages > 1:
+                tail_page = page % total_pages + 1
+                lines.append(f"💡 /钓鱼 图鉴 详 {tail_page} 看下一页")
             yield event.plain_result("\n".join(lines))
             return
 
-        # ---- 图鉴 <钓点名>：这个钓点里还差哪些 ----
+        # ---- 图鉴 <钓点名>：这个钓点里已收集的鱼 ----
         loc = self._find_location(arg) if arg and lower not in ("详", "详细") else None
         if loc is not None:
             ids = [
@@ -1112,21 +1118,24 @@ class CommandsMixin:
                 f"{loc['emoji']} {loc['name']} 图鉴 {len(got)}/{len(ids)}"
                 f"　×{loc['value_mult']:.2f}"
             ]
+            # 没收集到的不逐条列 ❔，只在末尾报一句还差几种（少刷屏、不剧透）
             for fid in ids:
-                fish = FISH_BY_ID[fid]
                 total, best = entry_of(fid)
-                if total > 0:
-                    now = held.get(fid, 0)
-                    lines.append(
-                        f"　{_fish_emoji(fish)}{fish['name']}"
-                        f"　{self._rarity_name(fish['rarity'])}"
-                        f"　共{total} 最高{_fmt_gold(best)}"
-                        + (f" 存{now}" if now else "")
-                    )
-                else:
-                    lines.append(
-                        f"　❔ ???　{self._rarity_name(fish['rarity'])}"
-                    )
+                if total <= 0:
+                    continue
+                fish = FISH_BY_ID[fid]
+                now = held.get(fid, 0)
+                lines.append(
+                    f"　{_fish_emoji(fish)}{fish['name']}"
+                    f"　{self._rarity_name(fish['rarity'])}"
+                    f"　共{total} 最高{_fmt_gold(best)}"
+                    + (f" 存{now}" if now else "")
+                )
+            lack = len(ids) - len(got)
+            lines.append(
+                f"📌 还差 {lack} 种（共 {len(ids)} 种）" if lack
+                else f"🏅 这个钓点已集齐（共 {len(ids)} 种）"
+            )
             lines.append("💡 /钓鱼 图鉴 看各钓点总进度")
             yield event.plain_result("\n".join(lines))
             return
@@ -1549,9 +1558,18 @@ class CommandsMixin:
                     )
                     return
                 if bait_id is None and item_id is None:
+                    # 只报「已上架」的名字：没解锁的东西不剧透
                     names = "、".join(
-                        [self.baits[b]["name"] for b in self._bait_list()]
-                        + [i["name"] for i in self.items.values()]
+                        [
+                            self.baits[b]["name"]
+                            for b in self._bait_list()
+                            if not self._unlock_shortage(player, self.baits[b])
+                        ]
+                        + [
+                            i["name"]
+                            for i in self.items.values()
+                            if not self._unlock_shortage(player, i)
+                        ]
                     )
                     yield event.plain_result(
                         f"🤔 商店里没有「{name}」\n　在售：{names}"
@@ -1560,6 +1578,13 @@ class CommandsMixin:
 
                 if bait_id is not None:
                     bait = self.baits[bait_id]
+                    # 等级 / 需要鱼竿的购买门槛（只限制购买，已持有的不受影响）
+                    refuse = self._unlock_refuse_text(player, bait)
+                    if refuse:
+                        yield event.plain_result(
+                            f"{refuse}\n　升级靠多钓鱼；要鱼竿就去 /钓鱼 鱼竿 买"
+                        )
+                        return
                     unit = max(0, int(bait.get("price", 0)))   # 单价：按个卖
                     want = max(1, min(times, 9999))
                     price = unit * want
@@ -1663,7 +1688,11 @@ class CommandsMixin:
             target = self._find_bait(name)
             if target is None:
                 names = "、".join(
-                    [self.baits[b]["name"] for b in self._bait_list()]
+                    [
+                        self.baits[b]["name"]
+                        for b in self._bait_list()
+                        if not self._unlock_shortage(player, self.baits[b])
+                    ]
                     + ["空钩"]
                 )
                 yield event.plain_result(
@@ -1672,6 +1701,10 @@ class CommandsMixin:
                 return
 
             if target != "none" and owned_of(target) <= 0:
+                refuse = self._unlock_refuse_text(player, self.baits[target])
+                if refuse:
+                    yield event.plain_result(f"{refuse}（买到之后就能换）")
+                    return
                 yield event.plain_result(
                     f"🎒 你还没有 {self._bait_label(target)}，"
                     f"先去 /钓鱼 商店 买 {self.baits[target]['name']}"
