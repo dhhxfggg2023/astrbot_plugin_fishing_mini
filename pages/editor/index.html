@@ -958,7 +958,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   // 候选前缀：不猜，穷举。第一个成功的记住，后续请求直接用那一种。
   // （实测：不同 AstrBot 版本/入口对 endpoint 的拼法不一样，
   //   直接问「这个路由存不存在」比读源码猜前缀可靠。）
-  var API_CANDIDATES = ["", "/api", "/api/v1"];
+  var API_CANDIDATES = ["", "/api/", "/api/v1/"];
   var API_PREFIX = null;
 
   function rawBridgeCall(kind, endpoint, a, b) {
