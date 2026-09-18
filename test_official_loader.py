@@ -126,7 +126,7 @@ try:
     # 每个配置项都必须能被代码正确解析
     plugin = mod.FishingPlugin(context=FakeCtx(), config=dict(cfg))
     check(len(plugin.baits) == 8, f"鱼饵解析 {len(plugin.baits)} 种")
-    check(len(plugin.items) == 5, f"道具解析 {len(plugin.items)} 种")
+    check(len(plugin.items) == 6, f"道具解析 {len(plugin.items)} 种")
     check(len(plugin.aquarium_slots) == 3, f"扩建栏位解析 {len(plugin.aquarium_slots)} 个")
     check(plugin.escape_map.get("神话", 0) > 0, f"逃脱率表解析 -> {plugin.escape_map}")
     check(

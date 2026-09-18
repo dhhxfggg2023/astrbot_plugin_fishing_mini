@@ -1118,6 +1118,25 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   function num(v, d) { var n = Number(v); return isFinite(n) ? n : d; }
   function text(v, d) { return toText(v) === "" ? (d === undefined ? "" : d) : toText(v); }
 
+  /* 道具效果（item_defs 第 6 段）：键名白名单 + 中文说明，和插件 _calc.py 的 _parse_effects 保持一致。
+     分成三种角色：喂鱼（一次性永久）、钓手手气（按竿数）、鱼缸装饰（按小时）。
+     说明文字会作为「效果」列表头的 tooltip，写错键时页面会当场把行标红。 */
+  var ITEM_EFFECT_KEYS = [
+    ["meat", "投喂：鱼肉 +N（永久）"],
+    ["spirit", "投喂：鱼灵 +N（永久）"],
+    ["sheen", "投喂：鱼光 +N（永久）"],
+    ["value_up", "投喂：估值 +N（永久）"],
+    ["feed_bonus", "投喂：这条鱼的投喂上限 +N 次"],
+    ["buff_quality", "钓手手气：value 是倍率，生效 buff_cast_count 竿"],
+    ["quality_up", "同上（旧写法，插件按 buff_quality 处理）"],
+    ["decorate", "鱼缸装饰：value 是加成比例，持续 decoration_hours 小时"],
+    ["heal", "预留：回复体力（插件暂未启用）"]
+  ];
+  var ITEM_EFFECT_KEY_NAMES = ITEM_EFFECT_KEYS.map(function (kv) { return kv[0]; });
+  var ITEM_EFFECT_HINT = ITEM_EFFECT_KEYS.map(function (kv) {
+    return kv[0] + "　" + kv[1];
+  }).join("\n");
+
   /** 每条内容表定义：配置键 + 线格式 + 两个方向的映射。 */
   var TABLE_DEFS = {
     fish: {
@@ -1813,11 +1832,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { id: "secret",    emoji: "🍯", name: "秘制饵",   price: 45, bundle: 1,  luck: 0.68, unlock_level: 34, required_rod: "mythic",    desc: "祖传配方，闻着就不一样" }
       ],
       items: [
-        { id: "feed_basic",   emoji: "🌾", name: "普通饲料", price: 20,  effects: "meat=2;spirit=1",                     desc: "打基础的口粮" },
-        { id: "feed_premium", emoji: "🍖", name: "高级饲料", price: 80,  effects: "meat=5;spirit=4;sheen=3",             desc: "营养均衡，长得快" },
-        { id: "feed_divine",  emoji: "💧", name: "仙露",     price: 300, effects: "meat=10;spirit=10;sheen=10;value_up=150", desc: "传说中的养鱼圣品" },
-        { id: "pill_quality", emoji: "🔮", name: "洗髓丹",   price: 500, effects: "quality_up=0.30",                     desc: "激发血脉，更容易出好个体" },
-        { id: "coral_deco",   emoji: "🪸", name: "珊瑚造景", price: 260, effects: "value_up=120",                        desc: "水族馆装饰，提升馆藏价值" }
+        { id: "feed_basic",   emoji: "🌾", name: "普通饲料", price: 20,  effects: "meat=2;spirit=1",                          desc: "喂鱼：肉+2、灵+1（永久）" },
+        { id: "feed_premium", emoji: "🍖", name: "高级饲料", price: 80,  effects: "meat=5;spirit=4;sheen=3",                  desc: "喂鱼：肉+5、灵+4、光+3（永久）" },
+        { id: "feed_divine",  emoji: "💧", name: "仙露",     price: 300, effects: "meat=10;spirit=10;sheen=10;value_up=600",  desc: "喂鱼：三维各 +10，估值 +600（永久）" },
+        { id: "growth_tonic", emoji: "🌱", name: "育灵水",   price: 500, effects: "feed_bonus=5",                             desc: "喂鱼：这条鱼的投喂上限 +5 次" },
+        { id: "lucky_jade",   emoji: "🎐", name: "锦鲤玉佩", price: 500, effects: "buff_quality=0.30",                        desc: "带在身上：接下来 20 竿手气更好" },
+        { id: "coral_deco",   emoji: "🪸", name: "珊瑚造景", price: 260, effects: "decorate=0.20",                            desc: "摆进鱼缸：72 小时内挂机产出 +20%" }
       ],
       collectibles: [
         { id: "boot",     emoji: "🥾", name: "破靴子", weight: 30, value: 5,  desc: "谁扔的……还挺合脚" },
@@ -2013,7 +2033,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       id: "items",
       label: "🎒 道具",
       title: "道具",
-      hint: "效果写成 key=值，分号分隔（如 meat=2;value_up=120）",
+      hint: "效果写成 key=值，分号分隔；喂鱼用 meat/spirit/sheen/value_up，投喂上限 feed_bonus，" +
+        "钓手手气 buff_quality，鱼缸装饰 decorate（写错键插件会静默忽略，页面会标红）",
       keyField: "id",
       sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueAsc", "按价格（低→高）"], ["valueDesc", "按价格（高→低）"]],
       columns: [
@@ -2021,7 +2042,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { key: "emoji",   label: "图标", type: "emoji",  w: "60px" },
         { key: "name",    label: "名称", type: "text",   w: "120px" },
         { key: "price",   label: "价格", type: "number", w: "96px", num: true, step: 10, valueKey: true },
-        { key: "effects", label: "效果", type: "text",   w: "220px", mono: true },
+        { key: "effects", label: "效果", type: "text",   w: "220px", mono: true,
+          hint: "key=值", title: ITEM_EFFECT_HINT },
         { key: "desc",    label: "说明", type: "text" }
       ],
       makeRow: function () {
@@ -2415,6 +2437,29 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         }
       }
 
+      /* 道具：效果串只认 _parse_effects 里的键，写错的键插件会直接忽略（不报错，静默失效） */
+      if (tab.id === "items" && col.key === "effects") {
+        var rawEff = String(v === undefined || v === null ? "" : v).trim();
+        var pairs = rawEff ? rawEff.split(";") : [];
+        var badKeys = [];
+        for (var pi = 0; pi < pairs.length; pi++) {
+          var pair = pairs[pi].trim();
+          if (!pair) continue;
+          var eq = pair.indexOf("=");
+          if (eq < 0) { errs[col.key] = "每一项都要写成 key=值，例如 meat=2"; break; }
+          var ekey = pair.slice(0, eq).trim();
+          var eval_ = pair.slice(eq + 1).trim();
+          if (ITEM_EFFECT_KEY_NAMES.indexOf(ekey) < 0) badKeys.push(ekey);
+          else if (eval_ === "" || !isFinite(Number(eval_))) {
+            errs[col.key] = ekey + " 的值需要是数字";
+            break;
+          }
+        }
+        if (!errs[col.key] && badKeys.length) {
+          errs[col.key] = "插件不认识的效果键：" + badKeys.join(" / ") + "（可用：" + ITEM_EFFECT_KEY_NAMES.join(" / ") + "）";
+        }
+      }
+
       /* 自定义命令：名字不能撞内置写法；动作只认 发送 / 执行 */
       if (tab.id === "custom") {
         var cus = String(v === undefined || v === null ? "" : v).trim();
@@ -2727,7 +2772,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     html += "<thead><tr>";
     html += '<th style="width:34px"><input type="checkbox" data-act="selectAll" title="全选/取消" /></th>';
     html += tab.columns.map(function (col) {
-      return '<th class="' + (col.num || col.type === "number" ? "num" : "") + '"' + (col.w ? ' style="width:' + col.w + '"' : "") + ">" +
+      return '<th class="' + (col.num || col.type === "number" ? "num" : "") + '"' + (col.w ? ' style="width:' + col.w + '"' : "") +
+        (col.title ? ' title="' + esc(col.title) + '"' : "") + ">" +
         esc(col.label) + (col.hint ? ' <span class="col-hint">（' + esc(col.hint) + "）</span>" : "") + "</th>";
     }).join("");
     html += '<th style="width:74px"></th>';

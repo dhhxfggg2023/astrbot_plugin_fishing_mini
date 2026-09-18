@@ -92,6 +92,24 @@
     "type": "float",
     "default": 1.2
   },
+  "decoration_slots": {
+    "description": "水族馆里最多同时摆几个耐久型装饰（珊瑚造景），0 = 不开放",
+    "type": "int",
+    "default": 3,
+    "invisible": true
+  },
+  "decoration_hours": {
+    "description": "装饰的耐久小时数（到点自动失效；离线时间照算）",
+    "type": "int",
+    "default": 72,
+    "invisible": true
+  },
+  "buff_cast_count": {
+    "description": "锦鲤玉佩这类「作用在钓手身上」的手气 buff 持续多少竿",
+    "type": "int",
+    "default": 20,
+    "invisible": true
+  },
   "aquarium_slots": {
     "invisible": true,
     "description": "水族馆扩建栏位。每项格式：栏位名|解锁价格",
@@ -353,14 +371,15 @@
   },
   "item_defs": {
     "invisible": true,
-    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)。效果键：meat/spirit/sheen/quality_up/value_up",
+    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)。喂鱼类效果键：meat/spirit/sheen/value_up；装饰类：decorate（摆进鱼缸，耐久内加成挂机产出）；其他：feed_bonus（提升这条鱼的投喂上限）、buff_quality（钓手手气 buff）、heal",
     "type": "list",
     "default": [
-      "feed_basic|普通饲料|🌾|20|打基础的口粮|meat=2;spirit=1",
-      "feed_premium|高级饲料|🍖|80|营养均衡，长得快|meat=5;spirit=4;sheen=3",
-      "feed_divine|仙露|💧|300|传说中的养鱼圣品|meat=10;spirit=10;sheen=10;value_up=150",
-      "pill_quality|洗髓丹|🔮|500|激发血脉，更容易出好个体|quality_up=0.30",
-      "coral_deco|珊瑚造景|🪸|260|水族馆装饰，提升馆藏价值|value_up=120"
+      "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1",
+      "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
+      "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
+      "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
+      "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
+      "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20"
     ]
   },
   "data_status": {

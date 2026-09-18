@@ -1264,7 +1264,10 @@ class CommandsMixin:
                 )
                 rate = float(self.cfg["pond_income_per_hour"])
                 cap_coins = int(self.cfg["pond_income_cap_coins"])
-                income = min(int(total_value * rate * hours), cap_coins)
+                deco_bonus = _decoration_bonus(player, now=now_ts)
+                income = min(
+                    int(total_value * rate * hours * (1.0 + deco_bonus)), cap_coins
+                )
                 if income <= 0:
                     wait_min = max(1, int(60 - (now_ts - last) / 60.0))
                     yield event.plain_result(
@@ -1282,8 +1285,10 @@ class CommandsMixin:
                 lines = [
                     f"🏞️ 鱼塘产出 +{_fmt_gold(income)} 金币{cap_note}",
                     f"　挂机 {hours:.1f} 小时 · 馆藏估值 {_fmt_gold(total_value)}",
-                    f"💰 余额 {_fmt_gold(player['gold'])}",
                 ]
+                if deco_bonus > 0:
+                    lines.append(f"　🪸 装饰加成 +{deco_bonus:.0%}")
+                lines.append(f"💰 余额 {_fmt_gold(player['gold'])}")
                 saved = await self._save_with_notices(player, lines)
                 yield event.plain_result("\n".join(lines))
                 return
@@ -1739,7 +1744,9 @@ class CommandsMixin:
         - 饲料类：需要指定水族馆栏位号，提升那条鱼的三维。
           栏位支持批量：`用 高级饲料 1 2 3` / `用 高级饲料 1-5` / `用 高级饲料 全部`，
           每个栏位消耗 1 个道具，道具用完就停（并在回复里说明）。
-        - 洗髓丹（quality_up）：作用在自己身上，购买后自动累积到幸运值。
+        - 锦鲤玉佩（buff_quality）：作用在**钓手自己**身上，接下来 N 竿手气更好。
+        - 珊瑚造景（decorate）：摆进水族馆，耐久内持续加成挂机产出（不喂鱼）。
+        - 育灵水（feed_bonus）：喂给水族馆里的一条鱼，提升它的投喂上限。
         """
         async with self._lock_for(user_id):
             player = await self._load_player(user_id)
@@ -1775,21 +1782,117 @@ class CommandsMixin:
             item = self.items.get(item_id) or {}
             effects = item.get("effects") or {}
 
-            # --- 洗髓丹：提升「下一批鱼」的个体品质幸运 ---
-            if _safe_number(effects.get("quality_up"), 0.0) > 0:
+            # --- 钓手手气 buff（锦鲤玉佩）：作用在人身上，持续 buff_cast_count 竿 ---
+            if _safe_number(effects.get("buff_quality"), 0.0) > 0:
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
-                gain = _safe_number(effects.get("quality_up"), 0.0)
+                gain = _safe_number(effects.get("buff_quality"), 0.0)
+                casts = int(self.cfg["buff_cast_count"])
                 player["luck_charges"] = _clamp(
                     _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
                 )
+                player["buff_casts_left"] = max(
+                    _safe_int(player.get("buff_casts_left"), 0, 0), casts
+                )
                 saved = await self._save_player(player)
                 lines = [
-                    f"🔮 使用 {self._item_label(item_id)}",
-                    f"　下一竿手气：{_luck_stars(gain, 0.3)}（储备 {_luck_stars(player['luck_charges'], 0.5)}）",
+                    f"🎐 使用 {self._item_label(item_id)}",
+                    f"　作用在你自己身上：接下来 {casts} 竿手气更好"
+                    f"（{_luck_stars(gain, 0.3)}）",
+                    "　（不是喂鱼，鱼的三维不会变）",
                 ]
                 if not saved:
                     lines.append("⚠️ 保存失败")
                 yield event.plain_result("\n".join(lines))
+                return
+
+            # --- 水族馆装饰（珊瑚造景）：摆进鱼缸，耐久内持续加成挂机产出 ---
+            if _safe_number(effects.get("decorate"), 0.0) > 0:
+                slots = int(self.cfg["decoration_slots"])
+                hours = int(self.cfg["decoration_hours"])
+                now_ts = int(time.time())
+                expired = _prune_decorations(player, now=now_ts)
+                current = list(player.get("decorations") or [])
+                if slots <= 0:
+                    yield event.plain_result(
+                        "🪸 本服没有开放装饰位（decoration_slots = 0）"
+                    )
+                    return
+                if len(current) >= slots:
+                    yield event.plain_result(
+                        f"🪸 装饰位满了（{len(current)}/{slots}）\n"
+                        "　等旧的失效，或 /钓鱼 水族馆 看还剩多久"
+                    )
+                    return
+                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                rate = _safe_number(effects.get("decorate"), 0.0)
+                player.setdefault("decorations", []).append(
+                    {
+                        "id": item_id,
+                        "rate": rate,
+                        "ts": now_ts,
+                        "expire_ts": now_ts + hours * 3600,
+                    }
+                )
+                saved = await self._save_player(player)
+                lines = [
+                    f"🪸 摆好了 {self._item_label(item_id)}",
+                    f"　挂机产出 +{rate:.0%}　持续 {hours} 小时（离线时间也照算）",
+                    f"　装饰位 {len(player['decorations'])}/{slots}",
+                ]
+                if expired:
+                    lines.append(f"　（顺带清理了 {expired} 个已失效的装饰）")
+                if not saved:
+                    lines.append("⚠️ 保存失败")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # --- 育灵水（feed_bonus）：对水族馆里的一条鱼生效，提升它的投喂上限 ---
+            if _safe_number(effects.get("feed_bonus"), 0.0) > 0:
+                tank: list[dict[str, Any]] = player.get("aquarium") or []
+                if not tank:
+                    yield event.plain_result("🐠 水族馆是空的，先把鱼放进去再培育")
+                    return
+                if not (a3 or "").strip():
+                    yield event.plain_result(
+                        f"📖 /钓鱼 用 {item.get('name', item_id)} <水族馆栏位>\n"
+                        "　写上要培育的那条鱼的栏位号（1 2 3 / 1-3 都行）"
+                    )
+                    return
+                picked = self._parse_indices(a3, tank)
+                if not picked:
+                    yield event.plain_result("🤔 栏位号不对，/钓鱼 水族馆 看看序号")
+                    return
+                bonus = int(round(_safe_number(effects.get("feed_bonus"), 0.0)))
+                lines = []
+                used = 0
+                for idx in picked:
+                    if _safe_int(items.get(item_id), 0, 0) <= 0:
+                        break
+                    instance = tank[idx - 1]
+                    before = _safe_int(instance.get("feed_bonus"), 0, 0)
+                    if before >= 20:
+                        lines.append(f"　{idx}. 已经培育到上限（+20 次）")
+                        continue
+                    instance["feed_bonus"] = min(20, before + bonus)
+                    items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                    used += 1
+                    lines.append(
+                        f"　{idx}. {_instance_line(instance, with_value=False)}"
+                        f"　投喂上限 {_feed_cap(instance, self.cfg)} 次"
+                    )
+                if used <= 0:
+                    yield event.plain_result(
+                        "🌱 没能用出去：\n" + "\n".join(lines or ["　（没有可用目标）"])
+                    )
+                    return
+                saved = await self._save_player(player)
+                head = [
+                    f"🌱 {self._item_label(item_id)} ×{used}",
+                    f"　剩余道具 {_safe_int(items.get(item_id), 0, 0)}",
+                ]
+                if not saved:
+                    head.append("⚠️ 保存失败")
+                yield event.plain_result("\n".join(head + lines[:6]))
                 return
 
             # --- 饲料类：需要水族馆目标（支持批量栏位）---
@@ -1810,7 +1913,7 @@ class CommandsMixin:
                 return
 
             stock = _safe_int(items.get(item_id), 0, 0)
-            max_uses = int(self.cfg["feed_max_uses"])
+            max_uses = int(self.cfg["feed_max_uses"])   # 基础值；每条鱼还可能被育灵水加成
             used = 0
             grown: list[str] = []
             skipped_full: list[int] = []
@@ -1819,7 +1922,9 @@ class CommandsMixin:
                 if stock <= 0:
                     break
                 instance = aquarium[idx - 1]
-                if _safe_int(instance.get("feed_uses"), 0, 0) >= max_uses:
+                if _safe_int(instance.get("feed_uses"), 0, 0) >= _feed_cap(
+                    instance, self.cfg
+                ):
                     skipped_full.append(idx)
                     continue
                 stock -= 1
@@ -1827,7 +1932,8 @@ class CommandsMixin:
                 _, delta = _apply_feed(instance, effects)
                 value_gain += delta
                 grown.append(f"　{idx}. {_instance_line(instance, with_value=False)}"
-                             f"　{_safe_int(instance.get('feed_uses'), 0, 0)}/{max_uses}")
+                             f"　{_safe_int(instance.get('feed_uses'), 0, 0)}"
+                             f"/{_feed_cap(instance, self.cfg)}")
 
             if used <= 0:
                 if skipped_full:

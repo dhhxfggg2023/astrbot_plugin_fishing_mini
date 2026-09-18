@@ -4653,8 +4653,9 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 96,
-        f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标）",
+        len(_schema) == 99,
+        f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
+        f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -4662,7 +4663,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 93, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 96, f"其余 {len(_hidden)} 项全部 invisible")
     check(
         all(k in mod.DEFAULTS for k in _visible),
         "3 条救生索都在 DEFAULTS 里（不是凭空写的）",
@@ -4981,6 +4982,202 @@ async def main():
         real_before == real_after,
         f"⚠️ 数据隔离自检：真插件 backups/ 里 {len(real_before)} 个快照文件的内容前后逐字节一致"
         f"（index.json 除外：站长那台实例每分钟会重写它）",
+    )
+
+    # =====================================================================
+    print("\n[17] 道具系统重做：装饰耐久 / 饲料 / 育灵水 / 锦鲤玉佩（v1.11.0）")
+
+    plugin_r = make_plugin()
+    cfg_r = plugin_r.cfg
+    check(len(plugin_r.items) == 6, f"道具 6 种 -> {len(plugin_r.items)}")
+    check(
+        abs(mod._safe_number(plugin_r.items["coral_deco"]["effects"].get("decorate"), 0) - 0.20) < 1e-9,
+        "珊瑚造景 = 装饰类（decorate=0.20）",
+    )
+    check(
+        plugin_r.items["feed_divine"]["effects"].get("value_up") == 600,
+        "仙露估值 +150 → +600",
+    )
+    check(
+        plugin_r.items["growth_tonic"]["effects"].get("feed_bonus") == 5,
+        "育灵水 feed_bonus=5（对鱼生效）",
+    )
+    check(
+        abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("buff_quality"), 0) - 0.30) < 1e-9,
+        "锦鲤玉佩 buff_quality=0.30（对钓手生效）",
+    )
+
+    # --- 效果键解析 ---
+    check(
+        mod._parse_effects("quality_up=0.3") == {"buff_quality": 0.3},
+        "旧的 quality_up 写法兼容成 buff_quality",
+    )
+    parsed = mod._parse_effects("decorate=0.2;feed_bonus=5;buff_quality=0.3;meat=2;nope=9")
+    check("nope" not in parsed and len(parsed) == 4, f"未知效果键被跳过 -> {sorted(parsed)}")
+
+    # --- 喂鱼上限：育灵水加成 ---
+    inst_r = mod._new_instance("carp", 1.0)
+    check(mod.CALC._feed_cap(inst_r, cfg_r) == 10, "默认投喂上限 = feed_max_uses(10)")
+    inst_r["feed_bonus"] = 5
+    check(mod.CALC._feed_cap(inst_r, cfg_r) == 15, "育灵水后上限 10 → 15")
+
+    # --- 装饰：摆放 / 上限 / 加成 / 真实时间到期 ---
+    ev_r = FakeEvent("96001")
+    p = await plugin_r._load_player("96001")
+    p["items"]["coral_deco"] = 5
+    # 缸里要有一条鱼，视图才会走「有鱼」分支（空缸分支是另一套文案）
+    p["aquarium"] = [mod._new_instance("carp", 1.2, value_override=800)]
+    await plugin_r._save_player(p)
+    out = text_of(await cmd(plugin_r, ev_r, "用", "珊瑚造景", ""))
+    check("摆好了" in out, f"珊瑚造景是「摆放」不是喂鱼 -> {out.splitlines()[0] if out else ''}")
+    p = await plugin_r._load_player("96001")
+    check(len(p["decorations"]) == 1, f"装饰已记录 -> {len(p['decorations'])} 个")
+    check(
+        abs(mod._safe_number(p["decorations"][0].get("rate"), 0) - 0.20) < 1e-9,
+        "装饰条目自带 rate（不依赖道具表）",
+    )
+    check(
+        p["decorations"][0]["expire_ts"] - p["decorations"][0]["ts"] == 72 * 3600,
+        "耐久 72 小时",
+    )
+    check(
+        abs(mod.CALC._decoration_bonus(p) - 0.20) < 1e-9,
+        f"1 个装饰 → 产出 +20% -> {mod.CALC._decoration_bonus(p):.2f}",
+    )
+
+    for _ in range(2):
+        await cmd(plugin_r, ev_r, "用", "珊瑚造景", "")
+    p = await plugin_r._load_player("96001")
+    check(len(p["decorations"]) == 3, f"摆满 3 个 -> {len(p['decorations'])}")
+    out = text_of(await cmd(plugin_r, ev_r, "用", "珊瑚造景", ""))
+    check("满了" in out, f"超过 decoration_slots 被拒 -> {out.splitlines()[0] if out else ''}")
+    p = await plugin_r._load_player("96001")
+    check(len(p["decorations"]) == 3, "被拒后数量不变")
+    check(
+        abs(mod.CALC._decoration_bonus(p) - 0.60) < 1e-9,
+        f"3 个装饰 → 产出 +60% -> {mod.CALC._decoration_bonus(p):.2f}",
+    )
+
+    # 时间旅行：把到期时间挪到过去 → 惰性结算清掉
+    now_r = int(time.time())
+    p["decorations"][0]["expire_ts"] = now_r - 1
+    dropped = mod.CALC._prune_decorations(p, now=now_r)
+    check(dropped == 1 and len(p["decorations"]) == 2, f"过期装饰被清掉 -> 掉 {dropped} 个")
+    check(
+        abs(mod.CALC._decoration_bonus(p, now=now_r) - 0.40) < 1e-9,
+        "清掉后加成只剩 2 个的 40%",
+    )
+    view = plugin_r._aquarium_view(p)
+    check("装饰 2/3" in view, f"水族馆视图显示装饰位 -> {[x for x in view.splitlines() if '装饰' in x][:1]}")
+    check("剩" in view, "视图显示剩余小时")
+
+    # --- 装饰加成真的作用到「领收益」上 ---
+    plugin_d2 = make_plugin()
+    ev_d2 = FakeEvent("96002")
+    p2 = await plugin_d2._load_player("96002")
+    p2["aquarium"] = [mod._new_instance("koi", 1.2, value_override=2000)]
+    p2["pond_last_ts"] = int(time.time()) - 5 * 3600
+    p2["decorations"] = []
+    await plugin_d2._save_player(p2)
+    plain_out = text_of(await cmd(plugin_d2, ev_d2, "水族馆", "领", ""))
+    p2 = await plugin_d2._load_player("96002")
+    gold_plain = mod._safe_int(p2.get("gold"), 0, 0)
+
+    p2["pond_last_ts"] = int(time.time()) - 5 * 3600
+    p2["gold"] = 100
+    p2["decorations"] = [
+        {"id": "coral_deco", "rate": 0.20, "ts": int(time.time()), "expire_ts": int(time.time()) + 3600}
+    ]
+    await plugin_d2._save_player(p2)
+    deco_out = text_of(await cmd(plugin_d2, ev_d2, "水族馆", "领", ""))
+    p2 = await plugin_d2._load_player("96002")
+    gold_deco = mod._safe_int(p2.get("gold"), 0, 0)
+    base_income = gold_plain - 100
+    check(
+        gold_deco - 100 > base_income,
+        f"有装饰时产出更高 -> {base_income} → {gold_deco - 100}",
+    )
+    check("装饰加成" in deco_out, "领收益的回复里标出装饰加成")
+    check(
+        abs((gold_deco - 100) - int(base_income * 1.2)) <= 1,
+        f"加成正好 20% -> {base_income} × 1.2 = {int(base_income * 1.2)}",
+    )
+
+    # --- 育灵水：对水族馆里的鱼生效 ---
+    plugin_g = make_plugin()
+    ev_g = FakeEvent("96003")
+    p3 = await plugin_g._load_player("96003")
+    p3["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p3["items"]["growth_tonic"] = 1
+    await plugin_g._save_player(p3)
+    out = text_of(await cmd(plugin_g, ev_g, "用", "育灵水", "1"))
+    p3 = await plugin_g._load_player("96003")
+    check(
+        mod._safe_int(p3["aquarium"][0].get("feed_bonus"), 0, 0) == 5,
+        f"育灵水让这条鱼 +5 次 -> {p3['aquarium'][0].get('feed_bonus')}",
+    )
+    check("投喂上限 15 次" in out, f"回复里说明新上限 -> {out.splitlines()[-1] if out else ''}")
+    check(mod._safe_int(p3["items"].get("growth_tonic"), 0, 0) == 0, "育灵水被消耗")
+
+    # 喂到「基础上限」后仍能继续喂（因为有 +5）
+    p3["aquarium"][0]["feed_uses"] = 10
+    p3["items"]["feed_basic"] = 1
+    await plugin_g._save_player(p3)
+    out = text_of(await cmd(plugin_g, ev_g, "用", "普通饲料", "1"))
+    p3 = await plugin_g._load_player("96003")
+    check(
+        mod._safe_int(p3["aquarium"][0].get("feed_uses"), 0, 0) == 11,
+        f"到基础上限后还能喂 -> {p3['aquarium'][0].get('feed_uses')}",
+    )
+
+    # --- 锦鲤玉佩：持续 20 竿 ---
+    plugin_j = make_plugin()
+    ev_j = FakeEvent("96004")
+    p4 = await plugin_j._load_player("96004")
+    p4["items"]["lucky_jade"] = 1
+    p4["baits"]["worm"] = 50
+    await plugin_j._save_player(p4)
+    out = text_of(await cmd(plugin_j, ev_j, "用", "锦鲤玉佩", ""))
+    p4 = await plugin_j._load_player("96004")
+    check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 20, f"玉佩 → 20 竿 -> {p4.get('buff_casts_left')}")
+    check(mod._safe_number(p4.get("luck_charges"), 0) > 0, "手气储备已加上")
+    check("作用在你自己身上" in out, "文案说明是给钓手的、不是喂鱼")
+
+    await cmd(plugin_j, ev_j, "蚯蚓", "", "")
+    p4 = await plugin_j._load_player("96004")
+    check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 19, f"抛一竿后剩 19 -> {p4.get('buff_casts_left')}")
+    check(mod._safe_number(p4.get("luck_charges"), 0) > 0, "第 2 竿仍然吃到手气（buff 未清）")
+
+    p4["buff_casts_left"] = 1
+    await plugin_j._save_player(p4)
+    await cmd(plugin_j, ev_j, "蚯蚓", "", "")
+    p4 = await plugin_j._load_player("96004")
+    check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 0, "最后一竿用完归零")
+    check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "用完后手气储备清零（buff 失效）")
+
+    # 彩蛋捡到的手气仍然一竿即清（老行为不变）
+    p4["luck_charges"] = 0.1
+    p4["buff_casts_left"] = 0
+    await plugin_j._save_player(p4)
+    await cmd(plugin_j, ev_j, "蚯蚓", "", "")
+    p4 = await plugin_j._load_player("96004")
+    check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "非 buff 来源的手气仍是一竿即清")
+
+    # --- 老存档兼容：没有新字段也不炸 ---
+    old_p, migrated = mod._repair_player({"gold": 77, "total_caught": 3}, "96100")
+    check(old_p["decorations"] == [], "老存档补出空 decorations")
+    check(mod._safe_int(old_p.get("buff_casts_left"), -1, 0) == 0, "老存档补出 buff_casts_left = 0")
+    old_inst = mod._repair_instance({"id": "x", "fish_id": "carp", "value": 10})
+    check(mod._safe_int(old_inst.get("feed_bonus"), -1, 0) == 0, "老鱼实例补出 feed_bonus = 0")
+
+    # 装饰写坏也不炸
+    broken, _ = mod._repair_player(
+        {"gold": 1, "decorations": ["x", {"id": ""}, {"id": "coral_deco", "rate": 0.2, "expire_ts": 1}]},
+        "96101",
+    )
+    check(
+        len(broken["decorations"]) == 1,
+        f"装饰列表里的坏条目被丢掉 -> {broken['decorations']}",
     )
 
     # =====================================================================

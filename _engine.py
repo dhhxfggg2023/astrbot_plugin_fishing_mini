@@ -206,7 +206,7 @@ class EngineMixin:
             rod = self._rod(player)
             weather = self._weather(player)
             fish = self._roll_species(bait_id, loc["id"], weather)
-            # 幸运值 = 洗髓丹储备 + 鱼竿幸运，本次抛竿读一次，收尾时消耗储备
+            # 幸运值 = 手气储备（锦鲤玉佩等）+ 鱼竿幸运，本次抛竿读一次，收尾时消耗
             luck = _safe_number(player.get("luck_charges"), 0.0)
             gear_luck = _safe_number(rod.get("luck_bonus"), 0.0)
             player["last_fish_time"] = int(now)
@@ -256,8 +256,14 @@ class EngineMixin:
                 catch = result.get("catch")
                 rating = result.get("rating")
 
-            # 消耗幸运储备（无论成功与否，抛竿即用掉）
-            player["luck_charges"] = 0.0
+            # 消耗手气储备：锦鲤玉佩这类是「持续 N 竿」的 buff（buff_casts_left 记剩余竿数），
+            # 其它来源（彩蛋捡到的手气）仍然一竿即清 —— 所以 left<=1 时把储备归零。
+            left = _safe_int(player.get("buff_casts_left"), 0, 0)
+            if left > 1:
+                player["buff_casts_left"] = left - 1
+            else:
+                player["buff_casts_left"] = 0
+                player["luck_charges"] = 0.0
             await self._save_player(player)
 
             if catch is None:
@@ -424,9 +430,14 @@ class EngineMixin:
                 + _safe_number(rod.get("luck_bonus"), 0.0)
                 + _safe_number((weather or {}).get("luck"), 0.0)
             )
-            # 手气储备：连钓当成一次「抛竿」，整批共用，用完即清
+            # 手气储备：连钓当成一次「抛竿」，整批共用；持续型 buff 也只消耗一竿额度
             luck = _safe_number(player.get("luck_charges"), 0.0)
-            player["luck_charges"] = 0.0
+            left = _safe_int(player.get("buff_casts_left"), 0, 0)
+            if left > 1:
+                player["buff_casts_left"] = left - 1
+            else:
+                player["buff_casts_left"] = 0
+                player["luck_charges"] = 0.0
 
             lines = [f"🎣 连钓 {planned} 次"]
             if truncated:

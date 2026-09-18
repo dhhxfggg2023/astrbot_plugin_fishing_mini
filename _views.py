@@ -239,8 +239,19 @@ class ViewsMixin:
         self._sort_aquarium(aquarium)
         capacity = self._aquarium_capacity(player)
         lines = [f"🐠 水族馆 {len(aquarium)}/{capacity}"]
+        slots_cfg = int(self.cfg["decoration_slots"])
+        now_ts = int(time.time())
+        expired = _prune_decorations(player, now=now_ts)
+        decos = list(player.get("decorations") or [])
+        deco_bonus = _decoration_bonus(player, now=now_ts)
         if not aquarium:
             lines.append("　（空缸）　/钓鱼 水族馆 放 1 放鱼进来")
+            if decos:
+                lines.append(
+                    f"🪸 装饰 {len(decos)}/{slots_cfg} 个正在计时 —— 缸里没鱼就没有产出"
+                )
+            if expired:
+                lines.append(f"　（清理了 {expired} 个已失效的装饰）")
             return "\n".join(lines)
 
         total = 0
@@ -258,6 +269,24 @@ class ViewsMixin:
         lines.append(f"🧮 估值 {_fmt_gold(total)}（取出/卖出 ×{self.cfg['aquarium_bonus']:g}）")
         if best is not None:
             lines.append(f"👑 镇馆之宝：{_instance_line(best)}")
+        # 装饰（耐久型）：显示剩余小时，顺带清掉过期的
+        if decos:
+            parts = []
+            for entry in decos:
+                left = _decoration_hours_left(entry, now=now_ts)
+                parts.append(
+                    f"{self._item_label(str(entry.get('id')))}剩{left:.0f}小时"
+                )
+            lines.append(
+                f"🪸 装饰 {len(decos)}/{slots_cfg}　" + "　".join(parts)
+            )
+            lines.append(f"　挂机产出 +{deco_bonus:.0%}（离线时间也照算）")
+        else:
+            lines.append(
+                f"🪸 装饰位 0/{slots_cfg}　/钓鱼 商店 买 珊瑚造景"
+            )
+        if expired:
+            lines.append(f"　（清理了 {expired} 个已失效的装饰）")
         # 今日收益提示（与「/钓鱼 水族馆 领」的结算口径完全一致）
         today = self._today_text()
         if player.get("last_income_date") != today:
@@ -268,7 +297,12 @@ class ViewsMixin:
                 float(self.cfg["pond_income_cap_hours"]),
             )
             est = min(
-                int(total * float(self.cfg["pond_income_per_hour"]) * hours),
+                int(
+                    total
+                    * float(self.cfg["pond_income_per_hour"])
+                    * hours
+                    * (1.0 + deco_bonus)
+                ),
                 int(self.cfg["pond_income_cap_coins"]),
             )
             if est > 0:
@@ -422,8 +456,7 @@ class ViewsMixin:
                     + item_lines
                     + [
                         "　部分鱼饵要等级 + 对应鱼竿才能买",
-                        "　/钓鱼 商店 买 <名> [个数]",
-                        "　/钓鱼 用 <道具> [栏位]",
+                        "　/钓鱼 商店 买 <名> [个数]　/钓鱼 用 <道具> [栏位]",
                     ],
                 ),
                 (

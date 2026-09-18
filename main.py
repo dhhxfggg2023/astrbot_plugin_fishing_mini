@@ -26,7 +26,7 @@
    ⚪普通 🟢优良 🔵稀有 🟣极品 🌟传说，共 5 档，
    由「品质加成倍率 quality_mult」决定，影响售价倍率。
    投喂饲料不会改变它（饲料只加个体数值），
-   但「洗髓丹」可以提高掷出好个体的概率——所以个体是可以养出来的。
+   但「锦鲤玉佩」可以提高掷出好个体的概率——所以个体是可以养出来的。
 
 【个体三维数值】
    肉质 meat / 灵性 spirit / 光泽 sheen，0~100，钓上来时按鱼种品质随机生成。
@@ -323,6 +323,11 @@ DEFAULTS: dict[str, Any] = {
     "pond_income_per_hour": 0.015,
     "pond_income_cap_hours": 12,
     "pond_income_cap_coins": 3000,
+    # 水族馆装饰：同时可摆几个、每个耐久多少小时（到点自动失效）
+    "decoration_slots": 3,
+    "decoration_hours": 72,
+    # 钓手本人的手气 buff 持续多少竿
+    "buff_cast_count": 20,
     "aquarium_slots": ["精致缸|1600", "生态缸|5400", "深海缸|16000"],
     # 鱼饵：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明
     # 「需要鱼竿」填鱼竿 id 或名称，表示**拥有**那根竿才能买；解锁等级是新号也能用的门槛
@@ -336,12 +341,18 @@ DEFAULTS: dict[str, Any] = {
         "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|22|starlight|活蹦乱跳，专勾大鱼",
         "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|34|mythic|祖传配方，闻着就不一样",
     ],
+    # 道具：id|名称|emoji|单价|说明|效果（效果键见 _parse_effects）
+    #   meat/spirit/sheen/value_up = 喂鱼（一次性，永久加成）
+    #   decorate      = 摆进水族馆的装饰（耐久内持续加成挂机产出）
+    #   feed_bonus    = 提升这条鱼的投喂上限
+    #   buff_quality  = 作用于钓手本人的手气（持续 buff_cast_count 竿）
     "item_defs": [
-        "feed_basic|普通饲料|🌾|20|打基础的口粮|meat=2;spirit=1",
-        "feed_premium|高级饲料|🍖|80|营养均衡，长得快|meat=5;spirit=4;sheen=3",
-        "feed_divine|仙露|💧|300|传说中的养鱼圣品|meat=10;spirit=10;sheen=10;value_up=150",
-        "pill_quality|洗髓丹|🔮|500|激发血脉，更容易出好个体|quality_up=0.30",
-        "coral_deco|珊瑚造景|🪸|260|水族馆装饰，提升馆藏价值|value_up=120",
+        "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1",
+        "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
+        "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
+        "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
+        "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
+        "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
     ],
     # ---- 可调数值表：想改物价 / 爆率 / 属性范围，改这里（或 WebUI）即可 ----
     # 鱼种品质：出现权重（越大越常见）、价值倍数、拉线难度、三维范围
@@ -2371,6 +2382,15 @@ class FishingPlugin(
         )
         cfg["pond_income_cap_coins"] = max(
             0, _safe_int(cfg["pond_income_cap_coins"], 3000, 0)
+        )
+        cfg["decoration_slots"] = int(
+            _clamp(_safe_int(cfg.get("decoration_slots"), 3, 0), 0, 20)
+        )
+        cfg["decoration_hours"] = int(
+            _clamp(_safe_int(cfg.get("decoration_hours"), 72, 1), 1, 8760)
+        )
+        cfg["buff_cast_count"] = int(
+            _clamp(_safe_int(cfg.get("buff_cast_count"), 20, 1), 1, 999)
         )
         raw_bonus = cfg.get("codex_bonus_per_rarity")
         if isinstance(raw_bonus, list) and len(raw_bonus) == len(RARITY_ORDER):

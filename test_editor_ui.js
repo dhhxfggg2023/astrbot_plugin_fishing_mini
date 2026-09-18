@@ -125,7 +125,9 @@ const hookNames = [
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
-  "renderPlayerRow"
+  "renderPlayerRow",
+  // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色）
+  "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES"
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -184,7 +186,20 @@ function runAssertions() {
   });
   check(badRod.length === 0, "所有鱼饵的「需要鱼竿」都存在",
     badRod.length ? badRod.map(function (b) { return b.id; }).join(" ") : rodIds.join("/"));
-  const ALLOWED_EFFECTS = ["meat", "spirit", "sheen", "quality_up", "value_up", "heal"];
+  /* 页面上的效果键白名单必须和插件 _calc.py 的 _parse_effects 完全一致（含旧写法 quality_up） */
+  const calcSrc = fs.readFileSync(path.join(__dirname, "_calc.py"), "utf8");
+  const allowedBlock = calcSrc.match(/def _parse_effects[\s\S]*?allowed = \(([\s\S]*?)\)/);
+  const pluginKeys = allowedBlock
+    ? allowedBlock[1].split(",").map(s => s.trim().replace(/["']/g, "")).filter(Boolean)
+    : [];
+  check(pluginKeys.length >= 8, "从 _calc.py 读到了 _parse_effects 的白名单",
+    pluginKeys.join("/") || "没读到");
+  const pageKeys = T.ITEM_EFFECT_KEY_NAMES.filter(k => k !== "quality_up");
+  check(pageKeys.slice().sort().join(",") === pluginKeys.slice().sort().join(","),
+    "页面效果键白名单与插件一致",
+    "页面=" + pageKeys.join("/") + " 插件=" + pluginKeys.join("/"));
+
+  const ALLOWED_EFFECTS = T.ITEM_EFFECT_KEY_NAMES;
   const badEffects = [];
   T.state.data.items.forEach(function (it) {
     String(it.effects || "").split(";").forEach(function (pair) {
@@ -261,6 +276,23 @@ function runAssertions() {
     "不存在的鱼竿 id 被抓出来");
   check(Object.keys(T.validateRow(baitTab, { id: "b", name: "b", price: 1, bundle: 1, luck: 0, unlock_level: 1, required_rod: "stream" })).length === 0,
     "存在的鱼竿 id 通过");
+  /* 道具效果串：新三种角色（喂鱼 / 手气 / 装饰）都要能过，写错的键要被标红 */
+  const itemTab = T.TAB_BY_ID.items;
+  function itemRow(effects) {
+    return { id: "it", emoji: "📦", name: "道具", price: 10, effects: effects, desc: "" };
+  }
+  check(Object.keys(T.validateRow(itemTab, itemRow("meat=2;spirit=1;sheen=1;value_up=600"))).length === 0,
+    "三维 + 估值（喂鱼类）通过");
+  check(Object.keys(T.validateRow(itemTab, itemRow("feed_bonus=5"))).length === 0, "投喂上限 feed_bonus 通过");
+  check(Object.keys(T.validateRow(itemTab, itemRow("buff_quality=0.30"))).length === 0, "手气 buff_quality 通过");
+  check(Object.keys(T.validateRow(itemTab, itemRow("decorate=0.20"))).length === 0, "鱼缸装饰 decorate 通过");
+  check(Object.keys(T.validateRow(itemTab, itemRow("quality_up=0.3"))).length === 0, "旧写法 quality_up 仍然认");
+  check(Object.keys(T.validateRow(itemTab, itemRow(""))).length === 0, "效果留空不算错（等价于纯收藏品）");
+  check(!!T.validateRow(itemTab, itemRow("luck=0.5")).effects, "杂物用的 luck 键在道具表里会被标红");
+  check(!!T.validateRow(itemTab, itemRow("decorate")).effects, "缺等号的写法会被标红");
+  check(!!T.validateRow(itemTab, itemRow("decorate=很多")).effects, "非数字的值会被标红");
+  check(String(T.validateRow(itemTab, itemRow("luck=0.5")).effects).indexOf("decorate") > 0,
+    "报错信息里列出了可用的键名");
 
   console.log("\n[4] 改动追踪 diffTab");
   const before = T.diffTab("fish").count;
@@ -303,6 +335,12 @@ function runAssertions() {
       } else {
         const out = T.renderTableTab(t);
         check(out.length > 400 && out.indexOf("<table") >= 0, "「" + t.label + "」渲染出表格", out.length + " 字符");
+        if (t.id === "items") {
+          check(out.indexOf('title="') >= 0 && out.indexOf("鱼缸装饰") >= 0 && out.indexOf("钓手手气") >= 0,
+            "道具页「效果」列表头带上了效果键说明（tooltip）");
+          check(out.indexOf("（key=值）") >= 0 || out.indexOf("(key=值)") >= 0,
+            "「效果」列的表头列提示写着 key=值");
+        }
       }
       T.render();
     } catch (e) {

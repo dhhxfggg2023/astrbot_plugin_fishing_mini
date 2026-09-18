@@ -186,15 +186,29 @@ def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
     return baits
 
 def _parse_effects(text: str) -> dict[str, float]:
-    """解析道具效果串：``meat=2;spirit=1;quality_up=0.35``。"""
+    """解析道具效果串：``meat=2;spirit=1;value_up=600``。
+
+    支持的效果键分三类：
+    * 喂鱼（一次性、永久加成）：``meat`` / ``spirit`` / ``sheen`` / ``value_up``
+    * 水族馆装饰（耐久内持续加成挂机产出）：``decorate``
+    * 其他：``feed_bonus``（提升这条鱼的投喂上限）、``buff_quality``（钓手手气 buff）、``heal``
+
+    ``quality_up`` 是旧版写法，按 ``buff_quality`` 处理（老配置照常可用）。
+    """
     effects: dict[str, float] = {}
+    allowed = (
+        "meat", "spirit", "sheen", "value_up",
+        "decorate", "feed_bonus", "buff_quality", "heal",
+    )
     for token in (text or "").split(";"):
         token = token.strip()
         if not token or "=" not in token:
             continue
         key, _, value = token.partition("=")
         key = key.strip()
-        if key not in ("meat", "spirit", "sheen", "quality_up", "value_up", "heal"):
+        if key == "quality_up":          # 旧写法兼容
+            key = "buff_quality"
+        if key not in allowed:
             continue
         effects[key] = _safe_number(value.strip(), 0.0)
     return effects
@@ -680,6 +694,8 @@ def _default_player(user_id: str) -> dict[str, Any]:
         "baits": {},           # bait_id -> 数量
         "equipped_bait": "none",
         "items": {},           # item_id -> 数量（含商店道具与钓上来的杂物）
+        "decorations": [],     # 水族馆装饰：[{id, rate, ts, expire_ts}]（耐久到点自动失效）
+        "buff_casts_left": 0,  # 钓手手气 buff 还剩几竿（0 = 没有 buff）
         "aquarium_slots": [],  # 已解锁的水族馆扩建栏位名
         "backpack_slots": [],  # 已购买的背包扩容档位下标
         # 鱼竿：拥有 + 当前装备
@@ -918,6 +934,7 @@ def _new_instance(
         "gear_mult": round(gear, 4),
         "attrs": final_attrs,
         "feed_uses": 0,
+        "feed_bonus": 0,      # 育灵水带来的额外投喂次数
         "live_bonus": 0,
         "locked": False,
         # 水族馆展出加成是否已领取（每条鱼终生只能领一次，防止无限叠加）
@@ -984,6 +1001,51 @@ def _fish_power(instance: dict[str, Any]) -> int:
     feed = _safe_int(instance.get("feed_uses"), 0, 0)
     power += feed * 6
     return power
+
+def _feed_cap(instance: dict[str, Any], cfg: dict[str, Any]) -> int:
+    """这条鱼的投喂上限 = 全局基础值 + 育灵水加成。"""
+    base = max(0, _safe_int((cfg or {}).get("feed_max_uses"), 10, 0))
+    bonus = max(0, _safe_int(instance.get("feed_bonus"), 0, 0))
+    return base + bonus
+
+
+def _prune_decorations(player: dict[str, Any], now: int | None = None) -> int:
+    """清掉过期的水族馆装饰，返回本次清掉的数量（惰性结算，离线时间照走）。"""
+    entries = player.get("decorations")
+    if not isinstance(entries, list):
+        player["decorations"] = []
+        return 0
+    now_ts = int(now if now is not None else time.time())
+    alive: list[dict[str, Any]] = []
+    dropped = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            dropped += 1
+            continue
+        if _safe_int(entry.get("expire_ts"), 0, 0) > now_ts:
+            alive.append(entry)
+        else:
+            dropped += 1
+    player["decorations"] = alive
+    return dropped
+
+
+def _decoration_bonus(player: dict[str, Any], now: int | None = None) -> float:
+    """当前生效的装饰产出加成总和（顺带清掉过期的）。"""
+    _prune_decorations(player, now=now)
+    total = 0.0
+    for entry in player.get("decorations") or []:
+        if isinstance(entry, dict):
+            total += max(0.0, _safe_number(entry.get("rate"), 0.0))
+    return total
+
+
+def _decoration_hours_left(entry: dict[str, Any], now: int | None = None) -> float:
+    """某个装饰还剩多少小时（用于展示）。"""
+    now_ts = int(now if now is not None else time.time())
+    left = _safe_int(entry.get("expire_ts"), 0, 0) - now_ts
+    return max(0.0, left / 3600.0)
+
 
 def _apply_feed(instance: dict[str, Any], effects: dict[str, float]) -> tuple[dict[str, int], int]:
     """对一条鱼应用饲料效果。
@@ -1115,6 +1177,7 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "gear_mult": round(gear_mult, 4),
         "attrs": attrs,
         "feed_uses": _safe_int(raw.get("feed_uses"), 0, 0),
+        "feed_bonus": int(_clamp(_safe_int(raw.get("feed_bonus"), 0, 0), 0, 20)),
         "live_bonus": live_bonus,
         "locked": bool(raw.get("locked")),
         "pond_claimed": bool(raw.get("pond_claimed")),
@@ -1416,10 +1479,33 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
                 }
         player["best_records"] = records
 
-        # --- 洗髓丹累积的品质幸运储备 ---
+        # --- 钓手手气储备（锦鲤玉佩等道具累积）---
         player["luck_charges"] = _clamp(
             _safe_number(raw.get("luck_charges"), 0.0), 0.0, 5.0
         )
+        player["buff_casts_left"] = int(
+            _clamp(_safe_int(raw.get("buff_casts_left"), 0, 0), 0, 999)
+        )
+
+        # --- 水族馆装饰（耐久型）：只做结构修复，过期清理走惰性结算 ---
+        raw_dec = raw.get("decorations")
+        decorations: list[dict[str, Any]] = []
+        if isinstance(raw_dec, list):
+            for entry in raw_dec:
+                if not isinstance(entry, dict):
+                    continue
+                dec_id = str(entry.get("id") or "").strip()
+                if not dec_id:
+                    continue
+                decorations.append(
+                    {
+                        "id": dec_id,
+                        "rate": _clamp(_safe_number(entry.get("rate"), 0.0), 0.0, 5.0),
+                        "ts": _safe_int(entry.get("ts"), 0, 0),
+                        "expire_ts": _safe_int(entry.get("expire_ts"), 0, 0),
+                    }
+                )
+        player["decorations"] = decorations
 
         # --- 计数器 ---
         player["total_caught"] = _safe_int(raw.get("total_caught"), 0, 0)
