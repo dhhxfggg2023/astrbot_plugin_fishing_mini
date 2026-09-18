@@ -1,7 +1,7 @@
 """本地玩法自测（不属于插件运行时代码，可随时删除）。
 
 覆盖 v5 全部机制：数据持久化、配置、钓点、鱼竿、鱼篓容量、杂物与漂流瓶、
-每日订单、赠送金币、帮助分页、成就、数值平衡。
+每日订单、帮助分页、成就、数值平衡。
 """
 
 from __future__ import annotations
@@ -81,6 +81,9 @@ def load_schema_config(name: str = "cfg") -> dict:
 _CFG = load_schema_config()
 # 测试里默认让所有饵必定上钩（确定性），上钩率本身另有专门用例
 _CFG["bait_hook_rates"] = ",".join(f"{b}:1.0" for b in ("none","bread","worm","bloodworm","corn","shrimp","livebait","secret"))
+# 杂物与鱼互斥：默认关掉杂物掉率，保证「下竿必然上鱼」这类断言稳定；
+# 杂物本身的用例会自己把 item_drop_chance 调成 1.0 / 0.0 来验证。
+_CFG["item_drop_chance"] = 0.0
 
 
 class FakeContext:
@@ -157,6 +160,11 @@ async def wait_user(plugin, uid, tries=400):
     return False
 
 
+def _safe_total(player: dict) -> int:
+    """累计钓获（项目里到处都在用的那个计数）。"""
+    return int(player.get("total_caught") or 0)
+
+
 async def cast(plugin, event, *args, pull=True):
     """抛竿（若咬钩则自动拉线），返回回复列表。"""
     uid = event.get_sender_id()
@@ -187,7 +195,7 @@ async def main():
     check(len(cfg) >= 39, f"配置项 {len(cfg)} 个")
     for key in (
         "backpack_base", "backpack_upgrades", "rod_defs", "location_defs",
-        "order_count", "order_reward_mult", "transfer_tax", "item_drop_chance",
+        "order_count", "order_reward_mult", "bait_hook_rates", "item_drop_chance",
         "bottle_note_chance", "location_codex_gate",
     ):
         check(key in cfg, f"含配置项 {key}")
@@ -223,7 +231,7 @@ async def main():
     p["bottle_notes"] = ["纸条A", "纸条B"]
     p["inventory"] = [mod._new_instance("koi", 1.8)]
     p["aquarium"] = [mod._new_instance("carp", 1.2)]
-    p["transfer_sent"] = 2000
+    p["transfer_sent"] = 2000   # 已删除的旧字段：读回时应当被丢掉
     p["perfect_pulls"] = 5
     p["total_orders"] = 7
     ok = await plugin._save_player(p)
@@ -240,7 +248,7 @@ async def main():
         f"杂物 -> {r['collectibles']}",
     )
     check(r["bottle_notes"] == ["纸条A", "纸条B"], "纸条记录")
-    check(r["transfer_sent"] == 2000, "赠送统计")
+    check("transfer_sent" not in r, "老存档里的 transfer_* 字段已清理")
     check(r["perfect_pulls"] == 5, "完美拉线计数")
     check(r["total_orders"] == 7, "订单计数")
     check(len(r["inventory"]) == 1 and len(r["aquarium"]) == 1, "鱼篓/水族馆")
@@ -315,6 +323,19 @@ async def main():
     for loc_id, allowed in pools.items():
         drawn = {plugin._roll_species("none", loc_id)["id"] for _ in range(600)}
         check(drawn <= allowed, f"{loc_id} 抽到的鱼都在其鱼池内（{len(drawn)} 种）")
+
+    # 稀有度权重下调后，每个钓点的「常规鱼种」权重必须仍然 > 0（否则永远抽不到）
+    dead = []
+    for loc in plugin.locations:
+        weights = mod.LOCATION_WEIGHTS.get(loc["id"]) or {}
+        species = plugin._location_species(loc["id"])
+        if not species:
+            dead.append(f"{loc['id']} 空池")
+            continue
+        zero = [fid for fid in species if mod._safe_number(weights.get(fid), 0) <= 0]
+        if zero:
+            dead.append(f"{loc['id']} 权重为 0：{zero[:3]}")
+    check(not dead, f"16 个钓点的常规鱼种都还能抽到 -> {dead or '无异常'}")
 
     ev = FakeEvent("20001")
     out = await cmd(plugin, ev, "钓点", "解锁", "城中运河")
@@ -494,11 +515,232 @@ async def main():
     await plugin._apply_collectible(p2, chest, "50002")
     check(p2["gold"] == chest["value"], f"宝箱折算金币 -> {p2['gold']}")
 
+    # 咬钩率 0 + 掉率 100%：这一竿必定是「没中鱼 + 钩上物件」，不是鱼
+    cfg2["bait_hook_rates"] = "worm:0.0"
+    plugin_d = make_plugin(cfg2)
     pp = mod._default_player("51001")
     pp["gold"] = 1000
+    pp["equipped_bait"] = "worm"       # 带饵才有资格钩上物件
+    pp["baits"] = {"worm": 5}
     await plugin_d._save_player(pp)
     out = await cast(plugin_d, FakeEvent("51001"))
-    check("还捞上来" in text_of(out), "抛竿时确实会钓上杂物")
+    body = text_of(out)
+    check("没有鱼" in body, f"没中鱼时钩上物件 -> {body.splitlines()[0][:36]}")
+    pp = await plugin_d._load_player("51001")
+    check(not pp["inventory"], "杂物那一竿不会同时上鱼")
+    check(
+        _safe_total(pp) == 0,
+        f"杂物竿不计入渔获 -> total_caught={pp.get('total_caught')}",
+    )
+    check(
+        sum(pp["collectibles"].values()) >= 1,
+        f"杂物已记账 -> {pp['collectibles']}",
+    )
+    check(not pp.get("best_records"), "杂物竿不刷新最佳渔获纪录")
+
+    # 掉率 0 + 咬钩率 100%：这一竿必定是鱼，绝不会出杂物
+    cfg3["bait_hook_rates"] = "worm:1.0"
+    plugin_n = make_plugin(cfg3)
+    pp0 = mod._default_player("51002")
+    pp0["gold"] = 1000
+    pp0["equipped_bait"] = "worm"
+    pp0["baits"] = {"worm": 5}
+    await plugin_n._save_player(pp0)
+    out0 = await cast(plugin_n, FakeEvent("51002"))
+    check("没有鱼" not in text_of(out0), "掉率 0 时不会出杂物")
+    pp0 = await plugin_n._load_player("51002")
+    check(
+        _safe_total(pp0) == 1,
+        f"掉率 0 时正常上鱼 -> total_caught={pp0.get('total_caught')}",
+    )
+
+    # =====================================================================
+    print("\n[6b] 上钩率语义：上鱼率 == 设置的咬钩率，杂物只在没中鱼时出现")
+
+    def sample(hook: str, drop: float, n: int = 2000, bait: str = "worm"):
+        """按给定配置采样 n 竿，返回三类结果的计数。"""
+        c = dict(plugin.cfg)
+        c["bait_hook_rates"] = hook
+        c["item_drop_chance"] = drop
+        pl = make_plugin(c)
+        counts = {"fish": 0, "item": 0, "nothing": 0}
+        for _ in range(n):
+            outcome, _drop = pl._roll_cast_outcome(bait, True)
+            counts[outcome] += 1
+        return counts
+
+    got5 = sample("worm:0.5", 0.14)
+    rate5 = got5["fish"] / 2000
+    check(
+        abs(rate5 - 0.5) <= 0.05,
+        f"咬钩率 0.5 时上鱼率 {rate5:.3f}（2000 竿，容差 ±0.05）",
+    )
+
+    got8 = sample("worm:0.8", 0.14)
+    rate8 = got8["fish"] / 2000
+    check(
+        abs(rate8 - 0.8) <= 0.05,
+        f"咬钩率 0.8 时上鱼率 {rate8:.3f}（不再被杂物稀释）",
+    )
+    check(
+        got8["fish"] + got8["item"] + got8["nothing"] == 2000,
+        f"三类结果互斥且完整 -> {got8}",
+    )
+
+    # 没中鱼的那部分里，物件率应约等于 item_drop_chance
+    got_i = sample("worm:0.0", 0.5)
+    check(got_i["fish"] == 0, f"咬钩率 0 时上鱼率为 0 -> {got_i['fish']}")
+    item_rate = got_i["item"] / 2000
+    check(
+        abs(item_rate - 0.5) <= 0.06,
+        f"咬钩率 0 时物件率 {item_rate:.3f} ≈ item_drop_chance 0.5",
+    )
+
+    # 咬钩率 100%：即使掉率拉满也不会出物件（中鱼就是鱼）
+    got_full = sample("worm:1.0", 1.0)
+    check(
+        got_full["fish"] == 2000 and got_full["item"] == 0,
+        f"中鱼的那一竿绝不会再出杂物 -> {got_full}",
+    )
+
+    # 完全免费的空钩（can_loot=False）永不出物件
+    pl_free = make_plugin({**dict(plugin.cfg), "bait_hook_rates": "none:0.0"})
+    free = {"fish": 0, "item": 0, "nothing": 0}
+    for _ in range(2000):
+        outcome, _d = pl_free._roll_cast_outcome("none", False)
+        free[outcome] += 1
+    check(
+        free["item"] == 0 and free["nothing"] == 2000,
+        f"免费空钩不会白刷杂物 -> {free}",
+    )
+
+    # =====================================================================
+    print("\n[6c] 上钩率配置容错（中文名 / 百分数 / 全角 / 未知键）")
+    tr = make_plugin({**dict(plugin.cfg), "bait_hook_rates": "蚯蚓:0.55,面包屑:70"})
+    check(
+        abs(tr._hook_rate("worm") - 0.55) < 1e-9
+        and abs(tr._hook_rate("bread") - 0.70) < 1e-9,
+        f"中文饵名与百分数都能认 -> 蚯蚓 {tr._hook_rate('worm')} / 面包屑 {tr._hook_rate('bread')}",
+    )
+    tr2 = make_plugin({**dict(plugin.cfg), "bait_hook_rates": "worm：0.42，bread:0.5"})
+    check(
+        abs(tr2._hook_rate("worm") - 0.42) < 1e-9,
+        f"全角冒号/逗号容错 -> {tr2._hook_rate('worm')}",
+    )
+    tr3 = make_plugin({**dict(plugin.cfg), "bait_hook_rates": "不认识的饵:0.9"})
+    check(
+        abs(tr3._hook_rate("worm") - 0.30) < 1e-9,
+        f"配置漏写的饵回退 0.30（修复前会变成 100%）-> {tr3._hook_rate('worm')}",
+    )
+    tr4 = make_plugin({**dict(plugin.cfg), "bait_hook_rates": "worm:abc"})
+    check(
+        abs(tr4._hook_rate("worm") - 0.30) < 1e-9,
+        f"值写坏回退 0.30（不再回退成 100%）-> {tr4._hook_rate('worm')}",
+    )
+
+    # =====================================================================
+    print("\n[6d] 默认值自动同步（改了代码里的数值，不用再手点重置配置）")
+
+    class _FakeConfig(dict):
+        """模拟 AstrBot 的 AstrBotConfig：dict 子类 + 异步保存。"""
+
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self.saves = 0
+
+        async def save_config_async(self, replace_config=None, *, indent=2):
+            self.saves += 1
+            return True
+
+    def cfg_for_sync(**overrides):
+        """造一份「旧版配置」：指纹是旧的，且数值被站长改过。"""
+        c = _FakeConfig()
+        for key in mod.DEFAULTS:
+            c[key] = mod.DEFAULTS[key]
+        c["config_fingerprint"] = "old00000"
+        c["item_drop_chance"] = 0.99          # 站长自己改过的数值
+        c["sell_discount"] = 2.5
+        c["data_target"] = "站长手填的目标"     # 管理类设置，不该被动
+        c["backup_dir"] = "/my/backups"
+        c["button_mode"] = "关闭"
+        c.update(overrides)
+        return c
+
+    sync_plugin = make_plugin()
+    c1 = cfg_for_sync()
+    sync_plugin.config = c1
+    await sync_plugin._sync_defaults()
+    check(
+        c1["item_drop_chance"] == mod.DEFAULTS["item_drop_chance"]
+        and c1["sell_discount"] == mod.DEFAULTS["sell_discount"],
+        f"数值被同步为新默认 -> {c1['item_drop_chance']} / {c1['sell_discount']}",
+    )
+    check(
+        c1["data_target"] == "站长手填的目标" and c1["backup_dir"] == "/my/backups",
+        "data_* / backup_* 管理设置不受影响",
+    )
+    check(c1["button_mode"] == "关闭", "auto 模式下开关类设置保留")
+    check(
+        c1["config_fingerprint"] == mod._defaults_fingerprint(),
+        f"指纹已更新 -> {c1['config_fingerprint']}",
+    )
+    check(c1.saves == 1, f"写盘一次 -> saves={c1.saves}")
+
+    # 指纹相同时：什么都不做、不写盘
+    await sync_plugin._sync_defaults()
+    check(c1.saves == 1, f"指纹相同不再写盘 -> saves={c1.saves}")
+
+    # off 档：保留站长改过的值，只更新指纹
+    c2 = cfg_for_sync(defaults_sync_mode="off")
+    sync_plugin.config = c2
+    await sync_plugin._sync_defaults()
+    check(
+        c2["item_drop_chance"] == 0.99 and c2["sell_discount"] == 2.5,
+        f"off 档保留站长设置 -> {c2['item_drop_chance']} / {c2['sell_discount']}",
+    )
+    check(
+        c2["config_fingerprint"] == mod._defaults_fingerprint(),
+        "off 档仍更新指纹（避免每次都提示）",
+    )
+
+    # all 档：连开关一起重置
+    c3 = cfg_for_sync(defaults_sync_mode="all")
+    sync_plugin.config = c3
+    await sync_plugin._sync_defaults()
+    check(
+        c3["button_mode"] == mod.DEFAULTS["button_mode"],
+        f"all 档把开关也重置 -> button_mode={c3['button_mode']}",
+    )
+    check(
+        c3["backup_dir"] == mod.DEFAULTS["backup_dir"]
+        and c3["data_target"] == mod.DEFAULTS["data_target"],
+        "all 档等同「重置配置」：连 data_* / backup_* 也回到默认"
+        "（所以默认档位是 auto —— 只同步数值与内容）",
+    )
+
+    # 内容表也会被同步（鱼竿数值改了要跟新版走）
+    c4 = cfg_for_sync()
+    c4["rod_defs"] = ["bamboo|竹竿|🎋|0|9.99|0|被站长改坏的旧值"]
+    sync_plugin.config = c4
+    await sync_plugin._sync_defaults()
+    check(
+        c4["rod_defs"] == mod.DEFAULTS["rod_defs"],
+        "内容表（鱼竿定义）跟着新版默认值走",
+    )
+
+    # 保存失败也不能抛异常
+    class _BrokenConfig(_FakeConfig):
+        async def save_config_async(self, replace_config=None, *, indent=2):
+            raise RuntimeError("磁盘满了")
+
+    c5 = cfg_for_sync()
+    sync_plugin.config = _BrokenConfig(c5)
+    try:
+        await sync_plugin._sync_defaults()
+        check(True, "写盘失败时不抛异常（只告警）")
+    except Exception as e:  # pragma: no cover
+        check(False, f"写盘失败时抛了异常：{e}")
+
 
     # =====================================================================
     print("\n[7] 订单（不定时刷新）")
@@ -618,69 +860,42 @@ async def main():
     )
 
     # =====================================================================
-    print("\n[8] 赠送金币")
+    print("\n[8] 赠送金币 / 给鱼：功能已彻底删除")
     plugin = make_plugin()
     ev_low = FakeEvent("70001")
-    out = await cmd(plugin, ev_low, "赠送", "70002", "100")
-    check("5 级" in text_of(out), "等级不足禁止赠送")
-
-    p = await plugin._load_player("70001")
-    p["total_caught"] = 100
-    p["gold"] = 5000
-    await plugin._save_player(p)
-    q = await plugin._load_player("70002")
-    q["gold"] = 0
-    await plugin._save_player(q)
-
-    out = await cmd(plugin, ev_low, "赠送", "70002", "1000")
-    print("    " + text_of(out).replace("\n", "\n    "))
-    p = await plugin._load_player("70001")
-    q = await plugin._load_player("70002")
-    tax = int(1000 * float(plugin.cfg["transfer_tax"]))
-    check(p["gold"] == 5000 - 1000, f"扣除赠送额 -> {p['gold']}")
-    check(q["gold"] == 1000 - tax, f"到账扣手续费 -> {q['gold']}（税 {tax}）")
-    check(p["transfer_count"] == 1 and p["transfer_sent"] == 1000, "统计正确")
-    check(q["transfer_received"] == 1000 - tax, "接收方统计正确")
-
-    out = await cmd(plugin, ev_low, "赠送", "70002", "99999")
-    check("单次最多" in text_of(out), "单次上限生效")
-    out = await cmd(plugin, ev_low, "赠送", "70001", "100")
-    check("不能送给自己" in text_of(out), "禁止自赠")
-    out = await cmd(plugin, ev_low, "赠送", "70002", "0")
-    check("📖" in text_of(out), "非法金额提示用法")
-
-    p = await plugin._load_player("70001")
-    p["gold"] = 100000
-    await plugin._save_player(p)
-    for _ in range(2):
-        await cmd(plugin, ev_low, "赠送", "70002", "1000")
-    out = await cmd(plugin, ev_low, "赠送", "70002", "1000")
+    for words in (
+        ("赠送", "70002", "100"),
+        ("送", "70002", "100"),
+        ("给鱼", "70002", "鲤鱼", "1"),
+        ("赠送鱼", "70002", "1"),
+    ):
+        out = await cmd(plugin, ev_low, *words)
+        check("不认识" in text_of(out), f"/钓鱼 {' '.join(words)} 已不再是有效用法")
     check(
-        "今天已赠送" in text_of(out) or "额度" in text_of(out),
-        "每日次数/额度上限生效",
+        not any(k.startswith("transfer") for k in mod.DEFAULTS),
+        "DEFAULTS 里已无 transfer_* 配置",
     )
-
-    out = await cmd(plugin, ev_low, "送鱼", "70002", "鲤鱼")
-    check("不认识" in text_of(out), "不存在赠送鱼的指令")
-    out = await cmd(plugin, ev_low, "赠送鱼", "70002", "1")
     check(
-        "📖" in text_of(out) or "不认识" in text_of(out),
-        "赠送鱼被拒绝（只能送金币）",
+        not any(k.startswith("transfer") for k in plugin.cfg),
+        "运行配置里已无 transfer_*",
     )
-
-    plugin_c = make_plugin()
-    for uid, gold in (("71001", 10000), ("71002", 0)):
-        pp = mod._default_player(uid)
-        pp["total_caught"] = 100
-        pp["gold"] = gold
-        await plugin_c._save_player(pp)
-
-    async def xfer(a, b):
-        e = FakeEvent(a)
-        return await cmd(plugin_c, e, "赠送", b, "200")
-
-    await asyncio.gather(xfer("71001", "71002"), xfer("71002", "71001"))
-    check(True, "互相赠送未死锁")
+    p = await plugin._load_player("70001")
+    check(
+        not any(k.startswith("transfer") for k in p),
+        f"玩家数据里已无 transfer_* -> {sorted(k for k in p if k.startswith('transfer'))}",
+    )
+    check(
+        "generous" not in mod.ACHIEVEMENTS and "helped" not in mod.ACHIEVEMENTS,
+        "赠送相关的两个成就已删除",
+    )
+    check(
+        not hasattr(plugin, "_cmd_transfer") and not hasattr(plugin, "_cmd_grant"),
+        "赠送 / 给鱼 的处理函数已删除（不留死代码）",
+    )
+    check(
+        not hasattr(plugin, "_is_admin") and not hasattr(plugin, "_load_admin_ids"),
+        "只服务于「给鱼」的管理员链路也已删除",
+    )
 
     # =====================================================================
     print("\n[9] 帮助分页")
@@ -713,8 +928,6 @@ async def main():
     p["locations"] = [l["id"] for l in mod.LOCATIONS]
     p["collectibles"] = {c["id"]: 1 for c in mod.COLLECTIBLES}
     p["bottle_notes"] = list(mod.BOTTLE_NOTES)
-    p["transfer_sent"] = 6000
-    p["transfer_received"] = 10
     p["collection"] = {
         f["id"]: {"count": 1, "best_value": 1, "first_ts": 1} for f in mod.FISH_POOL
     }
@@ -733,7 +946,7 @@ async def main():
     for key in (
         "catch_500", "myth_hunter", "perfect_10", "clutch_win", "collector_all",
         "junk_all", "note_all", "feeder_100", "attr_max", "rich_100000",
-        "order_30", "rod_all", "loc_all", "generous", "helped",
+        "order_30", "rod_all", "loc_all",
     ):
         check(key in p["achievements"], f"解锁 {key}")
     again = plugin._check_achievements(p)
@@ -1194,9 +1407,9 @@ async def main():
     p = await plugin._load_player("89001")
     check(len(p["aquarium"]) == 0, "「水族馆取1」= 水族馆 取 1")
 
-    # 赠送类参数是用户ID，不能因为粘连被误拆
+    # 已删除的子命令不能被「少打空格」容错重新拼出来
     out = await cmd(plugin, ev, "赠送鱼", "89002", "1")
-    check("不认识" in text_of(out), "「赠送鱼」仍然被当成无效用法（不误拆）")
+    check("不认识" in text_of(out), "「赠送鱼」不会被误拆回已删除的「赠送」")
 
     # --- 批量放入 / 取出水族馆 ---
     plugin2 = make_plugin()
@@ -1258,6 +1471,71 @@ async def main():
     check(
         p["items"]["feed_premium"] == 0 and "没有道具" not in text_of(out),
         "「用高级饲料1」= 用 高级饲料 1",
+    )
+
+    # --- 投喂只涨不跌：必须带上钩时固化的 gear_mult ---
+    # 曾经的真实 bug：_apply_feed 重算 base_value 时漏传 gear_mult，
+    # 鱼竿/钓点/变异/图鉴加成被打回 1.0，喂一口就大幅掉价。
+    plugin_fd = make_plugin()
+    ev_fd = FakeEvent("89501")
+    pf = mod._default_player("89501")
+    pf["gold"] = 100000
+    inst_fd = mod._new_instance(
+        "carp", 1.6, value_bonus=0.30, location_mult=1.5, codex_mult=1.2,
+        attrs={"meat": 60, "spirit": 60, "sheen": 60},
+    )
+    check(inst_fd["gear_mult"] > 1.5, f"gear_mult 已固化 -> {inst_fd['gear_mult']}")
+    pf["aquarium"] = [inst_fd]
+    pf["items"] = {"feed_basic": 20, "feed_divine": 20}
+    await plugin_fd._save_player(pf)
+
+    vals = []
+    for _ in range(6):
+        await cmd(plugin_fd, ev_fd, "用", "普通饲料", "1")
+        pf = await plugin_fd._load_player("89501")
+        vals.append(mod._instance_value(pf["aquarium"][0]))
+    check(
+        all(b >= a for a, b in zip(vals, vals[1:])),
+        f"只喂三维道具时价值单调不减 -> {vals}",
+    )
+    check(
+        abs(pf["aquarium"][0]["gear_mult"] - inst_fd["gear_mult"]) < 1e-6,
+        f"投喂不会改动固化倍率 -> {pf['aquarium'][0]['gear_mult']}",
+    )
+
+    vals2 = []
+    for _ in range(3):
+        await cmd(plugin_fd, ev_fd, "用", "仙露", "1")
+        pf = await plugin_fd._load_player("89501")
+        vals2.append(mod._instance_value(pf["aquarium"][0]))
+    check(
+        all(b >= a for a, b in zip(vals2, vals2[1:])) and vals2[0] >= vals[-1],
+        f"喂带 value_up 的道具也只涨不跌 -> {vals2}（喂前 {vals[-1]}）",
+    )
+    plain_fd = mod._new_instance(
+        "carp", 1.6, attrs={"meat": 60, "spirit": 60, "sheen": 60}
+    )
+    check(
+        mod._instance_value(pf["aquarium"][0]) > plain_fd["value"],
+        f"喂完仍保留鱼竿/钓点加成"
+        f"（{mod._instance_value(pf['aquarium'][0])} > {plain_fd['value']}）",
+    )
+
+    # 旧存档没有 gear_mult 字段：反推出来，绝不能因为缺字段而掉价
+    legacy_fd = {k: v for k, v in inst_fd.items() if k != "gear_mult"}
+    legacy_fd["attrs"] = dict(inst_fd["attrs"])
+    before_fd = mod._instance_value(legacy_fd)
+    _gained, delta_fd = mod._apply_feed(
+        legacy_fd, {"meat": 5, "spirit": 5, "sheen": 5}
+    )
+    after_fd = mod._instance_value(legacy_fd)
+    check(
+        after_fd >= before_fd and delta_fd >= 0,
+        f"老存档（无 gear_mult）投喂不掉价 -> {before_fd} → {after_fd}",
+    )
+    check(
+        mod._safe_number(legacy_fd.get("gear_mult"), 0) > 1.0,
+        f"投喂时补回 gear_mult -> {legacy_fd.get('gear_mult')}",
     )
 
     # 名字+数量粘连：商店 买 蚯蚓2 / 卖 鲤鱼3
@@ -2317,17 +2595,17 @@ async def main():
     novice_gross, _, novice_net = results["新手 竹竿/新手村/空钩"]
     top_gross, _, top_net = results["终局 神话竿/极光/秘制饵"]
     check(
-        0 < novice_net <= 40,
+        0 < novice_net <= 20,
         f"新手空钩免费也能赚（{novice_net:.1f}/竿）——不亏钱，但也不暴富",
     )
     check(
-        top_net > novice_net * 20,
+        top_net > novice_net * 50,
         f"终局净收益远高于新手（{top_net:.1f} > {novice_net:.1f}）",
     )
     check(
-        top_gross / max(novice_gross, 0.01) < 900,
-        f"终局/新手 毛收益倍率 {top_gross / novice_gross:.1f}x < 900"
-        f"（终局是 26 级+150,000 金的长期目标，允许较大跨度）",
+        top_gross / max(novice_gross, 0.01) < 500,
+        f"终局/新手 毛收益倍率 {top_gross / novice_gross:.1f}x < 500"
+        f"（鱼竿收益与高稀有度概率都下调过，跨度收窄）",
     )
     nets = [v[2] for v in results.values()]
     check(
@@ -2370,6 +2648,71 @@ async def main():
         f"低级鱼饵便宜（面包屑 {plugin.baits['bread']['price']} 金、"
         f"蚯蚓 {plugin.baits['worm']['price']} 金）——新手用得起",
     )
+
+    # 鱼竿收益下调约 40%（0.08/0.15/0.28/0.38/0.50 -> 0.05/0.09/0.17/0.23/0.30）
+    rod_bonus = [plugin.rod_by_id[r]["value_bonus"] for r in
+                 ("bamboo", "carbon", "stream", "dragon", "starlight", "mythic")]
+    old_bonus = [0.00, 0.08, 0.15, 0.28, 0.38, 0.50]
+    check(
+        all(b > a for a, b in zip(rod_bonus, rod_bonus[1:])),
+        f"鱼竿加成仍严格递增 -> {rod_bonus}",
+    )
+    check(
+        all(new <= old * 0.65 for new, old in zip(rod_bonus, old_bonus))
+        and rod_bonus[-1] <= 0.32,
+        f"鱼竿加成比旧版低约 40% -> {rod_bonus}（旧版 {old_bonus}）",
+    )
+
+    # 高稀有度出现概率下调（常见 12→14，其余全降，且保持严格单调）
+    weight = [mod.ROSTER_RARITY_WEIGHT[r] for r in mod.RARITY_ORDER]
+    check(
+        all(weight[i] > weight[i + 1] for i in range(len(weight) - 1)),
+        f"稀有度权重严格单调 -> {weight}",
+    )
+    check(
+        weight[2] <= 1.0 and weight[3] <= 0.25 and weight[4] <= 0.05,
+        f"稀有/传说/神话权重已下调 -> {weight}",
+    )
+    # 基础权重单调性用空钩抽样验证（贵饵会按设计放大高品质权重：
+    # 秘制饵最高 8 倍，所以带饵时「常见 > 少见」本来就不成立）。
+    plain_share = collections.Counter()
+    for _ in range(40000):
+        plain_share[plugin._roll_species("none", "aurora")["rarity"]] += 1
+    plain_total = sum(plain_share.values())
+    plain_ratio = [plain_share.get(r, 0) / plain_total for r in mod.RARITY_ORDER]
+    check(
+        all(plain_ratio[i] > plain_ratio[i + 1] for i in range(len(plain_ratio) - 1)),
+        f"空钩抽样严格递减 -> {[f'{x:.2%}' for x in plain_ratio]}",
+    )
+
+    # 终局钓点 + 最好的饵（秘制饵）：传说/神话合计约一成（实测 9.3%，这里留余量）。
+    top_share = collections.Counter()
+    for _ in range(40000):
+        top_share[plugin._roll_species("secret", "aurora")["rarity"]] += 1
+    legend_plus = (
+        top_share.get("传说", 0) + top_share.get("神话", 0)
+    ) / sum(top_share.values())
+    check(
+        legend_plus < 0.15,
+        f"终局钓点 + 最好的饵，传说/神话合计 {legend_plus:.2%}（约一成，< 15%）",
+    )
+
+    # 池子最小的两个钓点：抽样确认高品质真的还抽得出来、且每种常规鱼权重都 > 0
+    for loc_id in ("abyss", "aurora"):
+        seen = collections.Counter()
+        for _ in range(40000):
+            seen[plugin._roll_species("secret", loc_id)["rarity"]] += 1
+        species = plugin._location_species(loc_id)
+        weights = mod.LOCATION_WEIGHTS.get(loc_id) or {}
+        check(
+            seen.get("传说", 0) > 0 and seen.get("神话", 0) > 0,
+            f"{loc_id} 抽样仍能出传说/神话 -> 传说 {seen.get('传说', 0)}"
+            f"、神话 {seen.get('神话', 0)}（常规 {len(species)} 种）",
+        )
+        check(
+            all(mod._safe_number(weights.get(fid), 0) > 0 for fid in species),
+            f"{loc_id} 全部 {len(species)} 种常规鱼的权重都 > 0",
+        )
 
     sink = (
         sum(r["price"] for r in plugin.rods)

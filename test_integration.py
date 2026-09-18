@@ -83,6 +83,9 @@ def load_config() -> dict:
         os.remove(path)
     config = dict(AstrBotConfig(config_path=path, schema=schema))
     config["bait_hook_rates"] = CFG_HOOK_1   # 集成测试固定必定上钩
+    # 杂物与鱼互斥（一竿只出一样）：这条链路要验证的是「上鱼」，
+    # 所以把杂物掉率关掉，否则有 14% 的概率这一竿出的是杂物，断言会偶发失败。
+    config["item_drop_chance"] = 0.0
     return config
 
 
@@ -473,26 +476,24 @@ async def main():
     check("不认识" in text_of(replies), "  └ 未知子命令有友好提示")
 
     # -----------------------------------------------------------------
-    print("\n[8] 管理员指令")
-    replies, matched, _ = await send(
-        plugin, "/钓鱼 给鱼 90005 鲲 2", "admin_001", "管理员", role="admin"
-    )
-    check(matched, "/钓鱼 给鱼 … 被匹配")
-    print(f"    {text_of(replies)}")
-    p = await plugin._load_player("90005")
-    check(sum(1 for x in p["inventory"] if x["fish_id"] == "kun") == 2, "发放鲲 ×2")
-
-    replies, _, _ = await send(plugin, "/钓鱼 给鱼 90005 鲲", "90005", "群友")
-    check("管理员" in text_of(replies), "普通群友被拒绝")
+    print("\n[8] 已删除的指令：赠送金币 / 给鱼")
+    for text in (
+        "/钓鱼 给鱼 90005 鲲 2",
+        "/钓鱼 赠送 90001 100",
+        "/钓鱼 送 90001 100",
+    ):
+        replies, _, _ = await send(plugin, text, "90001", "群友甲")
+        check("不认识" in text_of(replies), f"「{text}」提示不认识（功能已删除）")
+    p5 = await plugin._load_player("90005")
+    check(not p5["inventory"], "没人能再凭空拿到鱼（给鱼已删除）")
 
     # -----------------------------------------------------------------
     print("\n[9] 持久化（真实事件链之后数据仍在）")
     plugin2 = mod.FishingPlugin(context=FakeContext(), config=cfg)
     plugin2.plugin_id = plugin.plugin_id
-    p1 = await plugin2._load_player("90005")
-    check(len(p1["inventory"]) == 2, "新实例仍能读到数据")
     p2 = await plugin2._load_player("90001")
     check(p2["total_caught"] >= 1, f"90001 的渔获记录保留 -> {p2['total_caught']}")
+    check(len(p2["inventory"]) >= 1, f"新实例仍能读到背包 -> {len(p2['inventory'])} 条")
 
     print("\n" + "=" * 64)
     if failures:

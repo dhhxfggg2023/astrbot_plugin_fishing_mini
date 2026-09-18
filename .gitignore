@@ -41,3 +41,6 @@ desktop.ini
 .git.bak/
 *.bak
 .git-commit-msg.txt
+_commitmsg.txt
+_task*.py
+

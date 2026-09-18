@@ -1,4 +1,14 @@
 {
+  "config_fingerprint": {
+    "description": "当前生效的默认值指纹（插件回写，只读参考）。指纹变了说明代码里的数值更新过，插件会自动把新默认值同步进来",
+    "type": "string",
+    "default": ""
+  },
+  "defaults_sync_mode": {
+    "description": "默认值自动同步档位：auto = 只同步数值与内容（推荐，管理类设置如存档/数据操作不受影响）；all = 连开关一起重置为默认；off = 不同步，保留你自己改过的所有值",
+    "type": "string",
+    "default": "auto"
+  },
   "initial_gold": {
     "description": "新玩家初始金币",
     "type": "int",
@@ -135,7 +145,7 @@
     ]
   },
   "item_drop_chance": {
-    "description": "每次抛竿钓上「杂物」的概率（漂流瓶/海草/宝箱等）",
+    "description": "没中鱼时钩上杂物的概率（漂流瓶/海草/宝箱等）。判定在咬钩失败之后：中了鱼就是鱼，一竿只出一样。完全免费的空钩（没挂饵也没钓费）不会出杂物",
     "type": "float",
     "default": 0.14
   },
@@ -174,11 +184,11 @@
     "type": "list",
     "default": [
       "bamboo|竹竿|🎋|0|0.00|0.00|村口杂货铺送的，能用",
-      "carbon|碳素竿|🎣|400|0.08|0.03|轻巧顺手，新手进阶首选",
-      "stream|溪流竿|🪝|1600|0.15|0.05|韧性好，适合溪流与湖泊",
-      "dragon|龙纹竿|🐉|5400|0.28|0.11|竿身刻龙，专治大鱼",
-      "starlight|星辉竿|✨|11000|0.38|0.16|夜里会泛微光，深海也用得上",
-      "mythic|神话竿|🌈|22000|0.50|0.22|传说钓具，据说能引来神话之鱼"
+      "carbon|碳素竿|🎣|400|0.05|0.03|轻巧顺手，新手进阶首选",
+      "stream|溪流竿|🪝|1600|0.09|0.05|韧性好，适合溪流与湖泊",
+      "dragon|龙纹竿|🐉|5400|0.17|0.11|竿身刻龙，专治大鱼",
+      "starlight|星辉竿|✨|11000|0.23|0.16|夜里会泛微光，深海也用得上",
+      "mythic|神话竿|🌈|22000|0.30|0.22|传说钓具，据说能引来神话之鱼"
     ]
   },
   "location_defs": {
@@ -202,31 +212,6 @@
       "glacier|极地冰湖|🧊|40|230000|1.68|冰层下别有洞天，只有最老的钓手敢来",
       "aurora|极光冰渊|❄️|45|450000|1.78|极光下的裂隙，据说通着别处"
     ]
-  },
-  "transfer_min_level": {
-    "description": "赠送金币所需的等级（老手帮扶新手）",
-    "type": "int",
-    "default": 5
-  },
-  "transfer_tax": {
-    "description": "赠送金币的手续费比例（0.1 = 抽 10%，作为金币回收）",
-    "type": "float",
-    "default": 0.1
-  },
-  "transfer_max_once": {
-    "description": "单次最多赠送多少金币",
-    "type": "int",
-    "default": 1000
-  },
-  "transfer_daily_limit": {
-    "description": "每天最多赠送多少次",
-    "type": "int",
-    "default": 3
-  },
-  "transfer_daily_cap": {
-    "description": "每天最多赠送出多少金币",
-    "type": "int",
-    "default": 3000
   },
   "enable_weather": {
     "description": "启用天气与时段系统（不同天气影响鱼的出现率与拉线难度）",
@@ -431,7 +416,7 @@
     "default": 0.8
   },
   "bait_hook_rates": {
-    "description": "各鱼饵的上钩率（空钩极低，带饵才容易上鱼；格式 id:概率,逗号分隔）",
+    "description": "各鱼饵的咬钩率（= 这一竿中鱼的概率，空钩极低、带饵才容易上鱼）。格式 id:概率 逗号分隔；也认中文饵名与百分数（面包屑:0.8、worm:80 都行），漏写的饵按 0.3 处理。中鱼后就是鱼，不会再被杂物抢走；没中鱼时才有可能钩上杂物（见 item_drop_chance）",
     "type": "string",
     "default": "none:0.30,bread:0.72,worm:0.80,bloodworm:0.86,corn:0.90,shrimp:0.94,livebait:0.96,secret:1.0"
   }

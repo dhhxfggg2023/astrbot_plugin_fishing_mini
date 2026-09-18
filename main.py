@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -78,6 +79,10 @@ from astrbot.api.star import Context, Star
 # 所以想改数值请优先去 WebUI 插件配置页改，而不是改这里的常量。
 
 DEFAULTS: dict[str, Any] = {
+    # 默认值指纹（插件回写，只读参考）：代码里的数值一变，这个指纹就变
+    "config_fingerprint": "",
+    # 数值同步档位：auto = 同步数值与内容 / all = 连开关一起重置 / off = 不同步
+    "defaults_sync_mode": "auto",
     "initial_gold": 100,
     "fish_cost": 0,
     "cooldown_seconds": 45,
@@ -109,19 +114,14 @@ DEFAULTS: dict[str, Any] = {
     "order_refresh_max_hours": 6,
     "rod_defs": [
         "bamboo|竹竿|🎋|0|0.00|0.00|村口杂货铺送的，能用",
-        "carbon|碳素竿|🎣|400|0.08|0.03|轻巧顺手，新手进阶首选",
-        "stream|溪流竿|🪝|1600|0.15|0.05|韧性好，适合溪流与湖泊",
-        "dragon|龙纹竿|🐉|5400|0.28|0.11|竿身刻龙，专治大鱼",
-        "starlight|星辉竿|✨|11000|0.38|0.16|夜里会泛微光，深海也用得上",
-        "mythic|神话竿|🌈|22000|0.50|0.22|传说钓具，据说能引来神话之鱼"
+        "carbon|碳素竿|🎣|400|0.05|0.03|轻巧顺手，新手进阶首选",
+        "stream|溪流竿|🪝|1600|0.09|0.05|韧性好，适合溪流与湖泊",
+        "dragon|龙纹竿|🐉|5400|0.17|0.11|竿身刻龙，专治大鱼",
+        "starlight|星辉竿|✨|11000|0.23|0.16|夜里会泛微光，深海也用得上",
+        "mythic|神话竿|🌈|22000|0.30|0.22|传说钓具，据说能引来神话之鱼"
     ],
     # 钓点定义由 LOCATIONS 生成（见文件下方 _location_def_lines()），此处留空占位
     "location_defs": [],
-    "transfer_min_level": 5,
-    "transfer_tax": 0.1,
-    "transfer_max_once": 1000,
-    "transfer_daily_limit": 3,
-    "transfer_daily_cap": 3000,
     "enable_weather": True,
     "enable_market": True,
     "market_boost_min": 1.5,
@@ -173,6 +173,42 @@ DEFAULTS: dict[str, Any] = {
         "coral_deco|珊瑚造景|🪸|260|水族馆装饰，提升馆藏价值|value_up=120",
     ],
 }
+
+# -----------------------------------------------------------------------------
+# 默认值自动同步：改了代码里的数值，站长不用再手点「重置配置」
+# -----------------------------------------------------------------------------
+
+#: 这些前缀的配置项属于「站长的个人设置 / 管理操作」，永不被自动同步覆盖
+DEFAULTS_SYNC_EXCLUDE_PREFIXES: tuple[str, ...] = ("data_", "backup_")
+#: 这些键同上（开关类与管理项，跟着指纹一起变但没有意义）
+DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
+    {"button_mode", "content_auto_merge", "defaults_sync_mode", "config_fingerprint"}
+)
+
+
+def _synced_default_keys() -> list[str]:
+    """参与「数值同步」的配置键（数值 + 内容表，排除管理类设置）。"""
+    return [
+        key
+        for key in DEFAULTS
+        if not key.startswith(DEFAULTS_SYNC_EXCLUDE_PREFIXES)
+        and key not in DEFAULTS_SYNC_EXCLUDE_KEYS
+    ]
+
+
+def _defaults_fingerprint() -> str:
+    """把参与同步的默认值做稳定序列化后取哈希前 8 位。
+
+    只要代码里任何一个数值/内容表变了，指纹就会变，插件启动时据此
+    把新默认值写回配置——不需要人工维护版本号。
+
+    ⚠️ 必须**调用时现算**：模块初始化后半段会重写 ``DEFAULTS["location_defs"]``
+    （由钓点常量生成），提前算出来的指纹会和实际默认值对不上，导致每次启动
+    都误判成「数值变了」。
+    """
+    payload = {key: DEFAULTS[key] for key in _synced_default_keys()}
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
 # =============================================================================
 # 二、鱼种品质（固有属性，5 档）
@@ -345,7 +381,7 @@ ROSTER_RARITY_FACTOR: dict[str, float] = {
 
 #: 品质基础权重（同一钓点内每种鱼的相对出现率）
 ROSTER_RARITY_WEIGHT: dict[str, float] = {
-    "常见": 12.0, "少见": 5.0, "稀有": 1.4, "传说": 0.35, "神话": 0.08,
+    "常见": 14.0, "少见": 4.6, "稀有": 0.95, "传说": 0.20, "神话": 0.04,
 }
 
 #: 互动难度（只有 传说/神话 真的会进拉线互动，其余留 0）
@@ -946,7 +982,7 @@ ORDER_RARITY_BY_LEVEL: list[tuple[int, tuple[str, ...]]] = [
 ]
 
 # =============================================================================
-# 三·九、等级（由累计钓获换算，用于解锁钓点 / 订单 / 赠送）
+# 三·九、等级（由累计钓获换算，用于解锁钓点 / 订单 / 交互品质门槛）
 # =============================================================================
 
 #: 每级需要的累计钓获
@@ -1349,6 +1385,59 @@ def _parse_escape_map(raw: Any) -> dict[str, float]:
     return result
 
 
+#: 上钩率解析失败 / 键不认识时的兜底值（与空钩同档，绝不回退成 100%）
+HOOK_RATE_FALLBACK: float = 0.30
+
+
+def _parse_hook_rates(
+    raw: Any, baits: dict[str, dict[str, Any]]
+) -> tuple[dict[str, float], list[str]]:
+    """解析 ``id:概率`` 形式的上钩率表，返回 (表, 不认识的键)。
+
+    做了这些容错（站长手写配置很容易踩）：
+    * 全角逗号 ``，`` / 中文冒号 ``：`` / 多余空格
+    * 百分数写法（数值 > 1 时自动 /100，``worm:80`` → 0.80）
+    * 中文饵名（用鱼饵表里的 ``name`` 反查 id，``面包屑:0.8`` → ``bread``）
+    * 值解析不出来 → 回退 :data:`HOOK_RATE_FALLBACK`（而不是 1.0）
+    """
+    result: dict[str, float] = {}
+    unknown: list[str] = []
+    text = raw if isinstance(raw, str) else ""
+    by_name: dict[str, str] = {}
+    for bid, bait in baits.items():
+        name = str(bait.get("name") or "").strip()
+        if name:
+            by_name[name] = bid
+    normalized = text.replace("，", ",").replace("：", ":")
+    for token in normalized.split(","):
+        token = token.strip()
+        if not token or ":" not in token:
+            continue
+        key, _, value = token.partition(":")
+        key = key.strip()
+        if not key:
+            continue
+        # 键：先当 id，再当展示名（中文名/大小写都能认）
+        bid = key if key in baits else by_name.get(key)
+        if bid is None:
+            lowered = key.lower()
+            bid = lowered if lowered in baits else by_name.get(key)
+        if bid is None:
+            unknown.append(key)
+            continue
+        raw_value = value.strip().rstrip("%").strip()
+        try:
+            number = float(raw_value)
+        except (TypeError, ValueError):
+            number = HOOK_RATE_FALLBACK
+        if number > 100.0:
+            number = HOOK_RATE_FALLBACK     # 明显写错了（比如多打一个 0）
+        elif number > 1.0:
+            number = number / 100.0         # 百分数写法
+        result[bid] = _clamp(number, 0.0, 1.0)
+    return result, unknown
+
+
 def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
     """解析鱼竿定义：``id|名称|emoji|价格|价值加成|幸运加成|描述``。"""
     rods: list[dict[str, Any]] = []
@@ -1480,11 +1569,6 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # 昵称与平台缓存（排行榜展示 / 排查平台适配问题）
         "last_name": "",
         "last_platform": "",
-        # 每日赠送统计
-        "transfer_date": "",
-        "transfer_count": 0,
-        "transfer_sent": 0,
-        "transfer_received": 0,
         # 收集：钓上来的杂物种类记录
         "collectibles": {},
         "bottle_notes": [],    # 收集到的纸条（仅保留最近 30 条）
@@ -1716,9 +1800,27 @@ def _apply_feed(instance: dict[str, Any], effects: dict[str, float]) -> tuple[di
             VALUE_VARIANCE[0],
             VALUE_VARIANCE[1],
         )
-        instance["base_value"] = _compute_value(
-            fish["value"], attrs, quality_mult, variance
+        old_base = _safe_int(instance.get("base_value"), 0, 0)
+        # ⚠️ 必须把上钩时固化的装备倍率一起传进去：漏传会让鱼竿/钓点/变异/图鉴
+        # 加成全部被打回 1.0，喂一次就大幅掉价（这是修过的真实 bug）。
+        raw_gear = instance.get("gear_mult")
+        if _is_number(raw_gear):
+            gear_mult = _clamp(float(raw_gear), 0.1, 50.0)
+        elif old_base > 0:
+            # 旧存档没存 gear_mult：用「喂之前的价格 ÷ 不带装备的算法价」反推，
+            # 这样这一次投喂仍按原来的鱼竿+钓点档次涨价
+            pure_old = _compute_value(
+                fish["value"], before, quality_mult, variance
+            )
+            gear_mult = _clamp(old_base / max(1, pure_old), 0.1, 50.0)
+            instance["gear_mult"] = round(gear_mult, 4)
+        else:
+            gear_mult = 1.0
+        new_base = _compute_value(
+            fish["value"], attrs, quality_mult, variance, gear_mult
         )
+        # 只涨不跌的保险：任何情况下都不允许投喂把基础价压低
+        instance["base_value"] = max(old_base, new_base)
     instance["value"] = _safe_int(instance.get("base_value"), old_value, 1) + _safe_int(
         instance.get("live_bonus"), 0, 0
     )
@@ -1789,9 +1891,15 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         source = raw_attrs.get(key) if isinstance(raw_attrs, dict) else None
         attrs[key] = int(_clamp(_safe_int(source, mid), 1, 100))
 
+    # 装备倍率：老数据没有就按 1.0（等价于没吃任何鱼竿/钓点加成）
+    gear_mult = _clamp(_safe_number(raw.get("gear_mult"), 1.0), 0.1, 50.0)
+
     value = _safe_int(raw.get("value"), -1)
     if value <= 0:
-        value = _compute_value(FISH_BY_ID[fish_id]["value"], attrs, quality_mult)
+        # 老数据连 value 都没有：按同一条鱼的算法补一个价，顺便带上装备倍率
+        value = _compute_value(
+            FISH_BY_ID[fish_id]["value"], attrs, quality_mult, None, gear_mult
+        )
 
     live_bonus = _safe_int(raw.get("live_bonus"), 0, 0)
     # base_value 是「不含养成加成」的基础价；老数据没有就用 value - live_bonus 反推
@@ -1816,9 +1924,7 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "quality": quality,
         "quality_mult": round(quality_mult, 4),
         "value_variance": round(variance, 4),
-        "gear_mult": round(
-            _clamp(_safe_number(raw.get("gear_mult"), 1.0), 0.1, 50.0), 4
-        ),
+        "gear_mult": round(gear_mult, 4),
         "attrs": attrs,
         "feed_uses": _safe_int(raw.get("feed_uses"), 0, 0),
         "live_bonus": live_bonus,
@@ -2071,12 +2177,6 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         current = raw.get("current_location")
         player["current_location"] = current if current in locs else DEFAULT_LOCATION
 
-        # --- 赠送统计 ---
-        tdate = raw.get("transfer_date", "")
-        player["transfer_date"] = tdate if isinstance(tdate, str) else ""
-        player["transfer_count"] = _safe_int(raw.get("transfer_count"), 0, 0)
-        player["transfer_sent"] = _safe_int(raw.get("transfer_sent"), 0, 0)
-        player["transfer_received"] = _safe_int(raw.get("transfer_received"), 0, 0)
 
         # --- 杂物图鉴与纸条（彩蛋计数 egg_* 也要保留）---
         raw_coll = raw.get("collectibles")
@@ -2272,6 +2372,10 @@ class FishingPlugin(Star):
         self.items: dict[str, dict[str, Any]] = {}
         self.aquarium_slots: list[dict[str, Any]] = []
         self.escape_map: dict[str, float] = {}
+        #: 鱼饵 -> 咬钩率（_refresh_config 解析一次）
+        self.bait_hook_map: dict[str, float] = {}
+        #: 已经就「上钩率缺项」告警过的鱼饵，避免刷屏
+        self._hook_warned: set[str] = set()
         self.interactive_rarities: set[str] = set()
         # 新增：鱼竿 / 钓点 / 背包扩容（可由配置覆盖）
         self.rods: list[dict[str, Any]] = []
@@ -2291,7 +2395,6 @@ class FishingPlugin(Star):
         self._button_warned = False
         self._button_ok_logged = False
         self._tz = self._load_timezone()
-        self._admin_ids = self._load_admin_ids()
 
     # -------------------------------------------------------------------------
     # 配置
@@ -2372,21 +2475,6 @@ class FishingPlugin(Star):
         )
         cfg["order_unlock_level"] = int(
             _clamp(_safe_int(cfg["order_unlock_level"], 3, 1), 1, MAX_LEVEL)
-        )
-        cfg["transfer_min_level"] = int(
-            _clamp(_safe_int(cfg["transfer_min_level"], 5, 1), 1, MAX_LEVEL)
-        )
-        cfg["transfer_tax"] = _clamp(
-            _safe_number(cfg["transfer_tax"], 0.1), 0.0, 0.9
-        )
-        cfg["transfer_max_once"] = max(
-            1, _safe_int(cfg["transfer_max_once"], 1000, 1)
-        )
-        cfg["transfer_daily_limit"] = max(
-            0, _safe_int(cfg["transfer_daily_limit"], 3, 0)
-        )
-        cfg["transfer_daily_cap"] = max(
-            0, _safe_int(cfg["transfer_daily_cap"], 3000, 0)
         )
         # 天气 / 行情 / 变异 / 垃圾阈值 / 图鉴奖励 / 鱼塘
         cfg["enable_weather"] = bool(cfg["enable_weather"])
@@ -2504,6 +2592,16 @@ class FishingPlugin(Star):
         self.items = _parse_item_defs(cfg.get("item_defs"))
         self.aquarium_slots = _parse_aquarium_slots(cfg.get("aquarium_slots"))
         self.escape_map = _parse_escape_map(cfg.get("rarity_escape_chance"))
+        # 上钩率：解析一次缓存成查表（容错见 _parse_hook_rates），不再每竿重算
+        self.bait_hook_map, unknown_hook_keys = _parse_hook_rates(
+            cfg.get("bait_hook_rates"), self.baits
+        )
+        if unknown_hook_keys:
+            available = "/".join(b for b in self.baits)
+            logger.warning(
+                f"bait_hook_rates 里的键 {'、'.join(unknown_hook_keys)} 不认识，"
+                f"已忽略；可用键：{available}（也可以直接写中文饵名）"
+            )
         # 鱼竿 / 钓点 / 背包扩容
         self.rods = _parse_rod_defs(cfg.get("rod_defs"))
         self.rod_by_id = {r["id"]: r for r in self.rods}
@@ -2569,24 +2667,6 @@ class FishingPlugin(Star):
             logger.warning(f"读取时区失败，使用 UTC+8：{e}")
             return fallback
 
-    def _load_admin_ids(self) -> list[str]:
-        try:
-            get_config = getattr(self.context, "get_config", None)
-            if not callable(get_config):
-                return []
-            cfg = get_config()
-            if not isinstance(cfg, dict):
-                return []
-            raw = cfg.get("admins_id", [])
-            if isinstance(raw, str):
-                raw = [raw]
-            if not isinstance(raw, list):
-                return []
-            return [str(item).strip() for item in raw if str(item).strip()]
-        except Exception as e:
-            logger.warning(f"读取管理员列表失败：{e}")
-            return []
-
     def _today_text(self) -> str:
         try:
             return datetime.now(self._tz).strftime("%Y-%m-%d")
@@ -2615,18 +2695,6 @@ class FishingPlugin(Star):
         不属于插件公开 API，因此这里不做，改用清晰的分行文本指令引导。
         """
         return event.plain_result(text)
-
-    def _is_admin(self, event: AstrMessageEvent) -> bool:
-        """是否管理员：优先 event.is_admin()，回退全局 admins_id。"""
-        try:
-            if event.is_admin():
-                return True
-        except Exception as e:
-            logger.debug(f"event.is_admin() 失败，回退 admins_id：{e}")
-        try:
-            return str(event.get_sender_id()) in self._admin_ids
-        except Exception:
-            return False
 
     # -------------------------------------------------------------------------
     # 玩家数据读写（插件级 KV 存储）
@@ -2850,11 +2918,6 @@ class FishingPlugin(Star):
             unlock("loc_2")
         if len(loc_ids) >= len(self.locations):
             unlock("loc_all")
-        # ---- 社交 ----
-        if _safe_int(player.get("transfer_sent"), 0, 0) >= 5000:
-            unlock("generous")
-        if _safe_int(player.get("transfer_received"), 0, 0) > 0:
-            unlock("helped")
         # ---- 背包 ----
         if len(inventory) >= _backpack_capacity(player, self.cfg):
             unlock("full_bag")
@@ -3621,17 +3684,46 @@ class FishingPlugin(Star):
         except Exception as e:
             logger.debug(f"更新排行榜索引失败：{e}")
 
+    def _roll_cast_outcome(
+        self, bait_id: str, can_loot: bool
+    ) -> tuple[str, dict[str, Any] | None]:
+        """这一竿的结果：``("fish", None)`` / ``("item", 杂物)`` / ``("nothing", None)``。
+
+        判定顺序就是玩家直觉里的顺序（用户明确要求）：
+        1. 先看有没有中鱼 —— 中了就是鱼，**不会被杂物抢走**，
+           所以「上鱼率 == bait_hook_rates 里设置的值」；
+        2. 没中鱼才看钩子上有没有带物件（``item_drop_chance``）；
+        3. 都没有就是空手而归。
+
+        ``can_loot=False``（完全免费的空钩）时不出物件，避免零成本白刷杂物。
+        抽成独立方法是为了让三段概率可被单测稳定采样。
+        """
+        hook = self._hook_rate(bait_id)
+        if hook >= 1.0 or random.random() < hook:
+            return "fish", None
+        if can_loot:
+            drop = self._roll_collectible()
+            if drop is not None:
+                return "item", drop
+        return "nothing", None
+
     def _hook_rate(self, bait_id: str) -> float:
-        """这一竿的上钩率（空钩很低，带饵才高）。默认值写在配置 default 里。"""
-        raw = str(self.cfg.get("bait_hook_rates") or "")
-        fallback = {"none": 0.30}
-        for pair in raw.split(","):
-            key, _, value = pair.partition(":")
-            key = key.strip()
-            if not key:
-                continue
-            fallback[key] = _clamp(_safe_number(value, 1.0), 0.0, 1.0)
-        return fallback.get(bait_id, 1.0)
+        """这一竿的咬钩率（查缓存的表，空钩很低，带饵才高）。
+
+        兜底是 :data:`HOOK_RATE_FALLBACK`（0.30），**不会**回退成 1.0 ——
+        以前配置里漏写某个鱼饵会让它变成 100% 上钩，是这个 bug 的根源。
+        """
+        table = getattr(self, "bait_hook_map", None) or {}
+        if bait_id in table:
+            return table[bait_id]
+        if bait_id not in self._hook_warned:
+            self._hook_warned.add(bait_id)
+            logger.warning(
+                f"bait_hook_rates 里没有鱼饵 {bait_id} 的上钩率，"
+                f"暂时按 {HOOK_RATE_FALLBACK:.0%} 处理；"
+                f"想改就在配置里加一项，例如 {bait_id}:0.60"
+            )
+        return HOOK_RATE_FALLBACK
 
     def _bait_cost(self, bait_id: str) -> int:
         """单个鱼饵的售价（只在购买时收钱；下竿消耗库存，不再重复收费）。"""
@@ -4175,11 +4267,28 @@ class FishingPlugin(Star):
                 baits = player.setdefault("baits", {})
                 baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - 1)
 
-            # ---- 上钩判定：空钩大多咬不住，带饵才容易上鱼 ----
-            hook = self._hook_rate(bait_id)
-            if hook < 1.0 and random.random() >= hook:
+            # ---- 这一竿的结果：中鱼 / 钩上物件 / 空手而归（一竿只出一样）----
+            # 顺序见 _roll_cast_outcome：先判中鱼（上鱼率==配置的咬钩率），
+            # 没中鱼才可能钩上杂物；完全免费的空钩不出杂物。
+            outcome, drop = self._roll_cast_outcome(
+                bait_id, bait_id != "none" or total_cost > 0
+            )
+            if outcome != "fish":
                 player["last_fish_time"] = int(now)
                 await self._save_player(player)
+                if outcome == "item" and drop is not None:
+                    player = await self._load_player(user_id)
+                    drop_text = await self._apply_collectible(player, drop, user_id)
+                    lines = [t for t in (drop_text, bait_note) if t]
+                    if lines:
+                        async for reply in self._say(
+                            event, "\n".join(lines), self._cast_rows()
+                        ):
+                            yield reply
+                    # 这一竿没钓到鱼：不计渔获、不进图鉴、不刷新最佳纪录、不播报
+                    async for reply in self._maybe_trigger_story(event, user_id):
+                        yield reply
+                    return
                 tip = (
                     "🪝 空钩在水里漂了半天，鱼碰了碰就游走了"
                     if bait_id == "none"
@@ -4292,27 +4401,9 @@ class FishingPlugin(Star):
                 bait_id=bait_id,
             )
 
-            # --- 顺带钓上杂物（漂流瓶等），与上鱼互不冲突 ---
-            drop = self._roll_collectible()
-            if drop is not None:
-                player = await self._load_player(user_id)
-                drop_text = await self._apply_collectible(player, drop, user_id)
-                if drop_text:
-                    yield event.plain_result(drop_text)
-
             # --- 偶尔来一段小插曲（触发条件不对外说明）---
-            player = await self._load_player(user_id)
-            story = self._maybe_start_event(player)
-            if story is not None:
-                player["event"] = {"id": story["id"], "ts": int(time.time())}
-                self._recent_events[self._session_key(event)] = (
-                    user_id,
-                    time.time(),
-                )
-                await self._save_player(player)
-                text, rows = self._event_prompt(story)
-                async for reply in self._say(event, text, rows):
-                    yield reply
+            async for reply in self._maybe_trigger_story(event, user_id):
+                yield reply
 
         # --- 群播报（锁外）：变异体 / 传说 / 神话都值得播报 ---
         if cfg["enable_group_broadcast"] and broadcast_catch is not None:
@@ -4320,6 +4411,22 @@ class FishingPlugin(Star):
                 broadcast_catch.get("fish_id", "")
             ) in ("传说", "神话"):
                 await self._broadcast(event, broadcast_catch)
+
+    async def _maybe_trigger_story(self, event: AstrMessageEvent, user_id: str):
+        """抛竿收尾：偶尔来一段小插曲（触发条件不对外说明）。
+
+        钓鱼与「钓上杂物」两条路径都要走这里，所以单独抽出来，避免复制粘贴。
+        """
+        player = await self._load_player(user_id)
+        story = self._maybe_start_event(player)
+        if story is None:
+            return
+        player["event"] = {"id": story["id"], "ts": int(time.time())}
+        self._recent_events[self._session_key(event)] = (user_id, time.time())
+        await self._save_player(player)
+        text, rows = self._event_prompt(story)
+        async for reply in self._say(event, text, rows):
+            yield reply
 
     def _format_result(
         self,
@@ -4428,14 +4535,21 @@ class FishingPlugin(Star):
     async def _apply_collectible(
         self, player: dict[str, Any], drop: dict[str, Any], user_id: str
     ) -> str:
-        """处理钓上来的杂物：记账、漂流瓶开纸条、值钱的直接折算金币。"""
+        """处理钓上来的杂物：记账、漂流瓶开纸条、值钱的直接折算金币。
+
+        现在杂物与鱼互斥（一竿只出一样），所以文案要明确「这一竿上来的
+        不是鱼」，别让玩家以为同时还钓到了鱼。
+        """
         try:
             items = player.setdefault("items", {})
             items[drop["id"]] = _safe_int(items.get(drop["id"]), 0, 0) + 1
             coll = player.setdefault("collectibles", {})
             coll[drop["id"]] = _safe_int(coll.get(drop["id"]), 0, 0) + 1
 
-            lines = [f"{drop['emoji']} 还捞上来一个 {drop['name']}　{drop['desc']}"]
+            lines = [
+                f"{drop['emoji']} 钩子空了，倒是带上来一个 {drop['name']}（这一竿没有鱼）",
+                f"　{drop['desc']}　已收进杂物收藏",
+            ]
 
             if drop["id"] == "drift_bottle":
                 if random.random() < float(self.cfg["bottle_note_chance"]):
@@ -5217,125 +5331,6 @@ class FishingPlugin(Star):
             lines.append(f"　最近：{notes[-1]}")
         yield event.plain_result("\n".join(lines))
 
-    # -------------------------------------------------------------------------
-    # 赠送金币（老手帮扶新手）
-    # -------------------------------------------------------------------------
-
-    async def _cmd_transfer(self, event: AstrMessageEvent, user_id: str, *rest):
-        """赠送金币：/钓鱼 赠送 <用户ID> <金额>
-
-        **只有金币可以赠送**——鱼、道具、鱼竿、杂物都不可转移。
-        带等级门槛、单次上限、每日次数与总额上限、以及手续费（作为金币回收口）。
-        """
-        toks = self._tokens(*rest)
-        target_id = toks[0] if toks else ""
-        amount = _to_int(toks[1], 0) if len(toks) > 1 else 0
-        cfg = self.cfg
-
-        if not target_id or amount <= 0:
-            yield event.plain_result(
-                "📖 /钓鱼 赠送 <用户ID> <金额>　（只有金币能送）\n"
-                f"　需 {int(cfg['transfer_min_level'])} 级　单次≤"
-                f"{_fmt_gold(cfg['transfer_max_once'])} 金币　每天 "
-                f"{int(cfg['transfer_daily_limit'])} 次"
-            )
-            return
-        if target_id == str(user_id):
-            yield event.plain_result("🤔 不能送给自己")
-            return
-        # 目标必须是用户 ID 这类「无中文」的字符串，避免把「赠送鱼」这类
-        # 误输入当成 ID 处理，最后报出一个让人看不懂的金额错误。
-        if target_id.isdigit() and len(target_id) >= 5:
-            platform = ""
-            try:
-                platform = str(event.get_platform_name() or "").lower()
-            except Exception:
-                pass
-            if platform.startswith("qq_official"):
-                yield event.plain_result(
-                    f"⚠️ 「{target_id}」看着像 QQ 号，但 QQ 官方机器人的用户 ID 是"
-                    f"一长串字母数字（openid）\n"
-                    f"　用 QQ 号当目标，钱会进到另一个账号里，对方收不到。\n"
-                    f"　正确做法：让对方发 /钓鱼 金币，用他档案里的 ID。\n"
-                    f"　真要继续，请把号码换成那个 ID 再来一次。"
-                )
-                return
-        if any(not ch.isascii() for ch in target_id):
-            yield event.plain_result(
-                f"🤔 「{target_id}」不像是用户ID。\n"
-                "📖 /钓鱼 赠送 <用户ID> <金额>　（只有金币能送，鱼不能送）\n"
-                "　用户ID：在群里 @ 对方或看 TA 的 /钓鱼 金币 档案里的 ID"
-            )
-            return
-        if amount > int(cfg["transfer_max_once"]):
-            yield event.plain_result(
-                f"💸 单次最多赠送 {_fmt_gold(cfg['transfer_max_once'])} 金币"
-            )
-            return
-
-        # 按 id 排序加锁，避免互相赠送时死锁
-        first, second = sorted([str(user_id), target_id])
-        async with self._lock_for(first):
-            async with self._lock_for(second):
-                sender = await self._load_player(user_id)
-                level = _player_level(sender)
-                if level < int(cfg["transfer_min_level"]):
-                    yield event.plain_result(
-                        f"🔒 赠送需要 {int(cfg['transfer_min_level'])} 级"
-                        f"（你是 {level} 级）——这是给老手帮扶新手用的"
-                    )
-                    return
-
-                today = self._today_text()
-                if sender.get("transfer_date") != today:
-                    sender["transfer_date"] = today
-                    sender["transfer_count"] = 0
-                    sender["transfer_sent"] = 0
-                count = _safe_int(sender.get("transfer_count"), 0, 0)
-                sent = _safe_int(sender.get("transfer_sent"), 0, 0)
-
-                if count >= int(cfg["transfer_daily_limit"]):
-                    yield event.plain_result(f"📅 今天已赠送 {count} 次了")
-                    return
-                if sent + amount > int(cfg["transfer_daily_cap"]):
-                    remain = max(0, int(cfg["transfer_daily_cap"]) - sent)
-                    yield event.plain_result(
-                        f"📅 今日额度只剩 {_fmt_gold(remain)} 金币"
-                    )
-                    return
-                if _safe_int(sender.get("gold"), 0, 0) < amount:
-                    yield event.plain_result(
-                        f"💸 你只有 {_fmt_gold(sender.get('gold', 0))} 金币"
-                    )
-                    return
-
-                receiver = await self._load_player(target_id)
-                tax = int(amount * float(cfg["transfer_tax"]))
-                net = max(1, amount - tax)
-
-                sender["gold"] = _safe_int(sender.get("gold"), 0, 0) - amount
-                sender["transfer_date"] = today
-                sender["transfer_count"] = count + 1
-                sender["transfer_sent"] = sent + amount
-                receiver["gold"] = _safe_int(receiver.get("gold"), 0, 0) + net
-                receiver["transfer_received"] = (
-                    _safe_int(receiver.get("transfer_received"), 0, 0) + net
-                )
-
-                ok1 = await self._save_player(sender)
-                ok2 = await self._save_player(receiver)
-
-        lines = [
-            f"🎁 已赠送给 {target_id}：{_fmt_gold(net)} 金币"
-            + (f"（手续费 {_fmt_gold(tax)}）" if tax else ""),
-            f"　收款方账号：{target_id}（让对方发 /钓鱼 金币 核对余额）",
-            f"💰 余额 {_fmt_gold(sender['gold'])}　今日 "
-            f"{sender['transfer_count']}/{int(cfg['transfer_daily_limit'])} 次",
-        ]
-        if not (ok1 and ok2):
-            lines.append("⚠️ 保存出现问题，请联系管理员核对")
-        yield event.plain_result("\n".join(lines))
-
     # =========================================================================
     # 指令入口
     # =========================================================================
@@ -5467,8 +5462,6 @@ class FishingPlugin(Star):
             handler = self._cmd_profile(event, user_id)
         elif key in ("签到", "sign"):
             handler = self._cmd_sign(event, user_id)
-        elif key in ("给鱼", "grant"):
-            handler = self._cmd_grant(event, user_id, a2, after_first)
         elif key in ("订单", "任务", "order", "orders"):
             handler = self._cmd_orders(event, user_id, a2, after_first)
         elif key in ("钓点", "地点", "地图", "map", "location"):
@@ -5477,8 +5470,6 @@ class FishingPlugin(Star):
             handler = self._cmd_rods(event, user_id, a2, after_first)
         elif key in ("杂物", "漂流瓶", "收集品", "collect"):
             handler = self._cmd_collectibles(event, user_id)
-        elif key in ("赠送", "送", "give", "transfer"):
-            handler = self._cmd_transfer(event, user_id, *tokens)
 
         if handler is None:
             yield event.plain_result(
@@ -6683,8 +6674,7 @@ class FishingPlugin(Star):
             f"{sum(1 for c, n in (player.get('collectibles') or {}).items() if _safe_int(n, 0, 0) > 0)}"
             f"/{len(COLLECTIBLES)}　📜 纸条 {len(player.get('bottle_notes') or [])}",
             f"🎖 成就 {len(player.get('achievements') or [])}/{len(ACHIEVEMENTS)}"
-            f"　📋 订单 {_safe_int(player.get('total_orders'), 0, 0)}"
-            f"　🎁 送出 {_fmt_gold(player.get('transfer_sent', 0))}",
+            f"　📋 订单 {_safe_int(player.get('total_orders'), 0, 0)}",
             f"🎒 饵：{bait_text}",
             f"🧰 道具：{item_text}",
         ]
@@ -6713,63 +6703,6 @@ class FishingPlugin(Star):
         if not saved:
             lines.append("⚠️ 保存失败")
         yield event.plain_result("\n".join(lines))
-
-    async def _cmd_grant(
-        self, event: AstrMessageEvent, user_id: str, a2: str, after_first: str = ""
-    ):
-        """管理员：/钓鱼 给鱼 <用户ID> <鱼名> [数量]"""
-        if not self._is_admin(event):
-            yield event.plain_result("🚫 这是管理员指令，你没有权限")
-            return
-        # 用 token 解析，避免「鱼名 + 数量」被拼成一个字符串
-        toks = self._tokens(a2, after_first)
-        # a2 是用户ID；after_first 是「鱼名 [数量]」
-        if not toks:
-            yield event.plain_result(
-                "📖 /钓鱼 给鱼 <用户ID> <鱼名> [数量]\n"
-                "　例：/钓鱼 给鱼 123456789 锦鲤 2"
-            )
-            return
-        target_id = toks[0]
-        rest = toks[1:]
-        if not rest:
-            yield event.plain_result(
-                "📖 还要给个鱼名，例如：/钓鱼 给鱼 "
-                f"{target_id} 锦鲤 2\n"
-                f"　可用鱼名：{'、'.join(f['name'] for f in FISH_POOL)}"
-            )
-            return
-        fish = self._find_fish_by_name(rest[0])
-        if fish is None:
-            yield event.plain_result(
-                f"🤔 没有叫「{rest[0]}」的鱼\n"
-                f"　可用鱼名：{'、'.join(f['name'] for f in FISH_POOL)}"
-            )
-            return
-        count = max(1, min(_to_int(rest[1], 1) if len(rest) > 1 else 1, 20))
-
-        async with self._lock_for(target_id):
-            player = await self._load_player(target_id)
-            added = 0
-            for _ in range(count):
-                instance = _new_instance(
-                    fish["id"],
-                    _roll_quality_mult(self.cfg["quality_weights"]),
-                    source="grant",
-                )
-                if instance is not None:
-                    player.setdefault("inventory", []).append(instance)
-                    added += 1
-            player["total_caught"] = _safe_int(player.get("total_caught"), 0, 0) + added
-            _sync_collection(player)
-            saved = await self._save_player(player)
-
-        if not saved:
-            yield event.plain_result("⚠️ 发放失败，请查日志")
-            return
-        yield event.plain_result(
-            f"✅ 已给玩家 {target_id} 发放 {fish['name']} ×{added}"
-        )
 
     # =========================================================================
     # 帮助
@@ -6886,8 +6819,6 @@ class FishingPlugin(Star):
                     "　/钓鱼 查 <钓点名>　 这个钓点有哪些鱼",
                     "　/钓鱼 图鉴　　　　　 鱼的收集进度",
                         "　/钓鱼 杂物　　　　　 杂物与纸条收集",
-                        "　/钓鱼 赠送 <ID> <钱> （只有金币能送）",
-                        "　/钓鱼 给鱼 <ID> <鱼> 管理员",
                     ],
                 ),
                 (
@@ -6923,8 +6854,81 @@ class FishingPlugin(Star):
     # 生命周期
     # =========================================================================
 
+    async def _sync_defaults(self) -> None:
+        """把代码里的新默认数值同步进插件配置。
+
+        站长痛点：每次插件升级改了数值，都得手点一次 WebUI 的「重置配置」，
+        否则旧值一直生效。这里用「默认值指纹」解决：
+
+        * 指纹相同 → 什么都不做（几乎零开销）
+        * 指纹不同 → 按 ``defaults_sync_mode`` 决定同步范围：
+          ``auto``（默认）只同步数值与内容，``all`` 连开关一起重置，
+          ``off`` 只更新指纹、保留站长改过的所有值
+
+        ``data_*`` / ``backup_*`` 这类管理设置**永远**不同步。
+        """
+        try:
+            current = _defaults_fingerprint()
+            stored = str(self.config.get("config_fingerprint") or "").strip()
+            if stored == current:
+                return
+            mode = str(self.config.get("defaults_sync_mode") or "auto").strip().lower()
+            if mode not in ("auto", "all", "off"):
+                mode = "auto"
+
+            changed: dict[str, Any] = {}
+            if mode != "off":
+                keys = list(DEFAULTS) if mode == "all" else _synced_default_keys()
+                for key in keys:
+                    if key in ("config_fingerprint", "defaults_sync_mode"):
+                        continue
+                    if self.config.get(key) != DEFAULTS[key]:
+                        changed[key] = DEFAULTS[key]
+            changed["config_fingerprint"] = current
+
+            self.config.update(changed)
+            if not await self._save_plugin_config():
+                logger.warning("默认值同步写盘失败（本次启动仍按内存里的新值运行）")
+
+            if mode == "off":
+                logger.info(
+                    f"默认值同步已关闭（defaults_sync_mode=off），"
+                    f"仅更新指纹为 {current}，配置值保持站长自己的设置"
+                )
+            else:
+                logger.info(
+                    f"配置已同步 {len(changed) - 1} 项到新版默认值"
+                    f"（模式 {mode}，指纹 {current}）"
+                )
+        except Exception as e:  # pragma: no cover - 绝不能让插件启动失败
+            logger.warning(f"同步默认配置失败（不影响使用）：{e}")
+
+    async def _save_plugin_config(self) -> bool:
+        """把 self.config 落盘。优先异步 API，退回同步 API，取不到就只留在内存。"""
+        saver = getattr(self.config, "save_config_async", None)
+        if callable(saver):
+            try:
+                await saver()
+                return True
+            except Exception as e:
+                logger.warning(f"save_config_async 失败：{e}")
+        saver = getattr(self.config, "save_config", None)
+        if callable(saver):
+            try:
+                saver()
+                return True
+            except Exception as e:  # pragma: no cover
+                logger.warning(f"save_config 失败：{e}")
+        return False
+
     async def initialize(self) -> None:
         """插件激活时自检 + 打印配置摘要。"""
+        # 先把新版默认数值同步进配置，再按同步后的配置重建缓存
+        try:
+            await self._sync_defaults()
+            self._refresh_config()
+        except Exception as e:  # pragma: no cover - 不影响插件继续运行
+            logger.warning(f"配置同步/重载失败（继续用启动时读到的配置）：{e}")
         try:
             order = " < ".join(self._rarity_name(r) for r in RARITY_ORDER)
             interactive = "、".join(
@@ -7539,7 +7543,7 @@ CAST_WORDS = {
 
 #: 子命令关键词（用于「少打空格」容错：`卖1` -> `卖 1`）。
 #: 只列「后面跟数字/序号」这类会自然粘连的子命令；参数是用户 ID 或
-#: 名字的（赠送、给鱼…）不列，否则 `赠送鱼` 会被误拆成「赠送 + 鱼」。
+#: 名字的子命令不列，否则形如 `查鱼` 的输入会被误拆成「查 + 鱼」。
 SUBCOMMAND_WORDS = {
     "帮助", "菜单", "指令", "背包", "鱼篓", "卖", "清理", "一键卖出",
     "图鉴", "收集", "水族馆", "锁定", "解锁", "今日", "排行", "排行榜",
