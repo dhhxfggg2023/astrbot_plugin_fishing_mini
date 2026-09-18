@@ -982,13 +982,27 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       API_PREFIX = "";
       return rawBridgeCall(kind, endpoint, a, b);
     }
+    var attempts = [];
+    var shortErr = function (err) {
+      var d = err && err.response && err.response.data;
+      var msg =
+        (d && (d.message || d.error || d.detail)) ||
+        (err && err.message) ||
+        String(err || "未知错误");
+      return String(msg).slice(0, 60);
+    };
     var attempt = function (index, firstError) {
       if (index >= API_CANDIDATES.length) {
-        // 全部失败：把第一个错误抛出去（它最能说明问题），并附上试过的路径
+        // 全部失败：把「每个候选路径 + 它各自的错误」拼成一条能直接定位的报错，
+        // 这样在页面上就能看出到底是缺前缀、缺鉴权，还是 plugin_id 形式不对。
         var err = firstError || new Error("接口路径全部不可用");
-        err.triedEndpoints = API_CANDIDATES.map(function (pre) {
-          return pre + endpoint;
-        });
+        var detail = attempts
+          .map(function (item) {
+            return item.endpoint + " → " + item.error;
+          })
+          .join("；");
+        err.message = "试过 " + attempts.length + " 个路径都失败：" + detail;
+        err.attempts = attempts;
         return Promise.reject(err);
       }
       var candidate = API_CANDIDATES[index] + endpoint;
@@ -998,6 +1012,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
           return res;
         },
         function (err) {
+          attempts.push({ endpoint: candidate, error: shortErr(err) });
           return attempt(index + 1, firstError || err);
         },
       );
