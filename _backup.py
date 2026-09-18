@@ -352,6 +352,70 @@ class BackupStore:
                     return None
         return None
 
+    # ------------------------------------------------------ 改名 / 删除
+    def rename_snapshot(self, name: str, note: str) -> bool:
+        """给快照改备注（只动 JSON 里的 ``note``，**不重命名文件**）。
+
+        为什么不重命名文件：网页面板与「最新快照」判定都按 ``mtime`` 排序，
+        跟着文件名走的相对路径（``manual/xxx.json``）也被配置项引用着，
+        重命名会让「最新快照」的语义漂移、还可能留下断掉的引用。
+        所以这里只改内容，顺带刷新 ``index.json`` 让面板立刻看到新备注。
+
+        Args:
+            name: 快照名（文件名 / ``kind/文件名`` / ``latest``）。
+            note: 新的备注文本（空串 = 清空备注）。
+
+        Returns:
+            bool: 找到并写成功 ``True``；找不到快照、文件坏掉或写盘失败 ``False``。
+        """
+        try:
+            path = self.find_snapshot(name)
+            if path is None:
+                return False
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return False
+            if not isinstance(data, dict):
+                return False
+            data["note"] = str(note if note is not None else "")
+            try:
+                path.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
+                )
+            except OSError:
+                return False
+            self.rebuild_index()
+            return True
+        except Exception:  # pragma: no cover - 兜底：坏快照不该拖垮调用方
+            return False
+
+    def delete_snapshot(self, name: str) -> bool:
+        """删除一份快照（**幂等**：不存在就返回 ``False``，不抛异常）。
+
+        Args:
+            name: 快照名（文件名 / ``kind/文件名`` / ``latest``）。
+                  指向 ``players/``、``exported/`` 这类单玩家文件时也会删掉，
+                  因为 ``find_snapshot`` 认它们。
+
+        Returns:
+            bool: 真的删掉了 ``True``；本来就不存在 / 删不掉 ``False``。
+        """
+        try:
+            path = self.find_snapshot(name)
+            if path is None:
+                return False
+            if not path.is_file():
+                return False
+            try:
+                path.unlink()
+            except OSError:
+                return False
+            self.rebuild_index()
+            return True
+        except Exception:  # pragma: no cover - 兜底：删除失败不该拖垮调用方
+            return False
+
     # ------------------------------------------------------------ 清理
     def prune(self, kind: str, keep: int) -> list[str]:
         """只保留最新的 keep 份（0 = 不清理），返回被删掉的文件名。"""

@@ -117,6 +117,9 @@ jobs:
             test -f "$DST/metadata.yaml"
             test ! -e "$DST/docker"            # 开发用文件不该进运行目录
             test ! -e "$DST/Dockerfile"
+            # 页面与页面 i18n 是**运行时功能**，清理列表绝对不能顺手删掉
+            test -f "$DST/pages/editor/index.html"
+            test -f "$DST/.astrbot-plugin/i18n/zh-CN.json"
             echo "入口脚本同步插件 ✅"
           '
 

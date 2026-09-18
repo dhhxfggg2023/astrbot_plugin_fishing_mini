@@ -315,6 +315,12 @@
     "default": "",
     "hint": "保存或重载后这里会显示：玩家数、存档数量、最近快照、存档目录、上次操作结果。"
   },
+  "editor_status": {
+    "description": "数据编辑器页面状态（插件回写，页面读取）｜不用手动改",
+    "type": "text",
+    "default": "",
+    "hint": "「插件页面 → 数据编辑器」把指令上传到 data/attachments/fishing_editor_bridge.json，插件每 1.5 秒轮询执行，并把结果（存档清单、玩家数、下次自动存档时间）以 JSON 字符串回写到这里。手改没有意义，下一次保存就被覆盖。"
+  },
   "data_action": {
     "description": "数据操作：选好后点保存即执行（执行完自动复位为「无」）",
     "type": "string",

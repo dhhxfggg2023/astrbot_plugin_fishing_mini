@@ -649,6 +649,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 }
 .notice .notice-icon { flex: none; }
 .notice b { color: var(--fg); }
+.notice-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-bottom-color: var(--danger);
+}
+.notice-danger b { color: var(--danger); }
 
 /* ============================== 底部状态栏 ============================== */
 .statusbar {
@@ -794,9 +800,15 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
 <script>
 /* =============================================================================
-   群钓鱼数据编辑器 —— 前端逻辑
-   A 组：只做界面与交互，用内置演示数据渲染（离线预览）
-   B 组：把 loadConfig / saveConfig / loadSnapshots 接到真实数据通道
+   群钓鱼数据编辑器 —— 前端逻辑（单文件、零外部依赖）
+
+   数据通道（细节见下面第 2 节）：
+     * 读：apiGet("plugins/<pluginName>/config") → 解析 fish_defs / rod_defs /
+           bait_defs / item_defs / location_defs，以及插件回写的 editor_status
+     * 写：把 {nonce, ts, action, payload} 上传成固定文件名
+           fishing_editor_bridge.json（POST /api/files → data/attachments/），
+           插件每 1.5 秒轮询执行 → 1~2 秒生效
+     * 离线（检测不到 AstrBotPluginPage）：用内置演示数据渲染，只提示不发送
    ============================================================================= */
 (function () {
   "use strict";
@@ -805,6 +817,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
      1. 上下文与主题
      AstrBot 插件页面通过 window.AstrBotPluginPage 注入上下文；
      离线打开（file:// 预览）时用默认值兜底，并显示「离线预览」徽标。
+
+     注意：桥接 SDK 的上下文是**异步**塞进来的（先 __setInitialContext，
+     再让 ready() 决议），所以这里不能只在脚本开头读一次。
      =========================================================================== */
   var sdk = window.AstrBotPluginPage || null;
 
@@ -819,6 +834,23 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   }
 
   var ctx = readContext();
+
+  /** 等桥接 SDK 把上下文灌进来（离线 / 老 SDK 立刻返回）。 */
+  function waitForContext() {
+    if (!sdk || typeof sdk.ready !== "function") return Promise.resolve(readContext());
+    var ready;
+    try {
+      ready = sdk.ready();
+    } catch (e) {
+      return Promise.resolve(readContext());
+    }
+    if (!ready || typeof ready.then !== "function") return Promise.resolve(readContext());
+    return Promise.race([
+      ready,
+      // 兜底：老版本 SDK 的 ready 可能永远不决议，别把页面卡在「检测中」
+      new Promise(function (resolve) { setTimeout(function () { resolve(readContext()); }, 1500); })
+    ]).then(function () { return readContext(); }, function () { return readContext(); });
+  }
 
   /**
    * 判断初始主题。优先级：
@@ -854,8 +886,20 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     displayName: ctx.displayName || "群钓鱼",
     pageTitle: ctx.pageTitle || "数据编辑器",
     isDark: resolveInitialDark(),
-    locale: ctx.locale || "zh-CN"
+    locale: ctx.locale || "zh-CN",
+    //: 桥接可用的插件标识（"name" 或 "author/name"，探测成功后替换）
+    pluginBase: String(ctx.pluginName || ctx.plugin_name || "astrbot_plugin_qq_fishing")
+      .replace(/^\/+|\/+$/g, "")
   };
+
+  /** 主题变化 / 上下文迟到时，把 SDK 的上下文并回 ENV。 */
+  function mergeContext(next) {
+    if (!next || typeof next !== "object") return;
+    if (next.displayName) ENV.displayName = String(next.displayName);
+    if (next.pageTitle) ENV.pageTitle = String(next.pageTitle);
+    if (next.locale) ENV.locale = String(next.locale);
+    if (next.pluginName) ENV.pluginBase = String(next.pluginName).replace(/^\/+|\/+$/g, "");
+  }
 
   function applyTheme(isDark) {
     ENV.isDark = !!isDark;
@@ -863,60 +907,632 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   }
   applyTheme(ENV.isDark);
 
-  document.getElementById("pluginName").textContent = ENV.pluginName;
-  if (ctx.pageTitle) document.title = ctx.displayName + " · " + ctx.pageTitle;
+  function paintIdentity() {
+    document.getElementById("pluginName").textContent = ENV.pluginName;
+    document.title = (ENV.displayName || "群钓鱼") + " · " + (ENV.pageTitle || "数据编辑器");
+  }
+  paintIdentity();
 
   /* ===========================================================================
-     2. 数据通道（B 组接真实接口，签名保持不变）
+     2. 数据通道
+
+     页面 → 插件（写）：
+       把 {nonce, ts, action, payload} 打包成 JSON，用**固定文件名**
+       fishing_editor_bridge.json 上传到 /api/files —— 落点是
+       <AstrBotRoot>/data/attachments/fishing_editor_bridge.json。
+       重复上传天然覆盖，文件里永远只有最新一条指令。
+
+     插件 → 页面（读）：
+       插件每 1.5 秒轮询那个文件，执行后把结果写成 JSON 字符串塞进配置项
+       editor_status；页面 GET 插件配置后 JSON.parse 就能拿到存档清单、
+       玩家数、下次自动存档时间、可改的数值键白名单。
+
+     ⚠️ 桥接会把 endpoint 拼到 /api/v1/plugins/extensions/<pluginName>/ 后面，
+        所以这里的路径都是「相对插件」的，例如 "plugins/xxx/config"。
      =========================================================================== */
 
-  /**
-   * 读取插件配置。
-   * TODO(B组)：真实环境改为 GET /api/plugins/<pluginName>/config
-   *           并把它解析成 { fish: [...], locations: [...], ..., numbers: [...],
-   *                            autoBackup: {...} } 这种按标签页分组的结构。
-   * @returns {Promise<object>}
-   */
-  async function loadConfig() {
-    // A 组：返回内置演示数据（深拷贝，避免被编辑污染）
-    return deepClone(DEMO.config);
+  /** 指令文件名（必须与 _editor_bridge.py 的 BRIDGE_FILE_NAME 一致） */
+  var BRIDGE_FILE = "fishing_editor_bridge.json";
+
+  /** 生成一个 nonce（插件靠它判断「这条指令是不是新的」）。 */
+  function makeNonce() {
+    return "n" + Date.now().toString(36) + "-" +
+      Math.random().toString(36).slice(2, 10) +
+      Math.random().toString(36).slice(2, 6);
+  }
+
+  /** 统一的桥接请求封装：把「怎么调」和「怎么报错」分开。 */
+  function bridgeRequest(kind, endpoint, a, b) {
+    if (!sdk) {
+      var off = new Error("离线预览：没有 AstrBot 桥接，不会真正发送");
+      off.offline = true;
+      return Promise.reject(off);
+    }
+    var call;
+    try {
+      if (kind === "get") call = sdk.apiGet(endpoint, a || {});
+      else if (kind === "post") call = sdk.apiPost(endpoint, a || {});
+      else call = sdk.upload(endpoint, a, b);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return Promise.resolve(call);
+  }
+
+  /** 把各种失败形态整理成「人话 + 能定位的信息」（绝不静默失败）。 */
+  function describeError(err, endpoint) {
+    if (!err) return "未知错误";
+    if (err.offline) return err.message;
+    var status = err.status || (err.response && err.response.status);
+    var detail = "";
+    if (err.response) {
+      var data = err.response.data;
+      if (data && typeof data === "object") {
+        detail = data.message || data.error || data.detail || "";
+      } else if (typeof data === "string") {
+        detail = data.slice(0, 200);
+      }
+      if (!detail && err.response.statusText) detail = err.response.statusText;
+    }
+    var head = status ? ("HTTP " + status) : "请求失败";
+    var tail = detail ? ("：" + detail) : ("（" + String(err.message || endpoint) + "）");
+    return head + " " + endpoint + tail;
+  }
+
+  /** 试出一个能用的插件标识：context.pluginName 可能是 name，也可能是 author/name。 */
+  async function resolvePluginBase(preferred) {
+    var candidates = [];
+    [preferred, ENV.pluginBase, ctx.pluginName, ctx.plugin_name,
+     "astrbot_plugin_qq_fishing", "dhhxfggg/astrbot_plugin_qq_fishing"]
+      .forEach(function (item) {
+        var base = String(item || "").trim().replace(/^\/+|\/+$/g, "");
+        if (base && candidates.indexOf(base) < 0) candidates.push(base);
+      });
+    var lastError = null;
+    for (var i = 0; i < candidates.length; i++) {
+      try {
+        await bridgeRequest("get", "plugins/" + candidates[i] + "/config", {});
+        ENV.pluginBase = candidates[i];
+        return candidates[i];
+      } catch (e) {
+        lastError = e;
+        if (e && e.offline) throw e;   // 离线：换名字也没用
+      }
+    }
+    throw lastError || new Error("找不到可用的插件标识（pluginName）");
+  }
+
+  /** 读插件配置（在线）→ 原始配置对象。 */
+  async function fetchRawConfig() {
+    var base = await resolvePluginBase(ENV.pluginBase);
+    var res = await bridgeRequest("get", "plugins/" + base + "/config", {});
+    var config = res && typeof res === "object"
+      ? (res.config || res)   // 接口返回 {metadata, config, i18n}；老版本可能直接给配置
+      : null;
+    if (!config || typeof config !== "object") {
+      throw new Error("插件配置读取成功但内容为空（pluginName=" + base + "）");
+    }
+    return config;
+  }
+
+  /** editor_status（插件回写的 JSON 字符串）→ 对象；没有/坏了就返回 null。 */
+  function parseEditorStatus(rawConfig) {
+    var raw = rawConfig ? rawConfig.editor_status : null;
+    if (raw && typeof raw === "object") return raw;
+    if (typeof raw !== "string" || !raw.trim()) return null;
+    try {
+      var parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /* ---------------------------------------------------------------------------
+     2b. 配置 <-> 页面表格 的转换
+     配置里内容是「竖线分隔的字符串 / 多行文本」，页面里是对象数组。
+     --------------------------------------------------------------------------- */
+
+  var SEP = "|";
+
+  function toText(v) { return v === undefined || v === null ? "" : String(v); }
+  function toNum(v) {
+    var n = Number(String(v === undefined || v === null ? "" : v).replace(/,/g, ""));
+    return isFinite(n) ? n : v;
+  }
+  function cell(v) {
+    // 竖线是字段分隔符，单元格里绝对不能出现（否则会把一行劈成两列）
+    return toText(v).replace(/[|｜\r\n]/g, " ").trim();
+  }
+  function splitLine(line) {
+    return toText(line).replace(/｜/g, SEP).split(SEP)
+      .map(function (s) { return s.trim(); });
+  }
+  function num(v, d) { var n = Number(v); return isFinite(n) ? n : d; }
+  function text(v, d) { return toText(v) === "" ? (d === undefined ? "" : d) : toText(v); }
+
+  /** 每条内容表定义：配置键 + 线格式 + 两个方向的映射。 */
+  var TABLE_DEFS = {
+    fish: {
+      configKey: "fish_defs",
+      configType: "text",
+      /* id|名称|稀有度|基准价|分布|说明 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 4 || !p[0] || !p[1]) return null;
+        return { id: p[0], name: p[1], rarity: text(p[2], "常见"), value: toNum(p[3]),
+                 dist: text(p[4]), flavor: text(p[5]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.rarity), cell(r.value),
+                cell(r.dist), cell(r.flavor)].join(SEP);
+      }
+    },
+    rods: {
+      configKey: "rod_defs",
+      configType: "list",
+      /* id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 6 || !p[0] || !p[1]) return null;
+        var hasLevel = p.length >= 8;
+        return {
+          id: p[0], name: p[1], emoji: text(p[2]), price: toNum(p[3]),
+          value_bonus: toNum(p[4]), luck_bonus: toNum(p[5]),
+          unlock_level: hasLevel ? toNum(p[6]) : 1,
+          desc: hasLevel ? text(p[7]) : text(p[6])
+        };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.price, 0)),
+                cell(num(r.value_bonus, 0)), cell(num(r.luck_bonus, 0)),
+                cell(Math.max(1, num(r.unlock_level, 1))), cell(r.desc)].join(SEP);
+      }
+    },
+    baits: {
+      configKey: "bait_defs",
+      configType: "list",
+      /* id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 7 || !p[0] || !p[1]) return null;
+        var hasLevel = p.length >= 10;
+        return {
+          id: p[0], name: p[1], emoji: text(p[2]), price: toNum(p[3]),
+          bundle: toNum(p[4]), luck: toNum(p[5]), weights: text(p[6]),
+          unlock_level: hasLevel ? toNum(p[7]) : 1,
+          required_rod: hasLevel ? text(p[8]) : "",
+          desc: hasLevel ? text(p[9]) : text(p[7])
+        };
+      },
+      serialize: function (r) {
+        var weights = text(r.weights).trim();
+        if (!weights) weights = "1,1,1,1,1";
+        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.price, 0)),
+                cell(num(r.bundle, 0)), cell(num(r.luck, 0)), cell(weights),
+                cell(Math.max(1, num(r.unlock_level, 1))), cell(r.required_rod),
+                cell(r.desc)].join(SEP);
+      }
+    },
+    items: {
+      configKey: "item_defs",
+      configType: "list",
+      /* id|名称|emoji|价格|说明|效果(key=值;分号分隔) */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 6 || !p[0] || !p[1]) return null;
+        return { id: p[0], name: p[1], emoji: text(p[2]), price: toNum(p[3]),
+                 desc: text(p[4]), effects: text(p[5]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.price, 0)),
+                cell(r.desc), cell(r.effects)].join(SEP);
+      }
+    },
+    locations: {
+      configKey: "location_defs",
+      configType: "list",
+      /* id|名称|emoji|解锁等级|解锁金币|价值倍率|说明 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 6 || !p[0] || !p[1]) return null;
+        return { id: p[0], name: p[1], emoji: text(p[2]),
+                 level_gate: toNum(p[3]), gold_gate: toNum(p[4]),
+                 value_mult: toNum(p[5]), desc: text(p[6]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.emoji),
+                cell(Math.max(1, num(r.level_gate, 1))), cell(num(r.gold_gate, 0)),
+                cell(num(r.value_mult, 1)), cell(r.desc)].join(SEP);
+      }
+    }
+  };
+
+  /** 「数值」标签页固定展示的配置键：[键, 名称, 单位, 说明]。 */
+  var NUMBER_KEYS = [
+    ["stamina_max", "体力上限", "点", "攒满需要 stamina_regen_seconds × 上限"],
+    ["stamina_regen_seconds", "体力恢复间隔", "秒", "每多少秒恢复 1 点；填 0 = 本服不限体力"],
+    ["multi_cast_max", "单次连钓上限", "次", "/钓鱼 <数字> 一次最多连钓几条"],
+    ["fish_cost", "每竿钓费", "金币", "空钩也要付的钱；0 = 免费下竿"],
+    ["initial_gold", "新玩家初始金币", "金币", "第一次玩时给多少"],
+    ["sign_reward", "签到奖励", "金币", "每天签到拿多少"],
+    ["sell_discount", "卖鱼折扣", "倍", "1.0 = 原价卖，0.8 = 打八折"],
+    ["fish_value_mult", "鱼价总闸", "倍", "所有鱼基准价的全局倍率（改物价用这个）"],
+    ["location_codex_gate", "钓点图鉴门槛", "比例", "上一个钓点图鉴开到几成才能前往下一个"],
+    ["item_drop_chance", "杂物概率", "概率", "没中鱼时钩上带物件的概率"],
+    ["bottle_note_chance", "漂流瓶纸条概率", "概率", "钩到漂流瓶时里面有纸条的概率"],
+    ["variant_chance", "变异概率", "概率", "钓到变异个体的概率"],
+    ["level_xp_base", "升级曲线基准", "竿", "每级基础竿数"],
+    ["level_xp_ratio", "等级曲线底数", "倍", "指数曲线底数，越大后期越难升级"],
+    ["hook_rate_fallback", "上钩率兜底", "概率", "鱼饵配置写错时的兜底咬钩率"],
+    ["aquarium_capacity", "水族馆容量", "条", "一开始能养几条"],
+    ["aquarium_bonus", "水族馆加成", "倍", "馆藏收益的倍率"],
+    ["order_count", "订单数量", "个", "同时挂几个订单"],
+    ["order_reward_mult", "订单奖励倍率", "倍", "提交订单的奖励系数"],
+    ["backpack_base", "初始鱼篓容量", "条", "背包一开始能装多少"]
+  ];
+
+  /** lastLoadError：本轮载入失败的原因（给页面显示，不白屏）。 */
+  var lastLoadError = "";
+  /** skipped：哪些内容表有行没解析出来（提示用户先导出留底）。 */
+  var skipped = {};
+  /** 最近一次读到的 editor_status（保存时要拿 numbers_editable 白名单）。 */
+  var lastStatus = null;
+  /** 自动重载定时器 */
+  var reloadTimer = null;
+
+  /** 页面表格 -> 配置表（返回 {configKey: text|array}）。 */
+  function serializeContentTables() {
+    var tables = {};
+    Object.keys(TABLE_DEFS).forEach(function (tabId) {
+      var def = TABLE_DEFS[tabId];
+      var rows = (state.data[tabId] || []).filter(function (row) {
+        return String(row && row.id || "").trim() !== "";
+      });
+      var lines = rows.map(function (row) { return def.serialize(row); });
+      tables[def.configKey] = def.configType === "text" ? lines.join("\n") : lines;
+    });
+    return tables;
+  }
+
+  /** 页面「数值」表格 -> 只挑插件白名单里的键（白名单外的绝不发）。 */
+  function numberValuesFromPage(statusHint) {
+    var allowed = (statusHint && statusHint.numbers_editable) || null;
+    var out = {};
+    (state.data.numbers || []).forEach(function (row) {
+      var key = String(row && row.key || "");
+      if (!key) return;
+      if (allowed && allowed.indexOf(key) < 0) return;
+      if (row.value === "" || row.value === null || row.value === undefined) return;
+      out[key] = row.value;
+    });
+    return out;
+  }
+
+  /** editor_status 里的自动备份设置 -> 页面表单字段。 */
+  function autobackupFromStatus(status) {
+    var ab = (status && status.autobackup) || null;
+    if (!ab) return deepClone(DEMO.autoBackup);
+    return {
+      enable: !!ab.enable,
+      dailyHour: num(ab.daily_hour, 4),
+      intervalHours: num(ab.interval_hours, 6),
+      keepDaily: num(ab.keep_daily, 30),
+      keepInterval: num(ab.keep_interval, 20)
+    };
+  }
+
+  /** 自动备份设置：页面字段 -> 插件字段（键名以 DEFAULTS 为准）。 */
+  function autobackupPayload(ab) {
+    return {
+      enable: !!ab.enable,
+      daily_hour: num(ab.dailyHour, 4),
+      interval_hours: num(ab.intervalHours, 6),
+      keep_daily: num(ab.keepDaily, 30),
+      keep_interval: num(ab.keepInterval, 20)
+    };
   }
 
   /**
-   * 保存数据。
-   * TODO(B组)：真实环境改为「打包 JSON → upload() 到插件桥接文件」，
-   *           插件轮询到文件后调用 save_config_async() 写回配置。
-   * @param {object} payload 与 loadConfig() 返回同结构，另含 autoBackup
-   * @returns {Promise<{ok: boolean, message?: string}>}
+   * 读取编辑器需要的全部数据。
+   * 在线：GET 插件配置 → 解析内容表 + 用 editor_status 补存档/玩家/备份设置。
+   * 离线：返回内置演示数据（保存不会真正生效）。
+   * 解析失败会 **抛出带原因的错误**，由调用方显示在页面上（不白屏）。
+   */
+  async function loadConfig() {
+    if (!ENV.online) return deepClone(DEMO.config);
+    var raw;
+    try {
+      raw = await fetchRawConfig();
+    } catch (e) {
+      lastLoadError = describeError(e, "plugins/" + ENV.pluginBase + "/config");
+      if (e && e.offline) return deepClone(DEMO.config);
+      throw new Error(lastLoadError);
+    }
+
+    var out = {};
+    var notes = [];
+    Object.keys(TABLE_DEFS).forEach(function (tabId) {
+      var def = TABLE_DEFS[tabId];
+      var rawValue = raw[def.configKey];
+      var lines = def.configType === "text"
+        ? toText(rawValue).split("\n")
+        : (Array.isArray(rawValue) ? rawValue.slice() : null);
+      if (lines === null) {
+        notes.push(def.configKey + " 不是字符串数组，已留空（原值没动）");
+        out[tabId] = [];
+        return;
+      }
+      var rows = [];
+      lines.forEach(function (line) {
+        var s = toText(line).trim();
+        if (!s || s.charAt(0) === "#") return;
+        var row;
+        try {
+          row = def.parse(s);
+        } catch (err) {
+          row = null;
+        }
+        if (row === null) {
+          skipped[def.configKey] = (skipped[def.configKey] || 0) + 1;
+          return;
+        }
+        rows.push(row);
+      });
+      out[tabId] = rows;
+    });
+
+    var status = parseEditorStatus(raw);
+    lastStatus = status;
+    var allowed = (status && status.numbers_editable) || null;
+    out.numbers = [];
+    NUMBER_KEYS.forEach(function (item) {
+      var key = item[0];
+      // 插件给的白名单才是权威：不在里面说明这个键不让页面改
+      if (allowed && allowed.indexOf(key) < 0) return;
+      if (!(key in raw)) return;
+      out.numbers.push({
+        key: key, label: item[1], value: toNum(raw[key]), unit: item[2], desc: item[3]
+      });
+    });
+
+    var skippedHint = Object.keys(skipped).map(function (k) {
+      return k + " 有 " + skipped[k] + " 行没解析出来";
+    }).join("；");
+    if (skippedHint) {
+      notes.push(skippedHint + "（这些行保存后会丢，先点「导出 JSON」留底）");
+    }
+
+    out.autoBackup = autobackupFromStatus(status);
+    out._notes = notes;
+    out._status = status;
+    return out;
+  }
+
+  /** 发一条指令给插件（上传固定文件名的小 JSON）。 */
+  async function sendCommand(action, payload) {
+    if (!ENV.online) {
+      return { accepted: false, message: "离线预览：不会真正执行「" + action + "」" };
+    }
+    var envelope = {
+      nonce: makeNonce(),
+      ts: Math.round(Date.now() / 1000),
+      plugin: ENV.pluginBase,
+      page: "editor",
+      action: action,
+      payload: payload || {}
+    };
+    var body = JSON.stringify(envelope);
+    var file;
+    try {
+      file = new File([body], BRIDGE_FILE, { type: "application/json" });
+    } catch (e) {
+      // 极老的浏览器没有 File 构造器：退化用 Blob 并手动补 name
+      file = new Blob([body], { type: "application/json" });
+      file.name = BRIDGE_FILE;
+    }
+    try {
+      var res = await bridgeRequest("upload", "/api/files", file);
+      return {
+        accepted: true,
+        message: "已提交「" + action + "」",
+        detail: (res && typeof res === "object") ? res : { raw: res }
+      };
+    } catch (e) {
+      return { accepted: false, message: describeError(e, "/api/files") };
+    }
+  }
+
+  /**
+   * 保存数据：内容表 + 核心数值 + 自动备份设置，各发一条指令。
+   * 返回的 ok 只代表「上传成功」，真正生效要等插件轮询（1~2 秒）。
    */
   async function saveConfig(payload) {
     if (!ENV.online) {
       return { ok: false, message: "离线预览：不会真正保存" };
     }
-    // TODO(B组)：替换为真实上传通道
-    return { ok: false, message: "尚未接入保存通道（B 组待实现）" };
-  }
+    var results = [];
+    try {
+      results.push(await sendCommand("save_content", { tables: serializeContentTables() }));
+      var numbers = numberValuesFromPage(lastStatus);
+      if (Object.keys(numbers).length) {
+        results.push(await sendCommand("save_numbers", numbers));
+      }
+      if (payload && payload.autoBackup && state.autoBackupDirty) {
+        results.push(await sendCommand("save_autobackup", autobackupPayload(payload.autoBackup)));
+      }
+    } catch (e) {
+      return { ok: false, message: "提交失败：" + describeError(e, "/api/files") };
+    }
 
-  /**
-   * 读取存档列表与自动备份设置。
-   * TODO(B组)：真实环境读插件回写的状态配置项（存档清单 / 玩家数 / 下次自动存档时间）。
-   * @returns {Promise<{snapshots: Array, autoBackup: object}>}
-   */
-  async function loadSnapshots() {
+    var accepted = results.filter(function (r) { return r.accepted; });
+    if (!accepted.length) {
+      var first = results[0] || {};
+      return { ok: false, message: "上传没成功：" + (first.message || "未知原因") };
+    }
+    if (accepted.length < results.length) {
+      var bad = results.filter(function (r) { return !r.accepted; })[0] || {};
+      return {
+        ok: false,
+        message: "只提交了 " + accepted.length + "/" + results.length +
+          " 条指令；失败的那条：" + (bad.message || "未知原因")
+      };
+    }
+    // 上传成功 ≠ 已生效：插件每 1.5 秒才轮询一次，所以这里如实说「已提交」，
+    // 2 秒后自动重载，从 editor_status 里读真实结果。
+    scheduleReload(2000);
     return {
-      snapshots: deepClone(DEMO.snapshots),
-      autoBackup: deepClone(DEMO.autoBackup)
+      ok: true,
+      message: "已提交 " + accepted.length + " 条指令，1~2 秒后生效（页面会自动重载）"
     };
   }
 
-  /** 存档动作（新建 / 恢复 / 删除 / 重命名）。
-   *  TODO(B组)：走与 saveConfig 相同的上传通道，带上 { action, payload }。 */
+  /** 读存档列表与自动备份设置（来自 editor_status）。 */
+  async function loadSnapshots() {
+    if (!ENV.online) {
+      return {
+        snapshots: deepClone(DEMO.snapshots),
+        autoBackup: deepClone(DEMO.autoBackup)
+      };
+    }
+    try {
+      var raw = await fetchRawConfig();
+      var status = parseEditorStatus(raw);
+      lastStatus = status;
+      var list = ((status && status.snapshots) || []).map(function (s, i) {
+        return {
+          id: "s" + (i + 1) + "_" + text(s.name),
+          name: text(s.name),                 // 真实文件名：恢复/删除/改名都用它
+          rel: text(s.rel || s.name),
+          kind: text(s.kind, "manual"),
+          kind_name: text(s.kind_name),
+          note: text(s.note),
+          time: text(s.time),
+          players: (s.players === undefined || s.players === null) ? "—" : s.players,
+          size: text(s.size, "—"),
+          mtime: num(s.mtime, 0)
+        };
+      });
+      return {
+        snapshots: list,
+        autoBackup: autobackupFromStatus(status),
+        players: status ? num(status.players, 0) : 0,
+        nextAutoBackup: status ? text(status.next_auto_backup) : "",
+        status: status
+      };
+    } catch (e) {
+      lastLoadError = describeError(e, "plugins/" + ENV.pluginBase + "/config");
+      return { snapshots: [], autoBackup: deepClone(DEMO.autoBackup), error: lastLoadError };
+    }
+  }
+
+  /** 存档动作（新建 / 恢复 / 删除 / 重命名）。 */
   async function runSnapshotAction(action, payload) {
     if (!ENV.online) {
       return { ok: false, message: "离线预览：不会真正执行「" + action + "」" };
     }
-    // TODO(B组)：替换为真实上传通道
-    return { ok: false, message: "尚未接入存档通道（B 组待实现）" };
+    var map = {
+      create: "snapshot_create",
+      restore: "snapshot_restore",
+      delete: "snapshot_delete",
+      rename: "snapshot_rename",
+      refresh: "refresh"
+    };
+    var remote = map[action];
+    if (!remote) return { ok: false, message: "不认识的动作「" + action + "」" };
+
+    var p = payload || {};
+    var body = {};
+    if (remote === "snapshot_create") {
+      body = { note: text(p.note) };
+    } else if (remote === "snapshot_restore") {
+      body = { name: text(p.name || p.id), player: text(p.player) };
+    } else if (remote === "snapshot_delete") {
+      body = { name: text(p.name || p.id) };
+    } else if (remote === "snapshot_rename") {
+      body = { name: text(p.name || p.id), note: text(p.note) };
+    }
+    if (remote !== "refresh" && remote !== "snapshot_create" && !body.name) {
+      return { ok: false, message: "这条存档没有文件名（先点「刷新列表」再试）" };
+    }
+
+    var res = await sendCommand(remote, body);
+    if (!res.accepted) return { ok: false, message: res.message };
+
+    var status = await waitForStatus();
+    if (!status) {
+      scheduleReload(1800);
+      return { ok: true, message: "已提交，插件还没回写结果（稍后自动刷新）" };
+    }
+    // 插件回写了新状态：立刻用它刷新界面（不用等下一次整页重载）
+    applyStatus(status);
+    render();
+    scheduleReload(1800);
+    return { ok: status.ok !== false, message: text(status.last_result) || res.message };
+  }
+
+  /** 把 editor_status 的即时变更并进页面状态（存档列表 / 玩家数 / 备份设置）。 */
+  function applyStatus(status) {
+    if (!status || typeof status !== "object") return;
+    lastStatus = status;
+    if (Array.isArray(status.snapshots)) {
+      state.snapshots = status.snapshots.map(function (s, i) {
+        return {
+          id: "s" + (i + 1) + "_" + text(s.name),
+          name: text(s.name),
+          rel: text(s.rel || s.name),
+          kind: text(s.kind, "manual"),
+          kind_name: text(s.kind_name),
+          note: text(s.note),
+          time: text(s.time),
+          players: (s.players === undefined || s.players === null) ? "—" : s.players,
+          size: text(s.size, "—"),
+          mtime: num(s.mtime, 0)
+        };
+      });
+    }
+    if (status.players !== undefined) state.players = num(status.players, 0);
+    if (status.next_auto_backup !== undefined) state.nextAutoBackup = text(status.next_auto_backup);
+    if (status.autobackup) state.autoBackup = autobackupFromStatus(status);
+    if (status.last_result) {
+      state.lastResult = { ok: status.ok !== false, text: text(status.last_result),
+                           time: text(status.updated_text) };
+    }
+  }
+
+  /** 等插件处理完这条指令：读配置直到 editor_status.updated_at 变新。 */
+  async function waitForStatus(tries) {
+    // NaN/undefined 一律当 0：否则第一次动作会白等满 6 秒才放弃
+    var base = num(lastStatus && lastStatus.updated_at, 0);
+    var rounds = tries || 10;   // 10 × 600ms ≈ 6 秒，足够覆盖 1.5 秒的轮询
+    for (var i = 0; i < rounds; i++) {
+      await sleep(600);
+      try {
+        var raw = await fetchRawConfig();
+        var status = parseEditorStatus(raw);
+        if (status && num(status.updated_at, 0) > base) {
+          lastStatus = status;
+          return status;
+        }
+      } catch (e) {
+        // 读失败就再等一轮（刚上传完，配置可能正被插件重写）
+      }
+    }
+    return null;
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  /** 1~2 秒后自动重载（上传成功 ≠ 插件已经执行完）。 */
+  function scheduleReload(delay) {
+    if (reloadTimer) clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(function () {
+      reloadTimer = null;
+      reloadAll(true);
+    }, delay || 2000);
+    state._reloadTimer = reloadTimer;   // 仅用于测试/排查：能取消这次自动重载
   }
 
   /* ===========================================================================
@@ -1277,7 +1893,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     snapshots: [],
     autoBackup: { enable: true, dailyHour: 4, intervalHours: 6, keepDaily: 30, keepInterval: 20 },
     savedAt: null,
-    loading: true
+    loading: true,
+    loadError: "",         // 读取插件配置失败时的原因（页面顶部显示，不白屏）
+    loadNotes: [],         // 解析时的小提示（比如某张表有几行没认出来）
+    players: undefined,    // 玩家数（来自 editor_status）
+    nextAutoBackup: ""     // 下次自动存档时间（来自 editor_status）
   };
 
   /* ===========================================================================
@@ -1712,6 +2332,13 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     html += '<section class="card">';
     html += '<div class="card-head"><h2>💾 ' + esc(tab.title) + "</h2>" +
       '<span class="hint">' + esc(tab.hint) + "</span></div>";
+    if (ENV.online) {
+      html += '<div class="notice"><span class="notice-icon">ℹ️</span><div>' +
+        "这里的动作会排队交给插件执行（上传指令 → 插件每 1.5 秒轮询），1~2 秒后页面自动刷新。" +
+        (state.players === undefined ? "" : "　当前玩家数：<b>" + esc(state.players) + "</b>") +
+        (state.nextAutoBackup ? "　下次自动存档：<b>" + esc(state.nextAutoBackup) + "</b>" : "") +
+        "</div></div>";
+    }
     html += '<div class="new-snap">';
     html += '<div class="form-row grow"><label>存档名字（备注）</label>' +
       '<span class="field"><input type="text" id="newSnapNote" placeholder="例如：改物价前 / 版本升级前" /></span></div>';
@@ -1776,9 +2403,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     } else {
       actions =
         '<button class="btn btn-sm" data-act="snap:restore" data-index="' + i + '" title="把这批玩家数据恢复到这份存档">↩ 恢复</button>' +
-        '<button class="btn btn-sm" data-act="snap:download" data-index="' + i + '" title="下载成 JSON 文件留底">⬇ 下载</button>' +
+        '<button class="btn btn-sm" data-act="snap:download" data-index="' + i + '" title="下载这份存档的信息（名字/时间/玩家数），不是玩家数据本体">⬇ 下载信息</button>' +
         '<span class="spacer"></span>' +
-        '<button class="btn btn-sm btn-danger" data-act="snap:delete" data-index="' + i + '" title="删除这份存档">🗑 删除</button>';
+        '<button class="btn btn-sm btn-danger" data-act="snap:delete" data-index="' + i + '" title="删除这份存档（删前会自动存一份）">🗑 删除</button>';
     }
 
     return '<article class="' + cls + '">' +
@@ -1790,6 +2417,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       '<div class="snap-meta">' +
       "<span>👥 " + esc(s.players) + " 名玩家</span>" +
       "<span>💽 " + esc(s.size) + "</span>" +
+      (s.name ? "<span class=\"mono\" title=\"存档文件名（恢复/删除都用它）\">📄 " + esc(s.name) + "</span>" : "") +
       "</div>" +
       '<div class="snap-actions">' + actions + "</div>" +
       "</article>";
@@ -1802,18 +2430,35 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     renderTabs();
     var tab = TAB_BY_ID[state.tab];
     var panel = document.getElementById("panel");
+    var banner = renderBanner();
 
     if (state.loading) {
-      panel.innerHTML = '<section class="card"><div class="empty">' +
+      panel.innerHTML = banner + '<section class="card"><div class="empty">' +
         '<span class="empty-icon">🎣</span><div class="empty-title">正在载入数据…</div>' +
         '<div class="empty-sub">离线预览会直接使用演示数据</div></div></section>';
     } else if (tab.kind === "snapshots") {
-      panel.innerHTML = renderSnapshotsTab(tab);
+      panel.innerHTML = banner + renderSnapshotsTab(tab);
     } else {
-      panel.innerHTML = renderTableTab(tab);
+      panel.innerHTML = banner + renderTableTab(tab);
     }
 
     renderStatusBar();
+  }
+
+  /** 顶部提示条：读取失败 / 有行没解析出来都要说清楚，不静默。 */
+  function renderBanner() {
+    var html = "";
+    if (state.loadError) {
+      html += '<div class="notice notice-danger"><span class="notice-icon">⛔</span><div>' +
+        '<b>读取插件配置失败</b>　' + esc(state.loadError) +
+        "<br />下面是演示数据，改动不会保存；点右上角「↻ 重新载入」重试。" +
+        "</div></div>";
+    }
+    (state.loadNotes || []).forEach(function (note) {
+      html += '<div class="notice"><span class="notice-icon">⚠️</span><div>' +
+        esc(note) + "</div></div>";
+    });
+    return html;
   }
 
   function renderStatusBar() {
@@ -1854,6 +2499,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       state.editBackup = null;
     }
     if (scope === "snapNote") {
+      var snap = state.snapshots[index] || {};
+      state.editBackup = { scope: "snapNote", index: index, note: snap.note || "" };
       state.editing = { scope: "snapNote", index: index };
       render();
       var el = $('[data-act="snapNote:input"]');
@@ -1874,16 +2521,43 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   }
 
   function commitEdit() {
+    var wasSnapNote = state.editing && state.editing.scope === "snapNote";
+    var backup = state.editBackup;
     state.editing = null;
     state.editBackup = null;
     render();
+    // 存档改名：面板上只是「改个名字」，实际是给快照文件里的 note 字段赋值
+    if (wasSnapNote && backup) {
+      var snap = state.snapshots[backup.index];
+      if (!snap) return;
+      var next = String(snap.note || "");
+      if (next === String(backup.note || "")) return;
+      renameSnapshot(snap, next, backup.note || "");
+    }
+  }
+
+  /** 把改名指令发给插件（失败就把界面上的名字改回去，别骗人）。 */
+  async function renameSnapshot(snap, next, previous) {
+    var res = await runSnapshotAction("rename", { name: snap.name || snap.rel, note: next });
+    if (res.ok) {
+      toast("ok", "备注已提交", res.message || (previous + " → " + next));
+    } else {
+      snap.note = previous;
+      toast("warn", "改名没成功", res.message || "插件没有回写结果");
+      render();
+    }
   }
 
   function cancelEdit() {
     if (state.editBackup) {
       var b = state.editBackup;
-      var row = (state.data[state.tab] || [])[b.index];
-      if (row) row[b.key] = b.value;
+      if (b.scope === "snapNote") {
+        var snap = state.snapshots[b.index];
+        if (snap) snap.note = b.note;
+      } else {
+        var row = (state.data[state.tab] || [])[b.index];
+        if (row) row[b.key] = b.value;
+      }
     }
     state.editing = null;
     state.editBackup = null;
@@ -1949,24 +2623,42 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   /* ===========================================================================
      14. 存档动作
      =========================================================================== */
+
+  /** 存档卡片上的「下载」：先把这份存档的想法说清楚，别让人以为拿到了数据。 */
+  function downloadSnapshot(s) {
+    var payload = {
+      kind: s.kind, kind_name: s.kind_name, note: s.note, time: s.time,
+      players: s.players, size: s.size, file: s.name || s.rel,
+      note_text: ENV.online
+        ? "这是页面上的存档信息，不是玩家数据本体；要拿完整数据请到" +
+          "「插件配置 → 导出存档文件」下载，或直接取 backups/ 目录里的同名文件。"
+        : "离线预览数据，仅用于看排版。"
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "snapshot_" + String(s.name || s.time || "").replace(/[^\w.-]/g, "_") + ".info.json";
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    toast("ok", "已开始下载", s.note || s.name || s.time || "");
+  }
+
   async function snapshotAction(kind, i) {
     var s = state.snapshots[i];
     if (!s) return;
 
     if (kind === "download") {
-      var blob = new Blob([JSON.stringify({ kind: s.kind, note: s.note, time: s.time, players: s.players, demo: true }, null, 2)], { type: "application/json" });
-      var a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "snapshot_" + (s.time || "").replace(/[^\d]/g, "") + ".json";
-      a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
-      toast("ok", "已开始下载", s.note || s.time);
+      downloadSnapshot(s);
       return;
     }
 
-    var res = await runSnapshotAction(kind, { id: s.id, note: s.note });
+    var res = await runSnapshotAction(kind, {
+      name: s.name || s.rel || "",
+      id: s.name || s.rel || "",
+      note: s.note
+    });
     if (res.ok) {
-      toast("ok", "完成", res.message || "");
+      toast("ok", "已提交", res.message || "");
     } else {
       toast("warn", kind === "restore" ? "恢复未执行" : kind === "delete" ? "删除未执行" : "操作未执行", res.message || "");
     }
@@ -2068,23 +2760,58 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     state.query = "";
     state.filter = "";
     state.sort = "default";
+    state.loadError = "";
+    state.loadNotes = [];
+    skipped = {};
     render();
 
-    var cfg = await loadConfig();
+    var cfg = null;
+    try {
+      cfg = await loadConfig();
+    } catch (e) {
+      // 读配置失败：不白屏，把原因写在页面上，并退回演示数据让界面还能用
+      state.loadError = String((e && e.message) || e);
+      cfg = deepClone(DEMO.config);
+    }
     TABS.forEach(function (t) {
       if (t.kind === "snapshots") return;
       state.data[t.id] = deepClone(cfg[t.id] || []);
     });
     if (cfg.autoBackup) state.autoBackup = deepClone(cfg.autoBackup);
-    var snaps = await loadSnapshots();
-    state.snapshots = deepClone(snaps.snapshots || []);
-    if (snaps.autoBackup) state.autoBackup = deepClone(snaps.autoBackup);
+    state.loadNotes = (cfg._notes || []).slice();
+
+    var snaps = null;
+    try {
+      snaps = await loadSnapshots();
+    } catch (e) {
+      state.loadError = state.loadError || String((e && e.message) || e);
+      snaps = { snapshots: [], autoBackup: null };
+    }
+    state.snapshots = deepClone((snaps && snaps.snapshots) || []);
+    if (snaps && snaps.autoBackup) state.autoBackup = deepClone(snaps.autoBackup);
+    state.players = snaps ? snaps.players : undefined;
+    state.nextAutoBackup = snaps ? snaps.nextAutoBackup : "";
 
     markSaved();
     state.savedAt = null;
     state.loading = false;
     render();
-    if (!silent) toast("info", ENV.online ? "已重新载入" : "离线预览模式", ENV.online ? "已丢弃未保存的修改" : "用内置演示数据渲染，保存不会真正生效");
+
+    if (state.loadError) {
+      toast("err", ENV.online ? "读取插件配置失败" : "离线预览模式", state.loadError);
+      return;
+    }
+    if (!silent) {
+      toast(
+        "info",
+        ENV.online ? "已重新载入" : "离线预览模式",
+        ENV.online
+          ? "已丢弃未保存的修改" + (state.loadNotes.length ? "；注意：" + state.loadNotes[0] : "")
+          : "检测不到 AstrBot 桥接：用内置演示数据渲染，保存不会真正生效"
+      );
+    } else if (ENV.online && state.loadNotes.length) {
+      toast("warn", "有内容没解析出来", state.loadNotes[0]);
+    }
   }
 
   /* ===========================================================================
@@ -2192,16 +2919,17 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         var note = noteEl ? noteEl.value.trim() : "";
         runSnapshotAction("create", { note: note }).then(function (res) {
           if (res.ok) {
-            state.snapshots.unshift({ id: "s" + Date.now(), kind: "manual", note: note || "手动存档", time: nowText(), players: "—", size: "—" });
-            toast("ok", "已新建存档", note || "手动存档");
+            toast("ok", "已提交新建存档", res.message || (note || "手动存档"));
+            if (noteEl) noteEl.value = "";
+            refreshSnapshots();
           } else {
             toast("warn", "未真正创建", res.message || "");
+            render();
           }
-          render();
         });
         break;
       }
-      case "snap:reload": loadSnapshots().then(function (r) { state.snapshots = deepClone(r.snapshots || []); render(); toast("info", "已刷新存档列表", ""); }); break;
+      case "snap:reload": refreshSnapshots(true); break;
       case "snap:restore": state.pendingConfirm = { scope: "card", index: index, action: "restore" }; render(); break;
       case "snap:restoreYes": snapshotAction("restore", index); break;
       case "snap:delete": state.pendingConfirm = { scope: "card", index: index, action: "delete" }; render(); break;
@@ -2209,6 +2937,21 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       case "snap:download": snapshotAction("download", index); break;
     }
   });
+
+  /** 重新拉一次存档列表（新建/删除/改名之后保证显示的是真实状态）。 */
+  async function refreshSnapshots(showToast) {
+    try {
+      var snaps = await loadSnapshots();
+      state.snapshots = deepClone((snaps && snaps.snapshots) || []);
+      if (snaps && snaps.autoBackup) state.autoBackup = deepClone(snaps.autoBackup);
+      state.players = snaps ? snaps.players : state.players;
+      state.nextAutoBackup = snaps ? snaps.nextAutoBackup : state.nextAutoBackup;
+      if (showToast) toast("info", "已刷新存档列表", "共 " + state.snapshots.length + " 份");
+    } catch (e) {
+      if (showToast) toast("err", "刷新失败", String((e && e.message) || e));
+    }
+    render();
+  }
 
   // 输入事件（行内编辑、批量参数、存档改名、自动备份表单）
   document.addEventListener("input", function (ev) {
@@ -2341,17 +3084,15 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     }
   });
 
-  // AstrBot 会推送主题变化等上下文
+  // AstrBot 会推送主题变化等上下文（上下文是异步来的，这里同时负责「迟到补写」）
   if (sdk && typeof sdk.onContext === "function") {
     try {
       sdk.onContext(function (next) {
         if (next && next.isDark !== undefined && next.isDark !== ENV.isDark) {
           applyTheme(next.isDark);
         }
-        if (next && next.pluginName && next.pluginName !== ENV.pluginName) {
-          ENV.pluginName = next.pluginName;
-          document.getElementById("pluginName").textContent = ENV.pluginName;
-        }
+        mergeContext(next);
+        paintIdentity();
         render();
       });
     } catch (e) { /* 忽略：老版本 SDK 没有 onContext */ }
@@ -2360,14 +3101,34 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   /* ===========================================================================
      17. 启动
      =========================================================================== */
-  if (sdk && typeof sdk.ready === "function") {
-    try { sdk.ready(); } catch (e) { /* 忽略 */ }
+  async function boot() {
+    // 等 SDK 把上下文灌进来，再决定用哪个 pluginName 去读配置
+    await waitForContext();
+    mergeContext(readContext());
+    ENV.online = !!sdk;
+    paintIdentity();
+    try {
+      await reloadAll(true);
+    } catch (e) {
+      // reloadAll 自己已经兜住大部分错误，这里只处理意料之外的
+      state.loading = false;
+      state.loadError = String((e && e.message) || e);
+      render();
+      toast("err", "载入失败", state.loadError);
+    }
+    if (!ENV.online) {
+      toast(
+        "warn",
+        "离线预览：不会真正保存",
+        "检测不到 AstrBotPluginPage（桥接 SDK），当前用内置演示数据渲染；" +
+        "上传与存档动作只会提示、不会真正执行。"
+      );
+      return;
+    }
+    toast("info", "已连接 AstrBot", "保存会通过上传通道提交，1~2 秒后生效");
   }
-  reloadAll(true).catch(function (e) {
-    state.loading = false;
-    render();
-    toast("err", "载入失败", String(e && e.message || e));
-  });
+
+  boot();
 })();
 </script>
 </body>

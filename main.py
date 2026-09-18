@@ -115,6 +115,7 @@ VIEWS: Any = _load_sibling("_views", "astrbot_fishing_views")
 COMMANDS: Any = _load_sibling("_commands", "astrbot_fishing_commands")
 INTERACTIONS: Any = _load_sibling("_interactions", "astrbot_fishing_interactions")
 ENGINE: Any = _load_sibling("_engine", "astrbot_fishing_engine")
+EDITOR_BRIDGE: Any = _load_sibling("_editor_bridge", "astrbot_fishing_editor_bridge")
 
 
 class _MissingMixin:
@@ -208,6 +209,8 @@ DEFAULTS: dict[str, Any] = {
     "data_action": "无",            # 要执行的数据操作（执行后自动复位）
     "data_target": "",              # 目标玩家ID / 快照文件名
     "data_confirm": False,          # 危险操作二次确认
+    # 编辑器页面（pages/editor/）读它拿存档清单/玩家数等状态；由插件回写，见 _editor_bridge.py
+    "editor_status": "",
     "backup_import_file": [],       # 上传存档（导入用，type=file）
     "backup_export_file": [],       # 导出存档（下载用，type=file）
     "enable_auto_backup": True,
@@ -271,7 +274,8 @@ DEFAULTS: dict[str, Any] = {
 # -----------------------------------------------------------------------------
 
 #: 这些前缀的配置项属于「站长的个人设置 / 管理操作」，永不被自动同步覆盖
-DEFAULTS_SYNC_EXCLUDE_PREFIXES: tuple[str, ...] = ("data_", "backup_")
+#: （editor_* 是编辑器页面通道回写的状态：跟着指纹同步会把它清空）
+DEFAULTS_SYNC_EXCLUDE_PREFIXES: tuple[str, ...] = ("data_", "backup_", "editor_")
 #: 这些键同上（开关类与管理项，跟着指纹一起变但没有意义）
 DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
     {"button_mode", "content_auto_merge", "defaults_sync_mode", "config_fingerprint"}
@@ -1841,6 +1845,7 @@ class FishingPlugin(
     getattr(COMMANDS, "CommandsMixin", _MissingMixin),
     getattr(INTERACTIONS, "InteractionsMixin", _MissingMixin),
     getattr(ENGINE, "EngineMixin", _MissingMixin),
+    getattr(EDITOR_BRIDGE, "EditorBridgeMixin", _MissingMixin),
 ):
     """QQ 群钓鱼小游戏插件。"""
 
@@ -3442,6 +3447,8 @@ class FishingPlugin(
             self._init_data_management()
         except Exception as e:  # pragma: no cover
             logger.error(f"钓鱼插件初始化自检失败：{e}")
+        # 编辑器页面的上传→轮询通道（整段自带 try/except，失败也不影响启动）
+        self.start_editor_bridge()
 
 
     def _merge_content_defaults(self) -> bool:
@@ -3582,6 +3589,8 @@ class FishingPlugin(
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
             self._backup_task = None
+            # 编辑器页面轮询任务（同样要停干净，否则重载会叠任务）
+            await self.stop_editor_bridge()
             for pending in list(self._pending_pulls.values()):
                 future = pending.get("future")
                 if future is not None and not future.done():
@@ -3639,7 +3648,9 @@ ORDER_ACTIONS = ("提交", "交")
 #: 所有拆出去的兄弟模块（新增一个就加进来）
 SIBLING_MODULES: tuple[Any, ...] = tuple(
     module
-    for module in (CALC, DATA_ADMIN, VIEWS, COMMANDS, INTERACTIONS, ENGINE)
+    for module in (
+        CALC, DATA_ADMIN, VIEWS, COMMANDS, INTERACTIONS, ENGINE, EDITOR_BRIDGE
+    )
     if module is not None
 )
 

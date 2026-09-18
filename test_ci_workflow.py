@@ -70,6 +70,11 @@ for needle, label in (
     ("py_compile", "冒烟：容器内做语法校验"),
     ("data/plugins/astrbot_plugin_qq_fishing", "冒烟：验证入口脚本同步插件"),
     ("test ! -e \"$DST/docker\"", "冒烟：确认开发文件没进运行目录"),
+    ("test -f \"$DST/pages/editor/index.html\"", "冒烟：页面目录没被入口脚本的清理列表误删"),
+    (
+        "test -f \"$DST/.astrbot-plugin/i18n/zh-CN.json\"",
+        "冒烟：页面 i18n 没被入口脚本的清理列表误删",
+    ),
 ):
     check(needle in body, label)
 

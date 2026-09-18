@@ -83,6 +83,51 @@ try:
         "Dockerfile 挂好 entrypoint 与插件目录名",
     )
 
+    print("\n[1b] entrypoint.sh 的清理列表：运行时功能目录必须留下")
+    entrypoint = (HERE / "docker" / "entrypoint.sh").read_text(encoding="utf-8")
+    # 只从 `rm -rf "${DST_DIR}/..." \` 那条命令里抠出被删的路径（别把别的 rm 也算进来）
+    cleanup_paths: list[str] = []
+    collecting = False
+    for line in entrypoint.splitlines():
+        stripped = line.strip()
+        if not collecting:
+            if stripped.startswith("rm -rf") and "DST_DIR" in stripped:
+                collecting = True
+            else:
+                continue
+        for token in stripped.replace("\\", " ").split():
+            token = token.strip().strip('"').strip("'")
+            if token.startswith("${DST_DIR}/"):
+                cleanup_paths.append(token[len("${DST_DIR}/") :])
+        if not stripped.endswith("\\"):
+            break
+    check(bool(cleanup_paths), f"解析出清理列表：{cleanup_paths}")
+    for keep, why in (
+        ("pages", "插件页面（数据编辑器）就在 pages/ 里，删了页面直接 404"),
+        (".astrbot-plugin", "页面 i18n（中文标题）在 .astrbot-plugin/i18n/ 里"),
+        ("main.py", "插件本体"),
+        ("_editor_bridge.py", "编辑器通道模块"),
+    ):
+        hit = [p for p in cleanup_paths if p.rstrip("/").endswith(keep)]
+        check(not hit, f"清理列表没有误删 {keep}（{why}）")
+    # 反面用例：开发文件确实应该被删掉（否则「没误删」这句毫无意义）
+    for gone in ("docker", "Dockerfile", ".git"):
+        hit = [p for p in cleanup_paths if p.rstrip("/").endswith(gone)]
+        check(bool(hit), f"清理列表确实删掉了开发文件 {gone}")
+
+    print("\n[1c] Dockerfile / .dockerignore 不会把页面排除在镜像外")
+    dockerignore_paths = [
+        line.strip()
+        for line in (HERE / ".dockerignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    check("COPY . /opt/fishing-plugin/" in dockerfile, "Dockerfile 整仓 COPY（pages/ 一并进镜像）")
+    for blocked in ("pages", "pages/", ".astrbot-plugin", "i18n"):
+        check(
+            blocked not in dockerignore_paths,
+            f".dockerignore 没有排除 {blocked}（否则镜像里没有页面）",
+        )
+
     print("\n[2] 注入脚本：填空 + 不覆盖已有值")
     tmp = SANDBOX_TMP / "case2"
     cfg = tmp / "cmd_config.json"

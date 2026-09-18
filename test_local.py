@@ -193,12 +193,14 @@ def text_of(replies) -> str:
 async def main():
     failures = []
 
-    def check(cond, label):
+    def check(cond, label, extra=None):
+        """断言；extra 只在失败时打出来（成功时标签本身已经写清了细节）。"""
+        line = label if extra is None else f"{label}　{extra}"
         if cond:
             print(f"  ✅ {label}")
         else:
-            print(f"  ❌ {label}")
-            failures.append(label)
+            print(f"  ❌ {line}")
+            failures.append(line)
 
     # =====================================================================
     print("\n[1] 配置：schema 全项解析")
@@ -3093,6 +3095,406 @@ async def main():
         and "存档数" in plugin_d.config["data_status"],
         "data_status 回写了玩家数/存档数",
     )
+
+    # =====================================================================
+    print("\n[10q] 数据编辑器通道（上传固定文件 + 轮询消费）")
+
+    # 指令文件落在 <ASTRBOT_ROOT>/data/attachments/<固定名>
+    attachments = os.path.join(_SANDBOX_ROOT, "data", "attachments")
+    os.makedirs(attachments, exist_ok=True)
+    bridge_file = os.path.join(attachments, mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME)
+    bridge_rel = "/".join(("data", "attachments", mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME))
+    check(
+        plugin_d._editor_bridge_path().replace("\\", "/").endswith(bridge_rel),
+        f"通道文件路径落点 = <AstrBotRoot>/{bridge_rel}（与页面约定一致）",
+    )
+    check(
+        mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME == "fishing_editor_bridge.json",
+        f"固定文件名 = {mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME}",
+    )
+    check(
+        mod.EDITOR_BRIDGE.POLL_INTERVAL == 1.5,
+        f"轮询间隔 = {mod.EDITOR_BRIDGE.POLL_INTERVAL} 秒",
+    )
+
+    def write_bridge(payload, raw=None):
+        """写一条指令到通道文件（raw 不为 None 时直接写原文，用来造坏 JSON）。"""
+        with open(bridge_file, "w", encoding="utf-8") as fp:
+            fp.write(raw if raw is not None else json.dumps(payload, ensure_ascii=False))
+
+    def read_status():
+        return json.loads(plugin_d.config["editor_status"])
+
+    # --- 白名单：未知 action 被拒，而且照样记 nonce（不会每 1.5 秒重试） ---
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-bad-action", "action": "drop_all_tables", "payload": {}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(status["ok"] is False, "未知 action 被拒绝（ok=false）")
+    check(
+        "不认识的动作" in status["last_result"] and "drop_all_tables" in status["last_result"],
+        f"拒绝原因写清是哪个动作 -> {status['last_result']}",
+    )
+    check(
+        plugin_d._editor_last_nonce == "n-bad-action",
+        "被拒的动作也记了 nonce（同一条不会反复执行）",
+    )
+    before = plugin_d.config["editor_status"]
+    await plugin_d._editor_poll_once()
+    check(
+        plugin_d.config["editor_status"] == before,
+        "同 nonce 再轮询一次：直接跳过（状态没被改写）",
+    )
+
+    # --- 坏 JSON：消费掉 + 回写错误，不卡死 ---
+    plugin_d._editor_last_nonce = ""
+    write_bridge(None, raw='{"nonce": "n-broken", "action": "save_content", "payload": {')
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(status["ok"] is False, "坏 JSON 被拒绝（ok=false）")
+    check("不是合法 JSON" in status["last_result"], f"坏 JSON 有中文提示 -> {status['last_result']}")
+    check(plugin_d._editor_last_nonce == "n-broken", "坏 JSON 也能抠出 nonce 并记录")
+    # 完全看不出 nonce 的垃圾内容：跳过即可，绝不能抛异常
+    plugin_d._editor_last_nonce = ""
+    write_bridge(None, raw="<<<这不是 JSON>>>")
+    try:
+        await plugin_d._editor_poll_once()
+        check(True, "连 nonce 都没有的垃圾内容：轮询不抛异常（静默跳过）")
+    except Exception as e:
+        check(False, f"垃圾内容让轮询抛异常了：{e}")
+    # 文件不存在也照常跳过
+    os.remove(bridge_file)
+    try:
+        await plugin_d._editor_poll_once()
+        check(True, "通道文件不存在时静默跳过（目录没建好也不会报错）")
+    except Exception as e:
+        check(False, f"文件缺失时轮询抛异常：{e}")
+
+    # --- save_content：只接受内容表白名单 ---
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {
+            "nonce": "n-content-reject",
+            "action": "save_content",
+            "payload": {
+                "tables": {
+                    "fish_defs": "x|测试鱼|常见|10|新手村:1.0|测试",
+                    "editor_status": "黑客",
+                }
+            },
+        }
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(status["ok"] is False, "save_content 混进 editor_status -> 整批拒绝")
+    check(
+        "editor_status" in status["last_result"] and "内容表" in status["last_result"],
+        f"拒绝原因点名了违规键 -> {status['last_result']}",
+    )
+    check(
+        plugin_d.config.get("editor_status") != "黑客",
+        "违规键确实没被写进配置（editor_status 没被覆盖成「黑客」）",
+    )
+
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {
+            "nonce": "n-content-ok",
+            "action": "save_content",
+            "payload": {"tables": {"fish_defs": "bridge_fish|通道鱼|常见|42|新手村:1.0|测试用"}},
+        }
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(status["ok"] is True, f"合法内容表被写入 -> {status['last_result']}")
+    check(
+        plugin_d.config["fish_defs"] == "bridge_fish|通道鱼|常见|42|新手村:1.0|测试用",
+        "fish_defs（文本表）落进配置",
+    )
+    check("bridge_fish" in mod.FISH_BY_ID, "改完立刻重建缓存：新鱼已经在鱼池里")
+    plugin_d.config["fish_defs"] = ""
+
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {
+            "nonce": "n-content-list",
+            "action": "save_content",
+            "payload": {"tables": {"rod_defs": ["bridge_rod|通道竿|🎣|0|0|0|1|测试竿"]}},
+        }
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    # 关掉「自动合并新版默认内容」，否则 _refresh_config 会往这张表里补官方竿，
+    # 断言就变成在看合并逻辑而不是在看通道
+    plugin_d.config["content_auto_merge"] = False
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {
+            "nonce": "n-content-list2",
+            "action": "save_content",
+            "payload": {"tables": {"rod_defs": ["bridge_rod|通道竿|🎣|0|0|0|1|测试竿"]}},
+        }
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is True
+        and list(plugin_d.config["rod_defs"]) == ["bridge_rod|通道竿|🎣|0|0|0|1|测试竿"],
+        f"rod_defs（字符串数组表）落进配置 -> {list(plugin_d.config['rod_defs'])}",
+    )
+    plugin_d.config["content_auto_merge"] = True
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {"nonce": "n-content-badtype", "action": "save_content",
+         "payload": {"tables": {"rod_defs": "不是数组"}}}
+    )
+    await plugin_d._editor_poll_once()
+    check(
+        read_status()["ok"] is False,
+        "rod_defs 传字符串被拒（类型不符）",
+    )
+    plugin_d.config["rod_defs"] = list(mod.DEFAULTS["rod_defs"])
+    plugin_d._refresh_config()
+
+    # --- save_numbers：只接受数值类键 + 类型校验 ---
+    check(
+        "editor_status" not in mod.EDITOR_BRIDGE.number_whitelist()
+        and "data_status" not in mod.EDITOR_BRIDGE.number_whitelist(),
+        "数值白名单里没有 editor_status / data_status",
+    )
+    check(
+        "backup_daily_hour" not in mod.EDITOR_BRIDGE.number_whitelist()
+        and "location_defs" not in mod.EDITOR_BRIDGE.number_whitelist(),
+        "数值白名单里没有 backup_* / *_defs",
+    )
+    check(
+        {"stamina_max", "fish_value_mult", "level_xp_ratio"} <= set(mod.EDITOR_BRIDGE.number_whitelist()),
+        "数值白名单包含核心数值键",
+    )
+
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {"nonce": "n-num-ok", "action": "save_numbers",
+         "payload": {"stamina_max": 33, "fish_value_mult": 1.5, "enable_market": False}}
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is True
+        and plugin_d.config["stamina_max"] == 33
+        and abs(float(plugin_d.config["fish_value_mult"]) - 1.5) < 1e-9
+        and plugin_d.config["enable_market"] is False,
+        f"int / float / bool 三类数值都写进去了 -> {status['last_result']}",
+    )
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-num-badkey", "action": "save_numbers", "payload": {"drop_table": 1}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is False and "drop_table" in status["last_result"],
+        f"白名单外的数值键被拒 -> {status['last_result']}",
+    )
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-num-badtype", "action": "save_numbers", "payload": {"stamina_max": "很多"}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is False and "整数" in status["last_result"],
+        f"类型不符被拒且说明原因 -> {status['last_result']}",
+    )
+    check(plugin_d.config["stamina_max"] == 33, "被拒之后旧值没被改坏")
+
+    # --- save_autobackup ---
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {"nonce": "n-auto", "action": "save_autobackup",
+         "payload": {"enable": False, "daily_hour": 7, "interval_hours": 12,
+                     "keep_daily": 10, "keep_keep_interval": 5}}
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is True
+        and plugin_d.config["enable_auto_backup"] is False
+        and plugin_d.config["backup_daily_hour"] == 7
+        and plugin_d.config["backup_interval_hours"] == 12
+        and plugin_d.config["backup_keep_daily"] == 10,
+        f"自动备份设置写回成功 -> {status['last_result']}",
+    )
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-auto-range", "action": "save_autobackup", "payload": {"daily_hour": 99}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is False and "0~23" in status["last_result"],
+        f"越界的时间点被拒 -> {status['last_result']}",
+    )
+    # 键名写错（keep_keep_interval 是按任务书原文传的）也不会误伤别的字段
+    plugin_d.config["enable_auto_backup"] = True
+    plugin_d.config["backup_daily_hour"] = 4
+    plugin_d.config["backup_interval_hours"] = 6
+    plugin_d.config["backup_keep_daily"] = 30
+
+    # --- 存档四件套：create / restore / delete / rename ---
+    store = plugin_d.backup_store
+    p_snap = mod._default_player("89777")
+    p_snap["gold"] = 777
+    await plugin_d._save_player(p_snap)
+
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-snap-create", "action": "snapshot_create", "payload": {"note": "页面手动存档"}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    created = [s for s in status["snapshots"] if s["note"] == "页面手动存档"]
+    check(status["ok"] is True and len(created) == 1, f"snapshot_create 建出快照 -> {status['last_result']}")
+    snap_name = created[0]["name"] if created else ""
+    check(bool(snap_name), f"新快照有文件名 -> {snap_name}")
+    snap_path = store.find_snapshot(snap_name)
+    check(snap_path is not None and os.path.isfile(snap_path), "快照文件真的落盘了")
+
+    # 改一个玩家的金币，再用快照恢复回来
+    p_snap = await plugin_d._load_player("89777")
+    p_snap["gold"] = 1
+    await plugin_d._save_player(p_snap)
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {"nonce": "n-snap-restore", "action": "snapshot_restore",
+         "payload": {"name": snap_name, "player": "89777"}}
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    gold_back = (await plugin_d._load_player("89777"))["gold"]
+    check(status["ok"] is True and gold_back == 777, f"snapshot_restore 单玩家恢复 -> gold={gold_back}")
+    check(
+        any(s["note"] == "恢复前自动存档" for s in status["snapshots"]),
+        "恢复前自动存了一份（恢复错了还能倒回来）",
+    )
+
+    # rename：只改 JSON 里的 note，文件名不变
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {"nonce": "n-snap-rename", "action": "snapshot_rename",
+         "payload": {"name": snap_name, "note": "改过名字的存档"}}
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    renamed = [s for s in status["snapshots"] if s["name"] == snap_name]
+    check(
+        status["ok"] is True and renamed and renamed[0]["note"] == "改过名字的存档",
+        f"snapshot_rename 改了备注 -> {(renamed or [{}])[0].get('note')}",
+    )
+    check(
+        store.find_snapshot(snap_name) is not None,
+        "改名没有重命名文件（「最新快照 = 按 mtime 排序」的语义保住了）",
+    )
+    check(
+        store.rename_snapshot("不存在的快照.json", "x") is False,
+        "rename_snapshot 对不存在的快照幂等返回 False（不抛异常）",
+    )
+    plugin_d._editor_last_nonce = ""
+    write_bridge(
+        {"nonce": "n-snap-restore-404", "action": "snapshot_restore",
+         "payload": {"name": "根本没有这份.json"}}
+    )
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is False and "找不到" in status["last_result"],
+        f"恢复不存在的快照：失败 + 中文说明（不抛异常）-> {status['last_result']}",
+    )
+
+    # delete：删掉 + 幂等
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-snap-delete", "action": "snapshot_delete", "payload": {"name": snap_name}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(status["ok"] is True, f"snapshot_delete 删掉了 -> {status['last_result']}")
+    check(store.find_snapshot(snap_name) is None, "被删的快照真的没了")
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-snap-delete2", "action": "snapshot_delete", "payload": {"name": snap_name}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(
+        status["ok"] is False and "找不到" in status["last_result"],
+        f"重复删除：幂等返回失败+中文说明（不抛异常）-> {status['last_result']}",
+    )
+    check(store.delete_snapshot(snap_name) is False, "delete_snapshot 直接调用也幂等返回 False")
+
+    # --- refresh / editor_status 结构 ---
+    plugin_d._editor_last_nonce = ""
+    write_bridge({"nonce": "n-refresh", "action": "refresh", "payload": {}})
+    await plugin_d._editor_poll_once()
+    status = read_status()
+    check(status["ok"] is True, "refresh 只刷状态不报错")
+    check(
+        "editor_status" not in mod._synced_default_keys()
+        and "data_status" not in mod._synced_default_keys(),
+        "editor_status / data_status 不参与「默认值同步」（否则启动就被清空）",
+    )
+    for field in (
+        "updated_at", "last_action", "last_result", "ok",
+        "snapshots", "players", "next_auto_backup", "autobackup",
+    ):
+        check(field in status, f"editor_status 含字段 {field}")
+    check(
+        status["last_action"] == "refresh" and status["updated_at"] > 0,
+        "editor_status 记了动作与时间戳",
+    )
+    check(
+        set(status["autobackup"]) == {"enable", "daily_hour", "interval_hours", "keep_daily", "keep_interval"},
+        f"autobackup 字段齐全 -> {sorted(status['autobackup'])}",
+    )
+    check(
+        isinstance(status["players"], int) and status["players"] >= 1,
+        f"editor_status 里的 players = {status['players']}",
+    )
+    check(isinstance(status["snapshots"], list) and len(status["snapshots"]) >= 1, "snapshots 是数组且有内容")
+    snap_view = status["snapshots"][0]
+    for field in ("name", "kind", "kind_name", "note", "time", "players", "size"):
+        check(field in snap_view, f"快照条目含字段 {field}")
+    check(
+        snap_view["kind_name"] in ("每日存档", "按时存档", "手动存档"),
+        f"kind_name 是中文 -> {snap_view['kind_name']}",
+    )
+    check(
+        isinstance(snap_view["size"], str) and ("B" in snap_view["size"] or "KB" in snap_view["size"] or "MB" in snap_view["size"]),
+        f"size 是人看的字符串 -> {snap_view['size']}",
+    )
+    check(
+        isinstance(plugin_d.config["editor_status"], str)
+        and plugin_d.config["editor_status"].startswith("{"),
+        "editor_status 在配置里是 JSON 字符串（页面 JSON.parse 就能用）",
+    )
+
+    # --- 生命周期：initialize 起任务、terminate 后能退出 ---
+    plugin_e = make_plugin()
+    plugin_e.data_files_root = data_root
+    plugin_e.backup_store = mod.BACKUP_MODULE.BackupStore(
+        os.path.join(data_root, "backups_e"), mod.DATA_VERSION
+    )
+    await plugin_e.initialize()
+    task = getattr(plugin_e, "_editor_task", None)
+    check(task is not None and not task.done(), "initialize() 之后轮询任务在跑")
+    # 播种：重启后不会把上一次的指令又执行一遍
+    write_bridge({"nonce": "n-stale-after-restart", "action": "save_numbers",
+                  "payload": {"stamina_max": 999}})
+    plugin_e._editor_last_nonce = ""
+    await plugin_e._editor_seed_nonce()
+    check(
+        plugin_e._editor_last_nonce == "n-stale-after-restart",
+        "启动播种：把重启前留下的指令记成「已处理」",
+    )
+    check(plugin_e.config.get("stamina_max") != 999, "播种没有执行那条旧指令")
+    tasks_before = len(asyncio.all_tasks())
+    await plugin_e.terminate()
+    await asyncio.sleep(0)
+    check(
+        getattr(plugin_e, "_editor_task", None) is None,
+        "terminate() 之后 _editor_task 被清空",
+    )
+    check(task.cancelled() or task.done(), "轮询任务确实退出了")
+    check(len(asyncio.all_tasks()) <= tasks_before, "terminate 没有留下悬挂任务")
+    os.remove(bridge_file)
 
     # --- 鱼类查询 ---
     plugin_f = make_plugin()

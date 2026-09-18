@@ -73,6 +73,39 @@ global.removeEventListener = function () {};
 global.window.AstrBotPluginPage = null; // 走离线预览分支
 global.matchMedia = undefined;
 
+/**
+ * 在一个全新的沙箱里跑一遍页面脚本，返回它挂出来的测试钩子。
+ * 页面脚本启动时会抓 `window.AstrBotPluginPage`，所以「在线模式」必须重跑一次启动，
+ * 不能只把旧实例的 sdk 变量换掉。
+ */
+function loadPageFromSource(sdkStub) {
+  const box = { document: documentStub, window: {}, location: { hash: "", search: "" } };
+  box.window = box;
+  box.window.AstrBotPluginPage = sdkStub || null;
+  box.window.matchMedia = undefined;
+  box.window.setTimeout = function (fn, ms) { return setTimeout(fn, ms); };
+  box.window.clearTimeout = function (id) { clearTimeout(id); };
+  box.window.addEventListener = function () {};
+  box.setTimeout = box.window.setTimeout;
+  box.clearTimeout = box.window.clearTimeout;
+  box.addEventListener = function () {};
+  box.removeEventListener = function () {};
+  box.Promise = Promise;
+  box.console = console;
+  box.File = File;
+  box.Blob = Blob;
+  box.FormData = global.FormData;
+  box.URL = URL;
+  const names = Object.keys(box);
+  try {
+    new Function(names.join(","), js).apply(box, names.map(function (n) { return box[n]; }));
+  } catch (e) {
+    console.error("❌ 页面脚本（假 SDK 沙箱）执行时抛错：" + e.message + "\n" + (e.stack || ""));
+    process.exit(1);
+  }
+  return { T: box.__T, box };
+}
+
 /* ---------- 2. 注入测试钩子 ---------- */
 const hookNames = [
   "state", "render", "visibleRows", "validateRow", "parseDist", "diffTab", "renderTableTab",
@@ -80,7 +113,13 @@ const hookNames = [
   "startEdit", "cancelEdit", "commitEdit", "applyBatch", "deepClone", "esc", "fmtNum",
   "knownLocationKeys", "dirtyTotal", "markSaved", "switchTab", "toast", "renderToolbar",
   "renderTableBody", "renderStatusBar", "renderTabs", "reloadAll", "snapshotAction",
-  "loadConfig", "saveConfig", "loadSnapshots", "runSnapshotAction", "ENV", "RARITIES"
+  "loadConfig", "saveConfig", "loadSnapshots", "runSnapshotAction", "ENV", "RARITIES",
+  // 数据通道（B 组）：解析/序列化/状态/指令收发
+  "TABLE_DEFS", "NUMBER_KEYS", "splitLine", "cell", "serializeContentTables",
+  "numberValuesFromPage", "parseEditorStatus", "autobackupFromStatus", "autobackupPayload",
+  "sendCommand", "bridgeRequest", "describeError", "resolvePluginBase", "fetchRawConfig",
+  "makeNonce", "sleep", "waitForStatus", "BRIDGE_FILE", "renderBanner", "downloadSnapshot",
+  "refreshSnapshots"
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -95,6 +134,10 @@ function check(ok, label, extra) {
   console.log((ok ? "  ✅ " : "  ❌ ") + label + (extra !== undefined ? " -> " + extra : ""));
   if (!ok) failed++;
 }
+
+/** 所有断言块：fn 可以是同步或 async（异步块用来驱动真实的桥接调用）。 */
+const SECTIONS = [];
+function section(title, fn) { SECTIONS.push({ title, fn }); }
 
 try {
   new Function(js)();
@@ -321,13 +364,384 @@ function runAssertions() {
     check(["dark", "light"].indexOf(documentStub.documentElement.getAttribute("data-theme")) >= 0,
       "data-theme 被规范成 dark/light", documentStub.documentElement.getAttribute("data-theme"));
     check(T.ENV.isDark === true, "离线默认深色");
+  }).then(channelHelpers).then(channelRoundTrip).then(finish);
+}
 
-    console.log("\n" + "=".repeat(62));
-    if (failed) {
-      console.log("❌ " + failed + " 项未通过");
-      process.exit(1);
-    }
-    console.log("🎉 页面运行时冒烟测试全部通过（" + hookNames.length + " 个内部函数已实际执行）");
-    process.exit(0);
+/* =============================================================================
+   [12] 数据通道的纯函数：行格式、状态解析、白名单过滤
+   ============================================================================= */
+function channelHelpers() {
+  console.log("\n[12] 数据通道：配置 <-> 表格 的转换");
+  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations",
+    "5 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
+  check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
+    "fish_defs 是文本表（多行），其余是字符串数组");
+  check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
+  check(T.BRIDGE_FILE === "fishing_editor_bridge.json",
+    "指令文件名与插件约定一致（_editor_bridge.BRIDGE_FILE_NAME）", T.BRIDGE_FILE);
+
+  // 行解析
+  const fishRow = T.TABLE_DEFS.fish.parse("carp|鲤鱼|常见|120|novice:1.0,lake:0.8|村口常客");
+  check(fishRow.id === "carp" && fishRow.name === "鲤鱼" && fishRow.value === 120
+    && fishRow.dist === "novice:1.0,lake:0.8" && fishRow.flavor === "村口常客",
+    "鱼行 6 段解析正确");
+  check(T.TABLE_DEFS.fish.parse("半行没有竖线") === null, "残缺行解析为 null（会被跳过并提示）");
+  const rodRow = T.TABLE_DEFS.rods.parse("carbon|碳素竿|🎣|400|0.05|0.03|4|轻巧顺手");
+  check(rodRow.price === 400 && rodRow.value_bonus === 0.05 && rodRow.unlock_level === 4
+    && rodRow.desc === "轻巧顺手", "鱼竿行 8 段解析正确（含解锁等级）");
+  const oldRod = T.TABLE_DEFS.rods.parse("carbon|碳素竿|🎣|400|0.05|0.03|轻巧顺手");
+  check(oldRod.unlock_level === 1 && oldRod.desc === "轻巧顺手", "老格式鱼竿（7 段）也认，等级兜 1");
+  const baitRow = T.TABLE_DEFS.baits.parse(
+    "corn|玉米粒|🌽|6|5|0.30|1,1.5,2.3,3.0,4.0|9|stream|素饵之王");
+  check(baitRow.bundle === 5 && baitRow.weights === "1,1.5,2.3,3.0,4.0"
+    && baitRow.required_rod === "stream" && baitRow.desc === "素饵之王",
+    "鱼饵行 10 段解析正确（含稀有度权重与需要鱼竿）");
+  check(T.TABLE_DEFS.baits.parse("x|y|z|1|2|3|1,1,1,1,1").unlock_level === 1,
+    "老格式鱼饵（7 段、没有解锁等级那几列）也认，等级兜 1");
+  check(T.TABLE_DEFS.baits.parse("x|y|z|1|2|3") === null,
+    "鱼饵少于 7 段解析为 null（插件解析器也是这个门槛）");
+
+  // 竖线不能进单元格（否则一行会被劈成两列）
+  check(T.cell("a|b\nc｜d").indexOf("|") < 0 && T.cell("a|b\nc｜d").indexOf("\n") < 0,
+    "cell() 把竖线/换行洗掉", JSON.stringify(T.cell("a|b\nc｜d")));
+
+  // 序列化
+  const serialized = T.serializeContentTables();
+  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs",
+    "序列化输出 5 张配置表", Object.keys(serialized).join(","));
+  check(typeof serialized.fish_defs === "string"
+    && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
+    "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",
+    serialized.fish_defs.split("\n").length);
+  check(Array.isArray(serialized.rod_defs) && serialized.rod_defs.length === 6,
+    "rod_defs 是 6 条字符串数组", serialized.rod_defs.length);
+  check(serialized.rod_defs[1].split("|").length === 8, "鱼竿序列化成 8 段");
+  check(serialized.bait_defs[1].split("|").length === 10, "鱼饵序列化成 10 段");
+  check(serialized.fish_defs.split("\n")[0].indexOf("|") > 0, "鱼行用竖线分隔");
+  // 往返：解析 -> 序列化 -> 再解析，关键字段不漂
+  const roundTrip = T.TABLE_DEFS.locations.parse(T.TABLE_DEFS.locations.serialize(
+    { id: "lake", name: "山间湖泊", emoji: "🏞️", level_gate: 4, gold_gate: 1000,
+      value_mult: 1.1, desc: "水清鱼肥" }));
+  check(roundTrip.id === "lake" && roundTrip.level_gate === 4 && roundTrip.gold_gate === 1000
+    && roundTrip.value_mult === 1.1 && roundTrip.desc === "水清鱼肥",
+    "钓点往返（parse∘serialize）字段不漂");
+
+  // 数值白名单过滤
+  const before = JSON.parse(JSON.stringify(T.state.data.numbers));
+  T.state.data.numbers = [
+    { key: "stamina_max", label: "体力上限", value: 20, unit: "点" },
+    { key: "data_status", label: "数据状态", value: "偷偷改", unit: "" },
+    { key: "location_defs", label: "钓点表", value: "x", unit: "" },
+    { key: "fish_value_mult", label: "鱼价总闸", value: 1, unit: "倍" }
+  ];
+  const picked = T.numberValuesFromPage({ numbers_editable: ["stamina_max", "fish_value_mult"] });
+  check(JSON.stringify(Object.keys(picked)) === JSON.stringify(["stamina_max", "fish_value_mult"]),
+    "白名单外的数值键不会被提交（data_status / *_defs 被滤掉）", Object.keys(picked).join(","));
+  check(T.numberValuesFromPage(null).data_status !== undefined,
+    "拿不到白名单时不擅自过滤（退回全发，由插件侧最终把关）");
+  T.state.data.numbers = before;
+
+  // editor_status 解析
+  check(T.parseEditorStatus({ editor_status: { ok: true } }).ok === true, "editor_status 已是对象时直接用");
+  check(T.parseEditorStatus({ editor_status: '{"ok":false,"snapshots":[]}' }).ok === false,
+    "JSON 字符串能被解析成对象");
+  check(T.parseEditorStatus({ editor_status: "{坏 JSON" }) === null, "坏 JSON 返回 null（页面不炸）");
+  check(T.parseEditorStatus({}) === null && T.parseEditorStatus(null) === null,
+    "没有 editor_status 时返回 null");
+  const ab = T.autobackupFromStatus({ autobackup: { enable: false, daily_hour: 7,
+    interval_hours: 12, keep_daily: 10, keep_interval: 5 } });
+  check(ab.enable === false && ab.dailyHour === 7 && ab.intervalHours === 12
+    && ab.keepDaily === 10 && ab.keepInterval === 5,
+    "editor_status -> 表单字段映射正确（蛇形转驼峰）");
+  const abPayload = T.autobackupPayload(ab);
+  check(JSON.stringify(Object.keys(abPayload).sort()) ===
+    JSON.stringify(["daily_hour", "enable", "interval_hours", "keep_daily", "keep_interval"]),
+    "表单字段 -> 插件字段名正确（以 DEFAULTS 为准）", Object.keys(abPayload).join(","));
+  const n1 = T.makeNonce(), n2 = T.makeNonce();
+  check(n1 !== n2 && /^n[a-z0-9]+-[a-z0-9]{8,}$/.test(n1) && n1.indexOf("_") < 0,
+    "nonce 唯一、只含 URL/JSON 安全字符", n1 + " / " + n2);
+  // 同毫秒内连续生成也必须不同（靠两段随机数，不靠时间）
+  const same = [T.makeNonce(), T.makeNonce(), T.makeNonce(), T.makeNonce()];
+  check(new Set(same).size === 4, "同一毫秒内连续生成 4 个 nonce 互不相同", same.join(","));
+
+  // 失败信息必须能定位（不能只说「失败了」）
+  const fakeErr = { response: { status: 401, statusText: "Unauthorized",
+    data: { message: "Missing API key" } }, message: "Request failed" };
+  const desc = T.describeError(fakeErr, "/api/files");
+  check(/HTTP 401/.test(desc) && /Missing API key/.test(desc) && /\/api\/files/.test(desc),
+    "上传失败时把 HTTP 状态 + 服务端原因 + 端点都说出来", desc);
+  check(/离线预览/.test(T.describeError({ offline: true, message: "离线预览：没有 AstrBot 桥接" }, "x")),
+    "离线错误有专门提示");
+  check(/请求失败/.test(T.describeError({ message: "Network Error" }, "/api/files")),
+    "没有 status 时退回「请求失败 + 原始信息」");
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [13] 数据通道的真实往返：假 SDK（含 pluginName 两种形态 + 上传捕获）
+   ============================================================================= */
+const captured = {
+  uploads: [], context: null, probeFailures: 0, failUpload: false,
+  statusReads: 0, phase: "before"
+};
+
+function makeFakeSdk() {
+  const sdk = {
+    ready() {
+      return new Promise(function (resolve) {
+        sdk._setContext({
+          pluginName: "dhhxfggg/astrbot_plugin_qq_fishing",   // author/name 形态
+          displayName: "群钓鱼", pageName: "editor", pageTitle: "数据编辑器",
+          locale: "zh-CN", isDark: true,
+          i18n: { "zh-CN": { pages: { editor: { title: "数据编辑器" } } } }
+        });
+        resolve();
+      });
+    },
+    getContext() { return captured.context; },
+    _setContext(c) { captured.context = c; },
+    onContext() { return function () {}; },
+    apiGet(endpoint) {
+      capture("get", endpoint, null);
+      // 模拟「pluginName 是 name 时接口 404」：逼页面去试 author/name
+      if (/plugins\/astrbot_plugin_qq_fishing\/config$/.test(String(endpoint))) {
+        captured.probeFailures++;
+        return Promise.reject({ response: { status: 404, data: { message: "插件不存在" } } });
+      }
+      if (/plugins\/dhhxfggg\/astrbot_plugin_qq_fishing\/config$/.test(String(endpoint))) {
+        captured.statusReads++;
+        // phase：模拟「插件处理指令」这一瞬间 —— before = 还在旧状态，after = 已做完
+        return Promise.resolve({
+          metadata: {}, i18n: {},
+          config: captured.phase === "after" ? FAKE_CONFIG_AFTER() : FAKE_CONFIG
+        });
+      }
+      if (endpoint.indexOf("/config") >= 0) {
+        return Promise.resolve({ metadata: {}, config: FAKE_CONFIG, i18n: {} });
+      }
+      return Promise.reject(new Error("unexpected GET " + endpoint));
+    },
+    apiPost() { return Promise.reject(new Error("页面不该用 apiPost 保存（没有 PUT）")); },
+    upload(endpoint, file) {
+      // 一上传成功，插件那边就算「处理完了」——后续读配置会看到新状态
+      captured.phase = "after";
+      if (captured.failUpload) {
+        capture("upload", endpoint, null, file && file.name);
+        return Promise.reject({
+          response: { status: 403, statusText: "Forbidden",
+            data: { message: "Insufficient API key scope" } },
+          message: "Request failed with status code 403"
+        });
+      }
+      return Promise.resolve(file && typeof file.arrayBuffer === "function"
+        ? file.arrayBuffer().then(function (buf) {
+            capture("upload", endpoint, Buffer.from(buf).toString("utf8"), file.name);
+            return { attachment_id: "att_1", filename: file.name, type: "file" };
+          })
+        : null);
+    },
+    download() { return Promise.reject(new Error("not used")); },
+    subscribeSSE() { return Promise.reject(new Error("not used")); }
+  };
+  return sdk;
+}
+
+function capture(kind, endpoint, body, name) {
+  captured.uploads.push({ kind, endpoint, body, name });
+}
+
+const FAKE_STATUS = {
+  updated_at: 1,
+  last_action: "refresh",
+  last_result: "状态已刷新",
+  ok: true,
+  players: 12,
+  next_auto_backup: "2026-09-19 04:00:00",
+  numbers_editable: ["stamina_max", "multi_cast_max", "fish_value_mult"],
+  autobackup: { enable: true, daily_hour: 4, interval_hours: 6, keep_daily: 30, keep_interval: 20 },
+  snapshots: [
+    { name: "2026-09-18_1820.json", rel: "manual/2026-09-18_1820.json", kind: "manual",
+      kind_name: "手动存档", note: "改物价前", time: "2026-09-18 18:20", players: 12,
+      size: "131 KB", mtime: 100 },
+    { name: "2026-09-18.json", rel: "daily/2026-09-18.json", kind: "daily",
+      kind_name: "每日存档", note: "", time: "2026-09-18 04:00", players: 12,
+      size: "130 KB", mtime: 90 }
+  ]
+};
+
+const FAKE_CONFIG = {
+  fish_defs: "carp|鲤鱼|常见|120|novice:1.0|村口常客\ncrucian|鲫鱼|常见|90|novice:1.2|巴掌大",
+  rod_defs: ["bamboo|竹竿|🎋|0|0.00|0.00|1|送的"],
+  bait_defs: ["none|空钩|🪝|0|0|0|1,1,1,1,1|1||免费", "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|2||万用饵"],
+  item_defs: ["feed_basic|普通饲料|🌾|20|打基础|meat=2;spirit=1"],
+  location_defs: ["novice|新手村|🏡|1|0|1.00|村口小池塘"],
+  stamina_max: 25,
+  multi_cast_max: 15,
+  fish_value_mult: 1.0,
+  data_status: "不该出现在数值表里",
+  editor_status: JSON.stringify(FAKE_STATUS)
+};
+
+/** 第二次读配置时返回「插件已执行完」的状态（updated_at 更大）。 */
+function FAKE_CONFIG_AFTER() {
+  const done = Object.assign({}, FAKE_STATUS, {
+    updated_at: 2,
+    last_action: "snapshot_rename",
+    last_result: "已把「2026-09-18_1820.json」的备注改成「新备注」",
+    ok: true
   });
+  return Object.assign({}, FAKE_CONFIG, { editor_status: JSON.stringify(done) });
+}
+
+async function channelRoundTrip() {
+  console.log("\n[13] 数据通道：真实往返（假 AstrBotPluginPage）");
+  captured.uploads = [];
+  captured.probeFailures = 0;
+  global.window.AstrBotPluginPage = makeFakeSdk();
+  // 页面脚本在启动时抓的是 window.AstrBotPluginPage，所以这里要重跑一次完整启动
+  const fresh = loadPageFromSource(makeFakeSdk());
+  const F = fresh.T;
+  // 在线启动要真发几次请求（探测 pluginName + 读配置 + 读状态），等它跑完
+  for (let i = 0; i < 40 && (F.state.loading || F.ENV.pluginBase === "astrbot_plugin_qq_fishing"); i++) {
+    await new Promise(function (r) { setTimeout(r, 25); });
+  }
+
+  check(F.ENV.online === true, "检测到桥接 SDK -> 在线模式");
+  check(F.ENV.pluginBase === "dhhxfggg/astrbot_plugin_qq_fishing",
+    "pluginName 取的是上下文里给的那个", F.ENV.pluginBase);
+
+  // pluginName 可能是 name（老形态）也可能是 author/name：直接验一次「两种都试」
+  captured.probeFailures = 0;
+  F.ENV.pluginBase = "astrbot_plugin_qq_fishing";
+  const resolved = await F.resolvePluginBase("astrbot_plugin_qq_fishing");
+  check(captured.probeFailures >= 1,
+    "先用 name 试（接口回 404）——确实发起了探测请求", "探测失败次数=" + captured.probeFailures);
+  check(resolved === "dhhxfggg/astrbot_plugin_qq_fishing" && F.ENV.pluginBase === resolved,
+    "失败后自动改用 author/name，并记住可用的那个", resolved);
+  check((F.state.data.fish || []).length === 2,
+    "钓鱼表按 fish_defs 解析出 2 条（不是演示数据）", (F.state.data.fish || []).length);
+  check(F.state.data.rods.length === 1 && F.state.data.baits.length === 2
+    && F.state.data.items.length === 1 && F.state.data.locations.length === 1,
+    "竿/饵/道具/钓点四张表都解析成功");
+  check(F.state.data.fish[0].value === 120 && F.state.data.fish[0].dist === "novice:1.0",
+    "配置里的基准价与分布被正确解析");
+  check(F.dirtyTotal() === 0, "刚载入时没有脏标记（真实数据也一样）", F.dirtyTotal());
+
+  const keys = F.state.data.numbers.map(function (r) { return r.key; });
+  check(keys.indexOf("stamina_max") >= 0 && keys.indexOf("multi_cast_max") >= 0,
+    "数值页填入了白名单内的键", keys.join(","));
+  check(keys.indexOf("data_status") < 0,
+    "数值页不显示 data_status（不在插件白名单里）", keys.join(","));
+  check(F.state.data.numbers.filter(function (r) { return r.key === "stamina_max"; })[0].value === 25,
+    "数值页显示的是配置里的真实值（25）");
+
+  const snaps = F.state.snapshots;
+  check(snaps.length === 2, "存档列表来自 editor_status", snaps.length);
+  check(snaps[0].name === "2026-09-18_1820.json" && snaps[0].note === "改物价前",
+    "存档条目带真实文件名与备注（恢复/删除要用）", snaps[0].name);
+  check(snaps[0].kind === "manual" && snaps[0].kind_name === "手动存档",
+    "kind / kind_name 都带上了");
+  check(F.state.players === 12 && F.state.nextAutoBackup === "2026-09-19 04:00:00",
+    "玩家数与下次自动存档时间来自 editor_status",
+    F.state.players + " / " + F.state.nextAutoBackup);
+  check(F.state.autoBackup.dailyHour === 4 && F.state.autoBackup.keepInterval === 20,
+    "自动备份表单被真实配置覆盖");
+
+  // ---- 保存：内容表 + 数值 + 自动备份，各一条指令 ----
+  captured.uploads = [];
+  F.state.autoBackupDirty = true;
+  F.state.data.fish[0].value = 999;          // 制造一处改动
+  const saveRes = await F.saveConfig(F.buildPayload());
+  check(saveRes.ok === true && /1~2 秒/.test(saveRes.message),
+    "保存成功返回「已提交，1~2 秒后生效」", saveRes.message);
+  const kinds = captured.uploads.map(function (u) { return u.endpoint; });
+  check(kinds.every(function (e) { return e === "/api/files"; }),
+    "所有指令都上传到 /api/files（页面没有 PUT 可用）", kinds.join(","));
+  check(captured.uploads.length === 3, "内容 / 数值 / 自动备份各发一条，共 3 条", captured.uploads.length);
+
+  const envs = captured.uploads.map(function (u) { return JSON.parse(u.body); });
+  check(envs.every(function (e) { return e.nonce && e.action && e.payload; }),
+    "每条指令都带 nonce / action / payload");
+  check(new Set(envs.map(function (e) { return e.nonce; })).size === envs.length,
+    "三条指令的 nonce 各不相同");
+  const contentEnv = envs.filter(function (e) { return e.action === "save_content"; })[0];
+  check(!!contentEnv, "发了 save_content 指令");
+  check(contentEnv.payload.tables.fish_defs.split("\n")[0].indexOf("999") > 0,
+    "改动写进了 fish_defs 文本", contentEnv.payload.tables.fish_defs.split("\n")[0]);
+  check(Array.isArray(contentEnv.payload.tables.rod_defs),
+    "rod_defs 以字符串数组形式提交");
+  const numberEnv = envs.filter(function (e) { return e.action === "save_numbers"; })[0];
+  check(!!numberEnv && numberEnv.payload.stamina_max === 25
+    && numberEnv.payload.fish_value_mult === 1.0,
+    "数值指令只带白名单内的键", JSON.stringify(numberEnv && numberEnv.payload));
+  check(!numberEnv.payload.data_status && !numberEnv.payload.location_defs,
+    "数值指令里没有 data_status / location_defs");
+  const autoEnv = envs.filter(function (e) { return e.action === "save_autobackup"; })[0];
+  check(!!autoEnv && autoEnv.payload.daily_hour === 4 && autoEnv.payload.enable === true,
+    "自动备份设置用插件字段名提交", JSON.stringify(autoEnv && autoEnv.payload));
+  check(captured.uploads[0].name === F.BRIDGE_FILE,
+    "上传的文件名就是约定的固定文件名", captured.uploads[0].name);
+  F.state.savedAt = null;
+  if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
+
+  // ---- 上传失败：必须给出 HTTP 状态与原因 ----
+  captured.failUpload = true;
+  const failRes = await F.saveConfig(F.buildPayload());
+  captured.failUpload = false;
+  check(failRes.ok === false && /HTTP 403/.test(failRes.message),
+    "上传失败时把 HTTP 状态显示出来", failRes.message);
+  check(/Insufficient API key scope/.test(failRes.message),
+    "上传失败时把服务端原因也显示出来", failRes.message);
+
+  // ---- 存档动作：走同一个通道，等插件回写结果 ----
+  captured.uploads = [];
+  captured.statusReads = 0;
+  captured.phase = "before";   // 上传之前：插件那边还是旧状态
+  const renameRes = await F.runSnapshotAction("rename",
+    { name: "2026-09-18_1820.json", note: "新备注" });
+  const renameEnv = JSON.parse(captured.uploads[0].body);
+  check(renameEnv.action === "snapshot_rename"
+    && renameEnv.payload.name === "2026-09-18_1820.json"
+    && renameEnv.payload.note === "新备注",
+    "改名指令带对了快照名与新备注", JSON.stringify(renameEnv.payload));
+  check(captured.statusReads >= 2 && captured.statusReads <= 4,
+    "上传之后会轮询配置，直到 editor_status.updated_at 变新（不空转满 6 秒）",
+    "读了 " + captured.statusReads + " 次");
+  check(renameRes.ok === true && /改过|已把/.test(renameRes.message),
+    "改名结果取的是插件回写的真实结果（不是页面自说自话）", renameRes.message);
+
+  captured.uploads = [];
+  await F.runSnapshotAction("create", { note: "页面手动存档" });
+  check(JSON.parse(captured.uploads[0].body).action === "snapshot_create",
+    "新建存档指令正确");
+
+  captured.uploads = [];
+  await F.runSnapshotAction("delete", { name: "2026-09-18.json" });
+  check(JSON.parse(captured.uploads[0].body).action === "snapshot_delete",
+    "删除存档指令正确");
+
+  captured.uploads = [];
+  await F.runSnapshotAction("restore", { name: "2026-09-18.json", player: "89777" });
+  const restoreEnv = JSON.parse(captured.uploads[0].body);
+  check(restoreEnv.action === "snapshot_restore" && restoreEnv.payload.player === "89777",
+    "恢复指令带上了玩家 ID（支持只恢复单个玩家）");
+
+  const unknown = await F.runSnapshotAction("nuke", {});
+  check(unknown.ok === false && /不认识/.test(unknown.message),
+    "未知存档动作被页面自己拦下", unknown.message);
+  if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [14] 收尾
+   ============================================================================= */
+function finish() {
+  console.log("\n" + "=".repeat(62));
+  if (failed) {
+    console.log("❌ " + failed + " 项未通过");
+    process.exit(1);
+  }
+  console.log("🎉 页面运行时冒烟测试全部通过（" + hookNames.length + " 个内部函数已实际执行）");
+  process.exit(0);
 }

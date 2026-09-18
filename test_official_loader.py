@@ -265,6 +265,69 @@ for name, obj in vars(mod.FishingPlugin).items():
     )
 
 # ---------------------------------------------------------------------------
+print("\n[7] 插件页面与页面 i18n（数据编辑器）")
+from astrbot.core.star.star_manager import PluginManager  # noqa: E402
+from astrbot.dashboard.services.plugin_page_service import PluginPageService  # noqa: E402
+
+editor_entry = PLUGIN_DIR / "pages" / "editor" / "index.html"
+check(editor_entry.is_file(), "页面入口 pages/editor/index.html 存在（AstrBot 自动发现）")
+#
+# i18n 路径是从 AstrBot 源码核实的：PluginManager._load_plugin_i18n 只认
+#   <插件目录>/.astrbot-plugin/i18n/<locale>.json
+# 而不是 <插件目录>/i18n/<locale>.json —— 放错位置页面标题就永远是英文目录名。
+i18n_dir = PLUGIN_DIR / ".astrbot-plugin" / "i18n"
+check(i18n_dir.is_dir(), f"i18n 目录路径正确 -> {i18n_dir.relative_to(PLUGIN_DIR)}")
+check(
+    not (PLUGIN_DIR / "i18n").exists(),
+    "没有把 i18n 放在 <插件>/i18n/（那个位置 AstrBot 不读）",
+)
+missing_locales = [
+    loc for loc in ("zh-CN", "en-US") if not (i18n_dir / f"{loc}.json").is_file()
+]
+check(not missing_locales, f"zh-CN / en-US 都存在（缺：{missing_locales}）")
+
+loaded_i18n = PluginManager._load_plugin_i18n(str(PLUGIN_DIR))
+check(set(loaded_i18n) >= {"zh-CN", "en-US"}, f"官方加载器读到语言 -> {sorted(loaded_i18n)}")
+zh_title = PluginPageService.get_by_path(loaded_i18n.get("zh-CN"), "pages.editor.title")
+check(
+    zh_title == "数据编辑器",
+    f"pages.editor.title 解析为中文标题 -> {zh_title!r}",
+)
+en_title = PluginPageService.get_by_path(loaded_i18n.get("en-US"), "pages.editor.title")
+check(bool(en_title) and en_title != zh_title, f"英文语言包另有标题 -> {en_title!r}")
+check(
+    bool(PluginPageService.get_by_path(loaded_i18n.get("zh-CN"), "metadata.display_name")),
+    "metadata.display_name 也在语言包里（插件列表显示中文名）",
+)
+
+# 页面脚本与插件侧的通道约定必须一致（改一边忘另一边是这条通道最容易踩的坑）
+bridge_src = (PLUGIN_DIR / "_editor_bridge.py").read_text(encoding="utf-8")
+page_src = editor_entry.read_text(encoding="utf-8")
+bridge_name = "fishing_editor_bridge.json"
+check(
+    f'BRIDGE_FILE_NAME = "{bridge_name}"' in bridge_src,
+    f"插件侧固定文件名 = {bridge_name}",
+)
+check(
+    f'BRIDGE_FILE = "{bridge_name}"' in page_src,
+    f"页面侧固定文件名 = {bridge_name}（两边一致）",
+)
+for action in (
+    "save_content",
+    "save_numbers",
+    "snapshot_create",
+    "snapshot_restore",
+    "snapshot_delete",
+    "snapshot_rename",
+    "save_autobackup",
+    "refresh",
+):
+    check(
+        f'"{action}"' in bridge_src and f'"{action}"' in page_src,
+        f"动作 {action} 两侧都有（插件白名单 + 页面映射）",
+    )
+
+# ---------------------------------------------------------------------------
 print("\n" + "=" * 62)
 if failures:
     print(f"❌ {len(failures)} 项未通过：")
