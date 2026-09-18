@@ -945,22 +945,66 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       Math.random().toString(36).slice(2, 6);
   }
 
-  /** 统一的桥接请求封装：把「怎么调」和「怎么报错」分开。 */
+  /**
+   * 桥接请求封装：把「怎么调」和「怎么报错」分开。
+   *
+   * ⚠️ 实测踩坑：不同 AstrBot 版本/入口对 endpoint 的拼法不一致 ——
+   * 有的直接把 endpoint 当完整 API 路径（需要 /api 前缀），
+   * 有的会自己拼到某个前缀后面（此时传相对路径）。
+   * 所以这里先按原样请求，若返回「未找到该路由 / 404」，
+   * 自动改用 /api/ 前缀重试一次，并把成功的那种拼法记住，
+   * 后续请求直接复用（只探测一次，不会每次都双发）。
+   */
+  var API_PREFIX = null;
+
+  function rawBridgeCall(kind, endpoint, a, b) {
+    var call;
+    if (kind === "get") call = sdk.apiGet(endpoint, a || {});
+    else if (kind === "post") call = sdk.apiPost(endpoint, a || {});
+    else call = sdk.upload(endpoint, a, b);
+    return Promise.resolve(call);
+  }
+
+  function isRouteMissing(err) {
+    var msg = String((err && err.message) || err || "");
+    return /未找到该路由|not\s*found|404/i.test(msg);
+  }
+
   function bridgeRequest(kind, endpoint, a, b) {
     if (!sdk) {
       var off = new Error("离线预览：没有 AstrBot 桥接，不会真正发送");
       off.offline = true;
       return Promise.reject(off);
     }
-    var call;
+    if (API_PREFIX !== null) {
+      return rawBridgeCall(kind, API_PREFIX + endpoint, a, b);
+    }
+    if (endpoint.charAt(0) === "/") {
+      API_PREFIX = "";
+      return rawBridgeCall(kind, endpoint, a, b);
+    }
     try {
-      if (kind === "get") call = sdk.apiGet(endpoint, a || {});
-      else if (kind === "post") call = sdk.apiPost(endpoint, a || {});
-      else call = sdk.upload(endpoint, a, b);
+      return rawBridgeCall(kind, endpoint, a, b).then(
+        function (res) {
+          API_PREFIX = "";                       // 原样拼法可用
+          return res;
+        },
+        function (err) {
+          if (!isRouteMissing(err)) throw err;   // 其它错误（401/500）不重试
+          return rawBridgeCall(kind, "/api/" + endpoint, a, b).then(
+            function (res) {
+              API_PREFIX = "/api/";               // 需要完整 API 前缀
+              return res;
+            },
+            function (err2) {
+              throw err2;                        // 两种都不行 → 如实抛错
+            },
+          );
+        },
+      );
     } catch (e) {
       return Promise.reject(e);
     }
-    return Promise.resolve(call);
   }
 
   /** 把各种失败形态整理成「人话 + 能定位的信息」（绝不静默失败）。 */
