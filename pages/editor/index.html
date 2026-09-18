@@ -4,6 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>群钓鱼 · 数据编辑器</title>
+
+  <!-- 桥接 SDK：AstrBot 会把下面这个相对路径改写成带 asset_token 的完整地址（服务端也会自动注入一份，这里显式引用是为了两条路都覆盖）。
+       加载成功后 window.AstrBotPluginPage 才存在，页面才会显示「已连接」。 -->
+  <script src="/api/plugin/page/bridge-sdk.js"></script>
 <style>
 /* =============================================================================
    群钓鱼数据编辑器 —— 单文件 UI（零外部依赖）
