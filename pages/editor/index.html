@@ -955,23 +955,28 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
    * 自动改用 /api/ 前缀重试一次，并把成功的那种拼法记住，
    * 后续请求直接复用（只探测一次，不会每次都双发）。
    */
-  var API_CANDIDATES = ["", "/api/", "/api/v1/"];
-  // 记住首次探测成功的那一组（前缀 + 是否需要用「纯插件名」），后续请求直接复用。
-  var API_PREFIX = null;
-  var API_PLAIN_NAME = false;
+  /**
+   * 桥接的拼接规则（来自 WebUI 的 dist/assets/PluginPagePage-*.js）：
+   *   /api/v1/plugins/extensions/<插件名>/<endpoint>
+   * 所以这里必须传「相对插件」的路径（例如 config、pages/editor），
+   * 绝不能带 plugins/<名字>/ 前缀 —— 否则会被拼成 .../extensions/<名字>/plugins/<名字>/config。
+   */
+  var KNOWN_ENDPOINTS = ["config/schema", "config", "pages", "logs", "stats"];
 
-  function rawBridgeCall(kind, endpoint, a, b) {
-    var call;
-    if (kind === "get") call = sdk.apiGet(endpoint, a || {});
-    else if (kind === "post") call = sdk.apiPost(endpoint, a || {});
-    else call = sdk.upload(endpoint, a, b);
-    return Promise.resolve(call);
-  }
-
-  /** 把 plugins/<作者>/<插件名>/... 换成 plugins/<插件名>/...（配置接口只认纯插件名）。 */
-  function plainNameVariant(endpoint) {
-    var m = endpoint.match(/^(.*?plugins\/)[^\/]+\/([^\/]+)(\/.*)$/);
-    return m ? m[1] + m[2] + m[3] : endpoint;
+  function normalizeEndpoint(endpoint) {
+    var ep = String(endpoint || "");
+    if (ep.charAt(0) === "/" || /^https?:/i.test(ep)) {
+      return ep;                       // 绝对路径/URL 原样透传
+    }
+    var m = ep.match(/^plugins\/(.+)$/);
+    if (!m) return ep;
+    var rest = m[1];
+    for (var i = 0; i < KNOWN_ENDPOINTS.length; i += 1) {
+      var idx = rest.indexOf(KNOWN_ENDPOINTS[i]);
+      if (idx >= 0) return rest.slice(idx);
+    }
+    var parts = rest.split("/");
+    return parts.length > 1 ? parts.slice(1).join("/") : rest;
   }
 
   function shortErr(err) {
@@ -980,7 +985,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       (d && (d.message || d.error || d.detail)) ||
       (err && err.message) ||
       String(err || "未知错误");
-    return String(msg).slice(0, 60);
+    return String(msg).slice(0, 80);
   }
 
   function bridgeRequest(kind, endpoint, a, b) {
@@ -989,54 +994,22 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       off.offline = true;
       return Promise.reject(off);
     }
-    if (API_PREFIX !== null) {
-      var ep0 = API_PLAIN_NAME ? plainNameVariant(endpoint) : endpoint;
-      return rawBridgeCall(kind, API_PREFIX + ep0, a, b);
+    var target = normalizeEndpoint(endpoint);
+    var call;
+    try {
+      if (kind === "get") call = sdk.apiGet(target, a || {});
+      else if (kind === "post") call = sdk.apiPost(target, a || {});
+      else call = sdk.upload(target, a, b);
+    } catch (e) {
+      e.bridgeEndpoint = target;
+      return Promise.reject(e);
     }
-    if (endpoint.charAt(0) === "/") {
-      API_PREFIX = "";
-      return rawBridgeCall(kind, endpoint, a, b);
-    }
-
-    // 首次：穷举「前缀 × plugin_id 形式」，第一个成功的记住
-    var combos = [];
-    [false, true].forEach(function (plain) {
-      var ep = plain ? plainNameVariant(endpoint) : endpoint;
-      if (combos.some(function (c) { return c.path.endsWith(ep) && c.prefix === ""; }) && ep === endpoint) return;
-      API_CANDIDATES.forEach(function (pre) {
-        var path = pre + ep;
-        if (!combos.some(function (c) { return c.path === path; })) {
-          combos.push({ prefix: pre, plain: plain, path: path });
-        }
-      });
+    return Promise.resolve(call).then(null, function (err) {
+      // 失败时补上「实际请求的相对路径」，方便一眼看出拼错没拼错
+      err.bridgeEndpoint = target;
+      err.bridgeDetail = shortErr(err);
+      throw err;
     });
-
-    var attempts = [];
-    var attempt = function (index, firstError) {
-      if (index >= combos.length) {
-        var err = firstError || new Error("接口路径全部不可用");
-        err.message =
-          "试过 " + attempts.length + " 个路径都失败：" +
-          attempts
-            .map(function (item) { return item.endpoint + " → " + item.error; })
-            .join("；");
-        err.attempts = attempts;
-        return Promise.reject(err);
-      }
-      var combo = combos[index];
-      return rawBridgeCall(kind, combo.path, a, b).then(
-        function (res) {
-          API_PREFIX = combo.prefix;
-          API_PLAIN_NAME = combo.plain;
-          return res;
-        },
-        function (err) {
-          attempts.push({ endpoint: combo.path, error: shortErr(err) });
-          return attempt(index + 1, firstError || err);
-        },
-      );
-    };
-    return attempt(0, null);
   }
 
   /** 把各种失败形态整理成「人话 + 能定位的信息」（绝不静默失败）。 */
