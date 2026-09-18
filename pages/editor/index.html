@@ -1,0 +1,2374 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>群钓鱼 · 数据编辑器</title>
+<style>
+/* =============================================================================
+   群钓鱼数据编辑器 —— 单文件 UI（零外部依赖）
+   主题色用 CSS 变量驱动，挂在 <html data-theme="dark|light"> 上
+   ============================================================================= */
+
+:root {
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
+  --dur: 140ms;
+}
+
+/* ---------- 深色主题（默认，AstrBot 面板通常为深色） ---------- */
+html[data-theme="dark"] {
+  --bg: #0d1117;
+  --card: #161b22;
+  --hover: #1c2128;
+  --sunken: #10151b;
+  --border: #30363d;
+  --border-soft: #232a31;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --faint: #6e7681;
+  --primary: #2f81f7;
+  --primary-fg: #ffffff;
+  --primary-soft: rgba(47, 129, 247, 0.14);
+  --success: #3fb950;
+  --success-soft: rgba(63, 185, 80, 0.14);
+  --warn: #d29922;
+  --warn-soft: rgba(210, 153, 34, 0.14);
+  --danger: #f85149;
+  --danger-soft: rgba(248, 81, 73, 0.14);
+  --danger-wash: rgba(248, 81, 73, 0.045);   /* 出错行的极淡底色 */
+  --purple: #a371f7;
+  --purple-soft: rgba(163, 113, 247, 0.14);
+  --zebra: rgba(255, 255, 255, 0.018);
+  --shadow: 0 8px 24px rgba(1, 4, 9, 0.5);
+  --scrim: rgba(1, 4, 9, 0.6);
+  --scheme: dark;
+}
+
+/* ---------- 浅色主题 ---------- */
+html[data-theme="light"] {
+  --bg: #ffffff;
+  --card: #ffffff;
+  --hover: #f6f8fa;
+  --sunken: #f6f8fa;
+  --border: #d0d7de;
+  --border-soft: #e6eaef;
+  --fg: #1f2328;
+  --muted: #656d76;
+  --faint: #8c959f;
+  --primary: #2f81f7;
+  --primary-fg: #ffffff;
+  --primary-soft: rgba(47, 129, 247, 0.1);
+  --success: #1a7f37;
+  --success-soft: rgba(26, 127, 55, 0.1);
+  --warn: #9a6700;
+  --warn-soft: rgba(154, 103, 0, 0.1);
+  --danger: #cf222e;
+  --danger-soft: rgba(207, 34, 46, 0.1);
+  --danger-wash: rgba(207, 34, 46, 0.03);   /* 出错行的极淡底色（浅色下更轻） */
+  --purple: #8250df;
+  --purple-soft: rgba(130, 80, 223, 0.1);
+  --zebra: rgba(0, 0, 0, 0.014);
+  --shadow: 0 8px 24px rgba(140, 149, 159, 0.2);
+  --scrim: rgba(31, 35, 40, 0.45);
+  --scheme: light;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: var(--scheme);
+}
+
+#app {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================== 顶部栏 ============================== */
+/* 顶栏 + 标签页一起吸顶：不用写死高度，标题换行也不会错位 */
+.sticky-head {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: var(--card);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; }
+
+.brand-mark {
+  width: 34px; height: 34px;
+  flex: none;
+  display: grid; place-items: center;
+  font-size: 18px;
+  border-radius: var(--radius);
+  background: var(--primary-soft);
+  border: 1px solid var(--border);
+}
+
+.brand-text { min-width: 0; }
+.brand-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.brand-sub {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* 连接状态徽标 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 550;
+  border: 1px solid var(--border);
+  background: var(--sunken);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.badge.is-online { color: var(--success); border-color: var(--success); background: var(--success-soft); }
+.badge.is-online .dot { background: var(--success); box-shadow: 0 0 0 3px var(--success-soft); }
+.badge.is-offline { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.badge.is-offline .dot { background: var(--warn); }
+
+/* ============================== 按钮 ============================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur), border-color var(--dur), transform var(--dur), color var(--dur);
+}
+.btn:hover { background: var(--hover); border-color: var(--faint); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.btn[disabled]:hover { background: var(--card); border-color: var(--border); }
+
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+}
+.btn-primary:hover { background: color-mix(in srgb, var(--primary) 88%, #000); border-color: transparent; }
+
+.btn-ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn-ghost:hover { background: var(--hover); color: var(--fg); border-color: var(--border); }
+
+.btn-danger { color: var(--danger); border-color: var(--border); }
+.btn-danger:hover { background: var(--danger-soft); border-color: var(--danger); }
+
+.btn-sm { height: 26px; padding: 0 9px; font-size: 12px; }
+.btn-icon { width: 28px; height: 28px; padding: 0; justify-content: center; }
+
+/* ============================== 标签页 ============================== */
+.tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 var(--sp-5);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tabs::-webkit-scrollbar { height: 0; }
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  transition: color var(--dur), border-color var(--dur), background var(--dur);
+}
+.tab:hover { color: var(--fg); background: var(--hover); }
+.tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
+.tab.is-active { color: var(--fg); border-bottom-color: var(--primary); }
+.tab .tab-count {
+  min-width: 20px;
+  height: 17px;
+  padding: 0 5px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  background: var(--sunken);
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+}
+.tab.is-active .tab-count { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
+.tab .tab-dirty {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--warn); flex: none;
+  display: none;
+}
+.tab.has-dirty .tab-dirty { display: block; }
+
+/* ============================== 内容区 ============================== */
+.content {
+  flex: 1 1 auto;
+  padding: var(--sp-4) var(--sp-5) 72px;
+  max-width: 1800px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.card + .card { margin-top: var(--sp-4); }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+.card-head h2 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 620;
+  display: flex; align-items: center; gap: 7px;
+}
+.card-head .hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+.card-head .spacer { margin-left: auto; }
+
+/* ---------- 工具栏 ---------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--sunken);
+}
+
+.field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color var(--dur), box-shadow var(--dur);
+}
+.field:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.field > .field-icon { color: var(--muted); font-size: 12px; flex: none; }
+.field input, .field select {
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12.5px;
+  height: 100%;
+  outline: none;
+  min-width: 0;
+}
+.field.search { min-width: 250px; }
+.field.search input { width: 100%; }
+.field select { cursor: pointer; padding-right: 2px; }
+.field select option { background: var(--card); color: var(--fg); }
+
+.toolbar .divider { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }
+
+.stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.stat-chip b { color: var(--fg); font-weight: 620; }
+.stat-chip.is-dirty { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
+.stat-chip.is-dirty b { color: var(--warn); }
+
+/* ---------- 表格 ---------- */
+.table-wrap { overflow: auto; max-height: calc(100vh - 320px); }
+table.grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+table.grid thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  text-align: left;
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--card);
+  padding: 9px var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  user-select: none;
+}
+table.grid thead th.num { text-align: right; }
+table.grid thead th .col-hint { font-weight: 400; color: var(--faint); font-size: 10.5px; }
+
+table.grid tbody td {
+  padding: 4px var(--sp-3);
+  line-height: 1.45;
+  border-bottom: 1px solid var(--border-soft);
+  vertical-align: middle;
+}
+/* 行状态用「左侧 3px 竖条」表达，不再整行铺色 */
+table.grid tbody td:first-child { border-left: 3px solid transparent; }
+table.grid tbody tr:nth-child(even) { background: var(--zebra); }
+table.grid tbody tr:hover { background: var(--hover); }
+table.grid tbody tr.is-invalid { background: var(--danger-wash); }
+table.grid tbody tr.is-selected { background: var(--primary-soft); }
+table.grid tbody tr.is-selected td:first-child { border-left-color: var(--primary); }
+table.grid tbody tr.is-dirty td:first-child { border-left-color: var(--warn); }
+table.grid tbody tr.is-invalid td:first-child { border-left-color: var(--danger); }
+table.grid tbody tr.is-editing { background: var(--hover); }
+table.grid tbody tr:last-child td { border-bottom: 0; }
+
+/* 只读态下出错的单元格：淡红文字 + 虚线下划线，不铺底色 */
+.cell-bad {
+  color: var(--danger);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+td.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 12px; }
+td.id-cell { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+td.actions { width: 74px; text-align: right; white-space: nowrap; }
+td.actions .btn { opacity: 0; transition: opacity var(--dur); }
+tr:hover td.actions .btn, tr.is-editing td.actions .btn { opacity: 1; }
+td.actions .btn:focus-visible { opacity: 1; }
+
+.cell-emoji { font-size: 14px; }
+
+/* 单元格内的行内输入 */
+.cell-input {
+  width: 100%;
+  min-width: 60px;
+  padding: 3px 7px;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--fg);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  transition: border-color var(--dur), box-shadow var(--dur);
+}
+.cell-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.cell-input.is-bad { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.cell-input.mono { font-family: var(--mono); font-size: 12px; }
+input[type="number"].cell-input { text-align: right; }
+
+/* 稀有度 pill */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.rar-common  { color: #8b949e; background: rgba(139, 148, 158, 0.16); border-color: rgba(139, 148, 158, 0.35); }
+.rar-uncommon{ color: #3fb950; background: rgba(63, 185, 80, 0.15);  border-color: rgba(63, 185, 80, 0.35); }
+.rar-rare    { color: #2f81f7; background: rgba(47, 129, 247, 0.15); border-color: rgba(47, 129, 247, 0.38); }
+.rar-epic    { color: #a371f7; background: rgba(163, 113, 247, 0.16);border-color: rgba(163, 113, 247, 0.38); }
+.rar-myth    { color: #d29922; background: rgba(210, 153, 34, 0.16); border-color: rgba(210, 153, 34, 0.4); }
+html[data-theme="light"] .rar-common   { color: #57606a; }
+html[data-theme="light"] .rar-uncommon { color: #1a7f37; }
+html[data-theme="light"] .rar-rare     { color: #0969da; }
+html[data-theme="light"] .rar-epic     { color: #8250df; }
+html[data-theme="light"] .rar-myth     { color: #9a6700; }
+
+/* 分布标签 */
+.dist { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.dist .tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 19px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-family: var(--mono);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  border: 1px solid var(--border-soft);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.dist .tag b { color: var(--fg); font-weight: 600; }
+.dist .tag.is-star { color: var(--purple); border-color: var(--purple); background: var(--purple-soft); }
+.dist .tag.is-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.dist .dist-empty { color: var(--faint); font-size: 11.5px; }
+
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.mono { font-family: var(--mono); }
+.nowrap { white-space: nowrap; }
+.cut { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 行内确认条 */
+.confirm-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  white-space: nowrap;
+}
+.confirm-strip .q { color: var(--danger); font-size: 11.5px; font-weight: 600; }
+.confirm-strip .btn { height: 22px; padding: 0 8px; font-size: 11.5px; }
+
+/* 空状态 */
+.empty {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.empty .empty-icon { font-size: 34px; display: block; margin-bottom: 10px; opacity: 0.75; }
+.empty .empty-title { font-size: 13.5px; font-weight: 600; color: var(--fg); margin-bottom: 4px; }
+.empty .empty-sub { font-size: 12px; }
+
+/* 表格底部操作 */
+.table-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--sunken);
+}
+.table-foot .spacer { margin-left: auto; }
+
+/* ============================== 存档页 ============================== */
+.snap-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+.snap-card {
+  position: relative;
+  padding: var(--sp-3) var(--sp-3) var(--sp-4);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color var(--dur), transform var(--dur), box-shadow var(--dur);
+}
+.snap-card:hover { border-color: var(--faint); transform: translateY(-1px); box-shadow: var(--shadow); }
+.snap-card.is-restoring { border-color: var(--warn); background: var(--warn-soft); }
+.snap-card.is-deleting { border-color: var(--danger); background: var(--danger-soft); }
+
+.snap-top { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+
+.kind {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 20px; padding: 0 8px;
+  border-radius: 999px; font-size: 11px; font-weight: 620;
+  border: 1px solid transparent;
+}
+.kind-daily  { color: var(--primary); background: var(--primary-soft); border-color: var(--primary); }
+.kind-auto   { color: var(--purple);  background: var(--purple-soft);  border-color: var(--purple); }
+.kind-manual { color: var(--success); background: var(--success-soft); border-color: var(--success); }
+
+.snap-time { margin-left: auto; font-size: 11px; color: var(--faint); font-family: var(--mono); }
+
+.snap-note {
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 20px;
+  padding: 2px 4px;
+  margin: 0 -4px var(--sp-2);
+  border-radius: var(--radius-sm);
+  cursor: text;
+  border: 1px solid transparent;
+}
+.snap-note:hover { background: var(--hover); border-color: var(--border); }
+.snap-note .placeholder { color: var(--faint); font-weight: 400; }
+
+.snap-meta {
+  display: flex; flex-wrap: wrap; gap: var(--sp-3);
+  font-size: 11.5px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--sp-3);
+}
+.snap-meta span { display: inline-flex; align-items: center; gap: 4px; }
+
+.snap-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.snap-actions .spacer { margin-left: auto; }
+
+/* 新建存档表单 */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+.form-row { display: flex; flex-direction: column; gap: 5px; }
+.form-row label { font-size: 11.5px; color: var(--muted); font-weight: 550; }
+.form-row .field { width: 100%; }
+.form-row .field input, .form-row .field select { width: 100%; }
+.form-note { font-size: 11px; color: var(--faint); }
+
+/* 新建存档：输入框 + 按钮同一行，按钮只占内容宽度（不要撑成一条长条） */
+.new-snap {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  padding: var(--sp-4);
+}
+.new-snap .grow { flex: 1 1 260px; max-width: 460px; }
+.new-snap .new-snap-hint { flex: 1 1 200px; padding-bottom: 6px; }
+
+.switch {
+  display: inline-flex; align-items: center; gap: 8px;
+  height: 30px; cursor: pointer; user-select: none;
+}
+.switch input { position: absolute; opacity: 0; pointer-events: none; }
+.switch .track {
+  width: 38px; height: 20px; border-radius: 999px;
+  background: var(--sunken); border: 1px solid var(--border);
+  position: relative; transition: background var(--dur), border-color var(--dur);
+}
+.switch .track::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--faint); transition: transform var(--dur), background var(--dur);
+}
+.switch input:checked + .track { background: var(--primary-soft); border-color: var(--primary); }
+.switch input:checked + .track::after { transform: translateX(18px); background: var(--primary); }
+.switch .switch-label { font-size: 12.5px; }
+
+/* 数值页提示 */
+.notice {
+  display: flex; gap: 10px;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+}
+.notice .notice-icon { flex: none; }
+.notice b { color: var(--fg); }
+
+/* ============================== 底部状态栏 ============================== */
+.statusbar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 35;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: 34px;
+  padding: 0 var(--sp-5);
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.statusbar .dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--faint); flex: none; display: inline-block; margin-right: 6px;
+}
+.statusbar .dot.is-dirty { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.statusbar .dot.is-clean { background: var(--success); }
+.statusbar .spacer { margin-left: auto; }
+.statusbar .sep { width: 1px; height: 14px; background: var(--border); }
+
+/* ============================== Toast ============================== */
+#toasts {
+  position: fixed;
+  right: 18px;
+  bottom: 46px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 240px;
+  max-width: 380px;
+  padding: 10px 13px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  font-size: 12.5px;
+  color: var(--fg);
+  animation: toast-in 180ms ease-out;
+  pointer-events: auto;
+}
+.toast.is-out { animation: toast-out 200ms ease-in forwards; }
+.toast .toast-icon { flex: none; font-size: 14px; line-height: 1.35; }
+.toast .toast-body { min-width: 0; }
+.toast .toast-title { font-weight: 620; margin-bottom: 1px; }
+.toast .toast-text { color: var(--muted); font-size: 12px; word-break: break-word; }
+.toast.ok { border-left-color: var(--success); }
+.toast.ok .toast-icon { color: var(--success); }
+.toast.warn { border-left-color: var(--warn); }
+.toast.warn .toast-icon { color: var(--warn); }
+.toast.err { border-left-color: var(--danger); }
+.toast.err .toast-icon { color: var(--danger); }
+.toast.info { border-left-color: var(--primary); }
+.toast.info .toast-icon { color: var(--primary); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(14px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateX(14px); }
+}
+
+/* ============================== 响应式 ============================== */
+@media (max-width: 1100px) {
+  .toolbar { gap: 6px; }
+  .field.search { min-width: 190px; }
+}
+@media (max-width: 820px) {
+  .content { padding: var(--sp-3) var(--sp-3) 72px; }
+  .topbar { padding: var(--sp-3); flex-wrap: wrap; }
+  .topbar-right { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .statusbar { padding: 0 var(--sp-3); }
+}
+
+/* 滚动条（深色下别是刺眼的白色） */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border: 3px solid var(--bg);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============================ 顶部栏 + 标签页（一起吸顶） ============================ -->
+  <div class="sticky-head">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">🎣</div>
+        <div class="brand-text">
+          <h1 class="brand-title">群钓鱼 · 数据编辑器</h1>
+          <p class="brand-sub" id="pluginName">astrbot_plugin_qq_fishing</p>
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <span class="badge" id="connBadge"><i class="dot"></i><span id="connText">检测中…</span></span>
+        <button class="btn btn-ghost" id="btnReload" title="丢弃未保存的修改，重新载入数据">↻ 重新载入</button>
+        <button class="btn" id="btnExport" title="把当前数据导出成 JSON 文件留底">⬇ 导出 JSON</button>
+        <button class="btn" id="btnImport" title="从 JSON 文件导入数据">⬆ 导入 JSON</button>
+        <button class="btn btn-primary" id="btnSave" title="保存并让配置生效（Ctrl+S）">💾 保存并生效</button>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs" role="tablist"></nav>
+  </div>
+
+  <!-- ============================ 内容区 ============================ -->
+  <main class="content" id="panel" role="tabpanel"></main>
+
+  <!-- ============================ 状态栏 ============================ -->
+  <footer class="statusbar">
+    <span id="dirtyInfo"><i class="dot is-clean"></i>已同步</span>
+    <span class="sep"></span>
+    <span id="savedInfo" class="faint">尚未保存</span>
+    <span class="spacer"></span>
+    <span id="tabInfo" class="faint">—</span>
+    <span class="sep"></span>
+    <span class="faint">Ctrl+S 保存 · / 搜索 · Esc 取消编辑</span>
+  </footer>
+
+  <div id="toasts"></div>
+  <input type="file" id="importFile" accept=".json,application/json" hidden />
+</div>
+
+<script>
+/* =============================================================================
+   群钓鱼数据编辑器 —— 前端逻辑
+   A 组：只做界面与交互，用内置演示数据渲染（离线预览）
+   B 组：把 loadConfig / saveConfig / loadSnapshots 接到真实数据通道
+   ============================================================================= */
+(function () {
+  "use strict";
+
+  /* ===========================================================================
+     1. 上下文与主题
+     AstrBot 插件页面通过 window.AstrBotPluginPage 注入上下文；
+     离线打开（file:// 预览）时用默认值兜底，并显示「离线预览」徽标。
+     =========================================================================== */
+  var sdk = window.AstrBotPluginPage || null;
+
+  function readContext() {
+    var ctx = {};
+    try {
+      ctx = (sdk && typeof sdk.getContext === "function" && sdk.getContext()) || {};
+    } catch (e) {
+      ctx = {};
+    }
+    return ctx || {};
+  }
+
+  var ctx = readContext();
+
+  /**
+   * 判断初始主题。优先级：
+   *   1) URL 上的 ?theme=dark|light（方便离线预览/截图指定主题）
+   *   2) AstrBot 服务端已经写在 <html data-theme="..."> 上的值（最权威：
+   *      AstrBot 会在返回页面时把 data-theme 重写进 <html> 标签）
+   *   3) 桥接上下文里的 isDark / theme
+   *   4) 系统偏好 prefers-color-scheme
+   *   5) 兜底深色（离线预览时的观感更好）
+   */
+  function resolveInitialDark() {
+    var forced = "";
+    try {
+      var m = /[?&]theme=(dark|light)/i.exec(location.search || "");
+      if (m) forced = m[1].toLowerCase();
+    } catch (e) { /* 忽略 */ }
+    if (forced) return forced === "dark";
+
+    var attr = String(document.documentElement.getAttribute("data-theme") || "").toLowerCase();
+    if (attr === "dark") return true;
+    if (attr === "light") return false;
+    if (ctx.isDark !== undefined) return !!ctx.isDark;
+    if (typeof ctx.theme === "string") return ctx.theme.toLowerCase().indexOf("dark") >= 0;
+    try {
+      if (window.matchMedia) return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    } catch (e) { /* 忽略 */ }
+    return true;
+  }
+
+  var ENV = {
+    online: !!sdk,
+    pluginName: ctx.pluginName || ctx.plugin_name || "astrbot_plugin_qq_fishing",
+    displayName: ctx.displayName || "群钓鱼",
+    pageTitle: ctx.pageTitle || "数据编辑器",
+    isDark: resolveInitialDark(),
+    locale: ctx.locale || "zh-CN"
+  };
+
+  function applyTheme(isDark) {
+    ENV.isDark = !!isDark;
+    document.documentElement.setAttribute("data-theme", ENV.isDark ? "dark" : "light");
+  }
+  applyTheme(ENV.isDark);
+
+  document.getElementById("pluginName").textContent = ENV.pluginName;
+  if (ctx.pageTitle) document.title = ctx.displayName + " · " + ctx.pageTitle;
+
+  /* ===========================================================================
+     2. 数据通道（B 组接真实接口，签名保持不变）
+     =========================================================================== */
+
+  /**
+   * 读取插件配置。
+   * TODO(B组)：真实环境改为 GET /api/plugins/<pluginName>/config
+   *           并把它解析成 { fish: [...], locations: [...], ..., numbers: [...],
+   *                            autoBackup: {...} } 这种按标签页分组的结构。
+   * @returns {Promise<object>}
+   */
+  async function loadConfig() {
+    // A 组：返回内置演示数据（深拷贝，避免被编辑污染）
+    return deepClone(DEMO.config);
+  }
+
+  /**
+   * 保存数据。
+   * TODO(B组)：真实环境改为「打包 JSON → upload() 到插件桥接文件」，
+   *           插件轮询到文件后调用 save_config_async() 写回配置。
+   * @param {object} payload 与 loadConfig() 返回同结构，另含 autoBackup
+   * @returns {Promise<{ok: boolean, message?: string}>}
+   */
+  async function saveConfig(payload) {
+    if (!ENV.online) {
+      return { ok: false, message: "离线预览：不会真正保存" };
+    }
+    // TODO(B组)：替换为真实上传通道
+    return { ok: false, message: "尚未接入保存通道（B 组待实现）" };
+  }
+
+  /**
+   * 读取存档列表与自动备份设置。
+   * TODO(B组)：真实环境读插件回写的状态配置项（存档清单 / 玩家数 / 下次自动存档时间）。
+   * @returns {Promise<{snapshots: Array, autoBackup: object}>}
+   */
+  async function loadSnapshots() {
+    return {
+      snapshots: deepClone(DEMO.snapshots),
+      autoBackup: deepClone(DEMO.autoBackup)
+    };
+  }
+
+  /** 存档动作（新建 / 恢复 / 删除 / 重命名）。
+   *  TODO(B组)：走与 saveConfig 相同的上传通道，带上 { action, payload }。 */
+  async function runSnapshotAction(action, payload) {
+    if (!ENV.online) {
+      return { ok: false, message: "离线预览：不会真正执行「" + action + "」" };
+    }
+    // TODO(B组)：替换为真实上传通道
+    return { ok: false, message: "尚未接入存档通道（B 组待实现）" };
+  }
+
+  /* ===========================================================================
+     3. 演示数据（离线预览用；真实数据由 loadConfig 提供）
+     =========================================================================== */
+  var RARITIES = ["常见", "少见", "稀有", "传说", "神话"];
+  var RARITY_CLASS = {
+    "常见": "rar-common",
+    "少见": "rar-uncommon",
+    "稀有": "rar-rare",
+    "传说": "rar-epic",
+    "神话": "rar-myth"
+  };
+  var RARITY_EMOJI = {
+    "常见": "⚪", "少见": "🟢", "稀有": "🔵", "传说": "🟣", "神话": "🟡"
+  };
+
+  var DEMO = {
+    config: {
+      // 与插件真实钓点对应的 16 个钓点：演示鱼的分布只会引用这里的 id
+      locations: [
+        { id: "novice",   emoji: "🏡", name: "新手村",   level_gate: 1,  gold_gate: 0,      value_mult: 1.00, desc: "村口小池塘，水浅鱼小，胜在稳定" },
+        { id: "bamboo",   emoji: "🎋", name: "竹林溪流", level_gate: 2,  gold_gate: 200,    value_mult: 1.03, desc: "溪水从竹林间穿过，水浅但很活" },
+        { id: "canal",    emoji: "🏙️", name: "城中运河", level_gate: 3,  gold_gate: 500,    value_mult: 1.12, desc: "两岸是水泥堤，水里什么都有" },
+        { id: "lake",     emoji: "🏞️", name: "山间湖泊", level_gate: 4,  gold_gate: 1000,   value_mult: 1.10, desc: "水清鱼肥，鲶鱼黑鱼都在这儿" },
+        { id: "reed",     emoji: "🌾", name: "芦苇荡",   level_gate: 6,  gold_gate: 1500,   value_mult: 1.13, desc: "密不透风的芦苇，蛙声一片" },
+        { id: "sea",      emoji: "🌊", name: "近海渔场", level_gate: 8,  gold_gate: 3500,   value_mult: 1.17, desc: "咸淡水交界，海货不少" },
+        { id: "dock",     emoji: "⚓", name: "废弃码头", level_gate: 10, gold_gate: 5000,   value_mult: 1.21, desc: "生锈的栈桥下藏着大鱼" },
+        { id: "night",    emoji: "🌉", name: "月下堤坝", level_gate: 13, gold_gate: 8000,   value_mult: 1.25, desc: "夜里灯火通明，夜行鱼会靠岸" },
+        { id: "mangrove", emoji: "🌴", name: "红树林",   level_gate: 16, gold_gate: 14000,  value_mult: 1.29, desc: "盘根错节的根系间全是小生命" },
+        { id: "swamp",    emoji: "🌫️", name: "迷雾沼泽", level_gate: 19, gold_gate: 21000,  value_mult: 1.34, desc: "阴森潮湿，藏着些怪东西" },
+        { id: "cave",     emoji: "🕳️", name: "地下暗河", level_gate: 23, gold_gate: 33000,  value_mult: 1.40, desc: "终年不见光，鱼都白了眼" },
+        { id: "ruins",    emoji: "🚢", name: "沉船遗迹", level_gate: 27, gold_gate: 65000,  value_mult: 1.46, desc: "锈迹斑斑的船舱成了鱼窝" },
+        { id: "abyss",    emoji: "🌑", name: "深海海沟", level_gate: 31, gold_gate: 95000,  value_mult: 1.53, desc: "深不见底，神话鱼的故乡" },
+        { id: "trench",   emoji: "🌊", name: "无光深渊", level_gate: 35, gold_gate: 145000, value_mult: 1.60, desc: "压力大得能把人挤扁的地方" },
+        { id: "glacier",  emoji: "🧊", name: "极地冰湖", level_gate: 40, gold_gate: 230000, value_mult: 1.68, desc: "冰层下别有洞天，只有最老的钓手敢来" },
+        { id: "aurora",   emoji: "❄️", name: "极光冰渊", level_gate: 45, gold_gate: 450000, value_mult: 1.78, desc: "极光下的裂隙，据说通着别处" }
+      ],
+      fish: [
+        { id: "carp",       name: "鲤鱼",     rarity: "常见", value: 120,   dist: "novice:1.0,lake:1.0,canal:0.8",        flavor: "村口池塘的常客，怎么钓都有" },
+        { id: "crucian",    name: "鲫鱼",     rarity: "常见", value: 90,    dist: "novice:1.2,lake:1.0",                  flavor: "巴掌大小，胜在量大" },
+        { id: "whitebait",  name: "白条",     rarity: "常见", value: 60,    dist: "bamboo:1.2,canal:1.0,reed:0.8",        flavor: "窜得飞快，抢饵最凶" },
+        { id: "loach",      name: "泥鳅",     rarity: "常见", value: 75,    dist: "novice:0.9,swamp:1.2,mangrove:0.8",    flavor: "钻在泥里，滑得抓不住" },
+        { id: "snail",      name: "田螺",     rarity: "常见", value: 45,    dist: "reed:1.1,mangrove:1.0",                flavor: "贴着芦苇根慢慢爬" },
+        { id: "catfish",    name: "鲶鱼",     rarity: "少见", value: 420,   dist: "lake:0.6,swamp:0.8",                   flavor: "夜里出来觅食，胡须很长" },
+        { id: "snakehead",  name: "黑鱼",     rarity: "少见", value: 560,   dist: "lake:0.45,reed:0.7,dock:0.3",          flavor: "水里的小霸王，牙口很利" },
+        { id: "crab",       name: "青蟹",     rarity: "少见", value: 380,   dist: "mangrove:0.6,sea:0.5",                 flavor: "横着走，钳子很有劲" },
+        { id: "ghostjelly", name: "幽灵水母", rarity: "少见", value: 480,   dist: "swamp:0.5,night:0.6",                  flavor: "半透明，夜里会微微发光" },
+        { id: "mandarin",   name: "鳜鱼",     rarity: "稀有", value: 1800,  dist: "lake:0.16,ruins:0.4,cave:0.3",         flavor: "桃花流水鳜鱼肥" },
+        { id: "sturgeon",   name: "中华鲟",   rarity: "稀有", value: 2600,  dist: "sea:0.12,dock:0.25,cave:0.3",          flavor: "活化石，撞上就是运气" },
+        { id: "anglerfish", name: "深海鮟鱇", rarity: "稀有", value: 3200,  dist: "abyss:0.2,trench:0.15",                flavor: "头顶一盏灯，专钓别的鱼" },
+        { id: "moonfish",   name: "月影鱼",   rarity: "传说", value: 9800,  dist: "night:0.05,glacier:0.09",              flavor: "只在月圆之夜浮上水面" },
+        { id: "goldhook",   name: "金钩鱼",   rarity: "传说", value: 12400, dist: "glacier:0.05,aurora:0.08",             flavor: "鳞片像熔金，冰湖特产" },
+        { id: "dragonfish", name: "龙鱼",     rarity: "传说", value: 15600, dist: "cave:0.03,ruins:0.06",                 flavor: "鳞甲分明，游起来像一条龙" },
+        { id: "kun",        name: "鲲",       rarity: "神话", value: 26000, dist: "abyss:0.02,aurora:0.012",              flavor: "北冥有鱼，其名为鲲" },
+        { id: "leviathan",  name: "利维坦",   rarity: "神话", value: 38000, dist: "trench:0.01",                          flavor: "深渊的传说，钓上来算你狠" },
+        { id: "big_fat_fish", name: "大肥鱼", rarity: "稀有", value: 120,   dist: "*:0.15",                              flavor: "深海里最肥的一条，哪儿都可能出现" }
+      ],
+      rods: [
+        { id: "bamboo",    emoji: "🎋", name: "竹竿",   price: 0,     value_bonus: 0.00, luck_bonus: 0.00, unlock_level: 1,  desc: "村口杂货铺送的，能用" },
+        { id: "carbon",    emoji: "🎣", name: "碳素竿", price: 400,   value_bonus: 0.05, luck_bonus: 0.03, unlock_level: 4,  desc: "轻巧顺手，新手进阶首选" },
+        { id: "stream",    emoji: "🪝", name: "溪流竿", price: 1600,  value_bonus: 0.09, luck_bonus: 0.05, unlock_level: 9,  desc: "韧性好，适合溪流与湖泊" },
+        { id: "dragon",    emoji: "🐉", name: "龙纹竿", price: 5400,  value_bonus: 0.17, luck_bonus: 0.11, unlock_level: 16, desc: "竿身刻龙，专治大鱼" },
+        { id: "starlight", emoji: "✨", name: "星辉竿", price: 11000, value_bonus: 0.23, luck_bonus: 0.16, unlock_level: 26, desc: "夜里会泛微光，深海也用得上" },
+        { id: "mythic",    emoji: "🌈", name: "神话竿", price: 22000, value_bonus: 0.30, luck_bonus: 0.22, unlock_level: 38, desc: "传说钓具，据说能引来神话之鱼" }
+      ],
+      baits: [
+        { id: "none",      emoji: "🪝", name: "空钩",     price: 0,  bundle: 0,  luck: 0.00, unlock_level: 1,  required_rod: "",          desc: "什么也不挂，全凭本事（免费）" },
+        { id: "bread",     emoji: "🍞", name: "面包屑",   price: 1,  bundle: 10, luck: 0.06, unlock_level: 1,  required_rod: "",          desc: "厨房剩的，便宜大碗" },
+        { id: "worm",      emoji: "🪱", name: "蚯蚓",     price: 2,  bundle: 5,  luck: 0.14, unlock_level: 2,  required_rod: "",          desc: "万用饵，两块钱一钩" },
+        { id: "bloodworm", emoji: "🪰", name: "红虫",     price: 4,  bundle: 5,  luck: 0.22, unlock_level: 5,  required_rod: "",          desc: "小鱼最爱，上钩快" },
+        { id: "corn",      emoji: "🌽", name: "玉米粒",   price: 6,  bundle: 5,  luck: 0.30, unlock_level: 9,  required_rod: "stream",    desc: "素饵之王，草鱼克星" },
+        { id: "shrimp",    emoji: "🦐", name: "虾饵",     price: 12, bundle: 3,  luck: 0.40, unlock_level: 15, required_rod: "dragon",    desc: "肉食鱼最爱，稀有度明显上升" },
+        { id: "livebait",  emoji: "🐟", name: "活饵小鱼", price: 22, bundle: 2,  luck: 0.52, unlock_level: 22, required_rod: "starlight", desc: "活蹦乱跳，专勾大鱼" },
+        { id: "secret",    emoji: "🍯", name: "秘制饵",   price: 45, bundle: 1,  luck: 0.68, unlock_level: 34, required_rod: "mythic",    desc: "祖传配方，闻着就不一样" }
+      ],
+      items: [
+        { id: "feed_basic",   emoji: "🌾", name: "普通饲料", price: 20,  effects: "meat=2;spirit=1",                     desc: "打基础的口粮" },
+        { id: "feed_premium", emoji: "🍖", name: "高级饲料", price: 80,  effects: "meat=5;spirit=4;sheen=3",             desc: "营养均衡，长得快" },
+        { id: "feed_divine",  emoji: "💧", name: "仙露",     price: 300, effects: "meat=10;spirit=10;sheen=10;value_up=150", desc: "传说中的养鱼圣品" },
+        { id: "pill_quality", emoji: "🔮", name: "洗髓丹",   price: 500, effects: "quality_up=0.30",                     desc: "激发血脉，更容易出好个体" },
+        { id: "coral_deco",   emoji: "🪸", name: "珊瑚造景", price: 260, effects: "value_up=120",                        desc: "水族馆装饰，提升馆藏价值" }
+      ],
+      collectibles: [
+        { id: "boot",     emoji: "🥾", name: "破靴子", weight: 30, value: 5,  desc: "谁扔的……还挺合脚" },
+        { id: "can",      emoji: "🥫", name: "易拉罐", weight: 26, value: 3,  desc: "叮当一响，黄金万两（并没有）" },
+        { id: "seaweed",  emoji: "🌿", name: "水草",   weight: 22, value: 2,  desc: "一挂一大把，甩都甩不掉" },
+        { id: "bottle",   emoji: "🍾", name: "漂流瓶", weight: 8,  value: 40, desc: "里面可能真的有纸条" },
+        { id: "chest",    emoji: "🧰", name: "沉船宝箱", weight: 3, value: 260, desc: "锈得打不开，但值钱" }
+      ],
+      variants: [
+        { id: "golden",  emoji: "🌟", name: "黄金", weight: 34, value_mult: 1.30, desc: "通体鎏金，最常出现的一种" },
+        { id: "albino",  emoji: "❄️", name: "白化", weight: 24, value_mult: 1.45, desc: "色素缺失，看着有点冷" },
+        { id: "blaze",   emoji: "🔥", name: "赤焰", weight: 18, value_mult: 1.60, desc: "鳍边像烧起来一样" },
+        { id: "emerald", emoji: "💚", name: "翡翠", weight: 13, value_mult: 1.85, desc: "鳞片泛着玉色" },
+        { id: "phantom", emoji: "🌑", name: "幽冥", weight: 8,  value_mult: 2.30, desc: "黑得发亮，据说来自深渊" },
+        { id: "rainbow", emoji: "🌈", name: "虹彩", weight: 3,  value_mult: 3.20, desc: "换角度看就是另一种颜色" }
+      ],
+      weather: [
+        { id: "sunny",  emoji: "☀️", name: "晴朗", weight: 30, rarity_mult: 1.00, escape_mult: 1.00, desc: "风平浪静，什么都有可能" },
+        { id: "cloudy", emoji: "⛅", name: "多云", weight: 26, rarity_mult: 1.05, escape_mult: 1.00, desc: "光线柔和，鱼口稳定" },
+        { id: "rainy",  emoji: "🌧️", name: "小雨", weight: 20, rarity_mult: 1.15, escape_mult: 1.05, desc: "雨点打在水面，鱼反而活跃" },
+        { id: "foggy",  emoji: "🌫️", name: "起雾", weight: 12, rarity_mult: 1.60, escape_mult: 1.15, desc: "能见度低，大鱼靠岸" },
+        { id: "moon",   emoji: "🌙", name: "月夜", weight: 8,  rarity_mult: 1.35, escape_mult: 0.95, desc: "夜里灯火通明，夜行鱼活跃" },
+        { id: "storm",  emoji: "⛈️", name: "雷雨", weight: 4,  rarity_mult: 1.25, escape_mult: 1.30, desc: "鱼很凶，但也不好拉" }
+      ],
+      numbers: [
+        { key: "stamina_max",           label: "体力上限",     value: 20,   unit: "点",   desc: "攒满需要 stamina_regen_seconds × 上限" },
+        { key: "stamina_regen_seconds", label: "体力恢复间隔", value: 45,   unit: "秒",   desc: "每多少秒恢复 1 点体力；填 0 = 本服不限体力" },
+        { key: "multi_cast_max",        label: "单次连钓上限", value: 20,   unit: "次",   desc: "/钓鱼 <数字> 一次最多连钓几次" },
+        { key: "fish_value_mult",       label: "鱼价总闸",     value: 1.0,  unit: "倍",   desc: "所有鱼基准价的全局倍率（改物价用这个）" },
+        { key: "location_codex_gate",   label: "钓点图鉴门槛", value: 0.8,  unit: "比例", desc: "上一个钓点图鉴开到几成才能前往下一个" },
+        { key: "item_drop_chance",      label: "杂物概率",     value: 0.14, unit: "概率", desc: "没中鱼时钩上带物件的概率" },
+        { key: "level_xp_ratio",        label: "等级曲线底数", value: 1.08, unit: "倍",   desc: "指数曲线底数，越大后期越难升级" },
+        { key: "hook_rate_fallback",    label: "上钩率兜底",   value: 0.30, unit: "概率", desc: "鱼饵配置写错时的兜底咬钩率" }
+      ]
+    },
+    autoBackup: { enable: true, dailyHour: 4, intervalHours: 6, keepDaily: 30, keepInterval: 20 },
+    snapshots: [
+      { id: "s1", kind: "manual", note: "改物价前的存档",     time: "2026-09-18 18:20", players: 35, size: "131 KB" },
+      { id: "s2", kind: "daily",  note: "每日自动存档",       time: "2026-09-18 04:00", players: 35, size: "130 KB" },
+      { id: "s3", kind: "auto",   note: "按时存档（6 小时）", time: "2026-09-17 22:00", players: 34, size: "128 KB" },
+      { id: "s4", kind: "daily",  note: "",                   time: "2026-09-17 04:00", players: 33, size: "126 KB" }
+    ]
+  };
+
+  var KIND_LABEL = { manual: "手动", daily: "每日", auto: "按时" };
+  var KIND_ICON = { manual: "🖐️", daily: "📅", auto: "⏱️" };
+
+  /* ===========================================================================
+     4. 标签页定义（列结构 = 表格渲染与校验的唯一依据）
+     =========================================================================== */
+  var TABS = [
+    {
+      id: "fish",
+      label: "🐟 鱼池",
+      title: "鱼池",
+      hint: "一行一条鱼；分布写「钓点:权重」，用 * 表示所有钓点",
+      keyField: "id",
+      filterKey: "rarity",
+      filterOptions: RARITIES,
+      sortOptions: [
+        ["default", "默认顺序"],
+        ["name", "按名称"],
+        ["valueDesc", "按价格（高→低）"],
+        ["valueAsc", "按价格（低→高）"],
+        ["rarity", "按稀有度"]
+      ],
+      columns: [
+        { key: "id",       label: "id",        type: "text",   w: "120px" },
+        { key: "name",     label: "名称",      type: "text",   w: "110px" },
+        { key: "rarity",   label: "稀有度",    type: "rarity", w: "105px" },
+        { key: "value",    label: "基准价",    type: "number", w: "100px", num: true, step: 1 },
+        { key: "dist",     label: "分布",      type: "dist",   w: "300px", hint: "钓点:权重" },
+        { key: "flavor",   label: "说明",      type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_fish_" + rand(100, 999), name: "新鱼", rarity: "常见", value: 100, dist: "novice:1.0", flavor: "" };
+      }
+    },
+    {
+      id: "locations",
+      label: "🗺️ 钓点",
+      title: "钓点",
+      hint: "解锁等级 / 金币门槛 / 价值倍率都会影响玩家进度",
+      keyField: "id",
+      filterKey: "level_gate",
+      filterOptions: ["1", "2", "3", "4", "6", "8", "10"],
+      filterLabel: "解锁等级",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["level", "按解锁等级"], ["multDesc", "按价值倍率"]],
+      columns: [
+        { key: "id",         label: "id",       type: "text",   w: "110px" },
+        { key: "emoji",      label: "图标",     type: "emoji",  w: "64px" },
+        { key: "name",       label: "名称",     type: "text",   w: "120px" },
+        { key: "level_gate", label: "解锁等级", type: "number", w: "92px", num: true, step: 1 },
+        { key: "gold_gate",  label: "解锁金币", type: "number", w: "110px", num: true, step: 100 },
+        { key: "value_mult", label: "价值倍率", type: "number", w: "100px", num: true, step: 0.01 },
+        { key: "desc",       label: "说明",     type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_loc_" + rand(100, 999), emoji: "📍", name: "新钓点", level_gate: 1, gold_gate: 0, value_mult: 1.0, desc: "" };
+      }
+    },
+    {
+      id: "baits",
+      label: "🪱 鱼饵",
+      title: "鱼饵",
+      hint: "解锁等级 + 需要鱼竿决定上架条件；空钩填 0",
+      keyField: "id",
+      filterKey: "required_rod",
+      filterOptions: ["", "bamboo", "carbon", "stream", "dragon", "starlight", "mythic"],
+      filterLabel: "需要鱼竿",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueAsc", "按单价（低→高）"], ["valueDesc", "按单价（高→低）"]],
+      columns: [
+        { key: "id",           label: "id",       type: "text",   w: "100px" },
+        { key: "emoji",        label: "图标",     type: "emoji",  w: "60px" },
+        { key: "name",         label: "名称",     type: "text",   w: "110px" },
+        { key: "price",        label: "单价",     type: "number", w: "84px", num: true, step: 1, valueKey: true },
+        { key: "bundle",       label: "一组数量", type: "number", w: "92px", num: true, step: 1 },
+        { key: "luck",         label: "品质幸运", type: "number", w: "100px", num: true, step: 0.02 },
+        { key: "unlock_level", label: "解锁等级", type: "number", w: "92px", num: true, step: 1 },
+        { key: "required_rod", label: "需要鱼竿", type: "text",   w: "110px" },
+        { key: "desc",         label: "说明",     type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_bait_" + rand(100, 999), emoji: "🪱", name: "新鱼饵", price: 5, bundle: 5, luck: 0.1, unlock_level: 1, required_rod: "", desc: "" };
+      }
+    },
+    {
+      id: "rods",
+      label: "🎣 鱼竿",
+      title: "鱼竿",
+      hint: "价值加成直接决定每竿收益；解锁等级控制上架",
+      keyField: "id",
+      filterKey: "unlock_level",
+      filterOptions: ["1", "4", "9", "16", "26", "38"],
+      filterLabel: "解锁等级",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueAsc", "按价格（低→高）"], ["valueDesc", "按价格（高→低）"]],
+      columns: [
+        { key: "id",           label: "id",       type: "text",   w: "110px" },
+        { key: "emoji",        label: "图标",     type: "emoji",  w: "60px" },
+        { key: "name",         label: "名称",     type: "text",   w: "110px" },
+        { key: "price",        label: "价格",     type: "number", w: "96px", num: true, step: 100, valueKey: true },
+        { key: "value_bonus",  label: "价值加成", type: "number", w: "104px", num: true, step: 0.01, pct: true },
+        { key: "luck_bonus",   label: "幸运加成", type: "number", w: "104px", num: true, step: 0.01, pct: true },
+        { key: "unlock_level", label: "解锁等级", type: "number", w: "92px", num: true, step: 1 },
+        { key: "desc",         label: "说明",     type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_rod_" + rand(100, 999), emoji: "🎣", name: "新鱼竿", price: 1000, value_bonus: 0.1, luck_bonus: 0.05, unlock_level: 1, desc: "" };
+      }
+    },
+    {
+      id: "items",
+      label: "🎒 道具",
+      title: "道具",
+      hint: "效果写成 key=值，分号分隔（如 meat=2;value_up=120）",
+      keyField: "id",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueAsc", "按价格（低→高）"], ["valueDesc", "按价格（高→低）"]],
+      columns: [
+        { key: "id",      label: "id",   type: "text",   w: "120px" },
+        { key: "emoji",   label: "图标", type: "emoji",  w: "60px" },
+        { key: "name",    label: "名称", type: "text",   w: "120px" },
+        { key: "price",   label: "价格", type: "number", w: "96px", num: true, step: 10, valueKey: true },
+        { key: "effects", label: "效果", type: "text",   w: "220px", mono: true },
+        { key: "desc",    label: "说明", type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_item_" + rand(100, 999), emoji: "📦", name: "新道具", price: 100, effects: "", desc: "" };
+      }
+    },
+    {
+      id: "collectibles",
+      label: "🥫 杂物",
+      title: "杂物",
+      hint: "没中鱼时可能钩上来的东西；权重越大越常见",
+      keyField: "id",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["weightDesc", "按权重（高→低）"], ["valueDesc", "按价值（高→低）"]],
+      columns: [
+        { key: "id",     label: "id",   type: "text",   w: "120px" },
+        { key: "emoji",  label: "图标", type: "emoji",  w: "60px" },
+        { key: "name",   label: "名称", type: "text",   w: "120px" },
+        { key: "weight", label: "权重", type: "number", w: "90px", num: true, step: 1 },
+        { key: "value",  label: "价值", type: "number", w: "90px", num: true, step: 1, valueKey: true },
+        { key: "desc",   label: "说明", type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_junk_" + rand(100, 999), emoji: "🗑️", name: "新杂物", weight: 10, value: 1, desc: "" };
+      }
+    },
+    {
+      id: "variants",
+      label: "🧬 变异",
+      title: "变异个体",
+      hint: "变异体的价值倍率直接乘在鱼价上",
+      keyField: "id",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["weightDesc", "按权重（高→低）"], ["valueDesc", "按倍率（高→低）"]],
+      columns: [
+        { key: "id",         label: "id",       type: "text",   w: "110px" },
+        { key: "emoji",      label: "图标",     type: "emoji",  w: "60px" },
+        { key: "name",       label: "名称",     type: "text",   w: "110px" },
+        { key: "weight",     label: "相对权重", type: "number", w: "100px", num: true, step: 1 },
+        { key: "value_mult", label: "价值倍率", type: "number", w: "100px", num: true, step: 0.05 },
+        { key: "desc",       label: "说明",     type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_variant_" + rand(100, 999), emoji: "✨", name: "新变异", weight: 10, value_mult: 1.5, desc: "" };
+      }
+    },
+    {
+      id: "weather",
+      label: "🌦️ 天气",
+      title: "天气",
+      hint: "稀有度倍率越高越容易出好鱼；拉线难度影响逃脱率",
+      keyField: "id",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["weightDesc", "按权重（高→低）"]],
+      columns: [
+        { key: "id",           label: "id",         type: "text",   w: "110px" },
+        { key: "emoji",        label: "图标",       type: "emoji",  w: "60px" },
+        { key: "name",         label: "名称",       type: "text",   w: "110px" },
+        { key: "weight",       label: "权重",       type: "number", w: "90px", num: true, step: 1 },
+        { key: "rarity_mult",  label: "稀有度倍率", type: "number", w: "108px", num: true, step: 0.05 },
+        { key: "escape_mult",  label: "拉线难度",   type: "number", w: "108px", num: true, step: 0.05 },
+        { key: "desc",         label: "说明",       type: "text" }
+      ],
+      makeRow: function () {
+        return { id: "new_weather_" + rand(100, 999), emoji: "🌤️", name: "新天气", weight: 10, rarity_mult: 1.0, escape_mult: 1.0, desc: "" };
+      }
+    },
+    {
+      id: "numbers",
+      label: "⚙️ 数值",
+      title: "核心数值",
+      hint: "这些是全局数值旋钮；内容表（鱼/饵/竿/钓点）在各自的标签页里改",
+      keyField: "key",
+      readonlyKeys: ["key", "label", "desc"],
+      tableMinWidth: "900px",
+      sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueDesc", "按数值（高→低）"]],
+      columns: [
+        { key: "label", label: "数值项",    type: "readonly", w: "200px" },
+        { key: "key",   label: "配置键",    type: "readonly", w: "220px", mono: true },
+        { key: "value", label: "当前值",    type: "number",   w: "120px", num: true, step: "any", valueKey: true },
+        { key: "unit",  label: "单位",      type: "readonly", w: "70px" },
+        { key: "desc",  label: "说明",      type: "readonly" }
+      ],
+      makeRow: null,
+      notice: "改完点右上角「保存并生效」即可。数值类配置在插件升级时会自动同步成新版默认值；内容表（鱼、饵、竿、钓点、天气、变异）会保留你的编辑，只增量补官方新增内容。"
+    },
+    {
+      id: "snapshots",
+      label: "💾 存档",
+      title: "存档管理",
+      kind: "snapshots",
+      hint: "新建 / 恢复 / 删除 / 重命名 玩家存档"
+    }
+  ];
+
+  var TAB_BY_ID = {};
+  TABS.forEach(function (t) { TAB_BY_ID[t.id] = t; });
+
+  /* ===========================================================================
+     5. 状态
+     =========================================================================== */
+  var state = {
+    tab: (function () {
+      // 支持 #hash 直达某个标签页
+      var h = (location.hash || "").replace(/^#/, "");
+      return TAB_BY_ID[h] ? h : "fish";
+    })(),
+    query: "",
+    filter: "",
+    sort: "default",
+    selected: [],          // 选中行的索引
+    editing: null,         // { index, key }
+    pendingConfirm: null,  // { scope:"row"|"card"|"batch", index, action }
+    data: {},              // tabId -> rows
+    originals: {},         // tabId -> { idValue: serialized }
+    snapshots: [],
+    autoBackup: { enable: true, dailyHour: 4, intervalHours: 6, keepDaily: 30, keepInterval: 20 },
+    savedAt: null,
+    loading: true
+  };
+
+  /* ===========================================================================
+     6. 小工具
+     =========================================================================== */
+  function $(sel, root) { return (root || document).querySelector(sel); }
+  function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+
+  function deepClone(v) { return JSON.parse(JSON.stringify(v)); }
+  function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+  function esc(s) {
+    return String(s === undefined || s === null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function fmtNum(v) {
+    var n = Number(v);
+    if (!isFinite(n)) return String(v);
+    if (Math.abs(n) >= 1000) return n.toLocaleString("zh-CN");
+    return String(n);
+  }
+  function pad(n) { return n < 10 ? "0" + n : String(n); }
+  function nowText() {
+    var d = new Date();
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function toast(kind, title, text) {
+    var box = document.getElementById("toasts");
+    var el = document.createElement("div");
+    el.className = "toast " + (kind || "info");
+    var icon = { ok: "✅", warn: "⚠️", err: "⛔", info: "ℹ️" }[kind || "info"] || "ℹ️";
+    el.innerHTML =
+      '<span class="toast-icon">' + icon + "</span>" +
+      '<div class="toast-body"><div class="toast-title">' + esc(title) + "</div>" +
+      (text ? '<div class="toast-text">' + esc(text) + "</div>" : "") + "</div>";
+    box.appendChild(el);
+    setTimeout(function () {
+      el.classList.add("is-out");
+      setTimeout(function () { el.remove(); }, 220);
+    }, 2500);
+  }
+
+  /* 把分布字符串解析成标签数组： "lake:1.0,*:0.15" → [{loc,weight,star,bad}] */
+  function parseDist(raw, knownLocs) {
+    var out = [];
+    String(raw || "").split(",").forEach(function (piece) {
+      var p = piece.trim();
+      if (!p) return;
+      var idx = p.lastIndexOf(":");
+      var loc = idx >= 0 ? p.slice(0, idx).trim() : p;
+      var wRaw = idx >= 0 ? p.slice(idx + 1).trim() : "";
+      var w = wRaw === "" ? 1 : Number(wRaw);
+      var star = loc === "*";
+      var bad = !star && knownLocs.indexOf(loc) < 0;
+      out.push({ loc: loc, weight: isFinite(w) ? w : 0, star: star, bad: bad, badWeight: wRaw !== "" && !isFinite(w) });
+    });
+    return out;
+  }
+
+  /** 当前标签下所有已知钓点 id + 名称（用于分布与需要鱼竿的校验） */
+  function knownLocationKeys() {
+    var rows = state.data.locations || [];
+    var list = [];
+    rows.forEach(function (r) {
+      if (r.id) list.push(String(r.id));
+      if (r.name) list.push(String(r.name));
+    });
+    return list;
+  }
+
+  function rowKey(tab, row) { return String(row && row[tab.keyField || "id"] || ""); }
+
+  /* 计算某个标签页的改动情况：{ dirtyRows:Set<index>, added, removed, total } */
+  function diffTab(tabId) {
+    var tab = TAB_BY_ID[tabId];
+    var rows = state.data[tabId] || [];
+    var orig = state.originals[tabId] || {};
+    var dirty = {};
+    var seen = {};
+    var added = 0;
+    var changed = 0;
+
+    rows.forEach(function (row, i) {
+      var k = rowKey(tab, row);
+      seen[k] = true;
+      if (!k || !(k in orig)) { dirty[i] = true; added++; return; }
+      if (JSON.stringify(row) !== orig[k]) { dirty[i] = true; changed++; }
+    });
+
+    var removed = 0;
+    Object.keys(orig).forEach(function (k) { if (!seen[k]) removed++; });
+
+    return { dirty: dirty, added: added, changed: changed, removed: removed, total: rows.length,
+             count: added + changed + removed };
+  }
+
+  function dirtyTotal() {
+    var n = 0;
+    TABS.forEach(function (t) {
+      if (t.kind === "snapshots") return;
+      n += diffTab(t.id).count;
+    });
+    return n;
+  }
+
+  /* 校验一行，返回 { key: "错误说明" } */
+  function validateRow(tab, row) {
+    var errs = {};
+    var locs = knownLocationKeys();
+    var rodIds = (state.data.rods || []).map(function (r) { return String(r.id); });
+
+    (tab.columns || []).forEach(function (col) {
+      var v = row[col.key];
+
+      if (col.type === "number") {
+        if (v === "" || v === null || v === undefined || !isFinite(Number(v))) {
+          errs[col.key] = "需要是数字";
+        }
+      }
+
+      if (col.key === "rarity" && RARITIES.indexOf(String(v)) < 0) {
+        errs[col.key] = "只能是：" + RARITIES.join(" / ");
+      }
+
+      if (col.type === "dist") {
+        var parts = parseDist(v, locs);
+        if (!parts.length) errs[col.key] = "至少写一个钓点，例如 lake:1.0";
+        else if (parts.some(function (p) { return p.bad; })) errs[col.key] = "有钓点不存在";
+        else if (parts.some(function (p) { return p.badWeight; })) errs[col.key] = "权重需要是数字";
+      }
+
+      if (tab.id === "fish" && col.key === "id" && !String(v || "").trim()) {
+        errs[col.key] = "id 不能为空";
+      }
+
+      if (tab.id === "baits" && col.key === "required_rod" && String(v || "").trim()) {
+        if (rodIds.indexOf(String(v).trim()) < 0) errs[col.key] = "鱼竿 id 不存在";
+      }
+    });
+
+    return errs;
+  }
+
+  function tabHasError(tabId) {
+    var tab = TAB_BY_ID[tabId];
+    if (!tab.columns) return false;
+    var rows = state.data[tabId] || [];
+    for (var i = 0; i < rows.length; i++) {
+      if (Object.keys(validateRow(tab, rows[i])).length) return true;
+    }
+    return false;
+  }
+  /* ===========================================================================
+     7. 过滤 / 排序
+     =========================================================================== */
+  function visibleRows(tab) {
+    var rows = state.data[tab.id] || [];
+    var q = state.query.trim().toLowerCase();
+    var list = rows.map(function (row, index) { return { row: row, index: index }; });
+
+    if (q) {
+      list = list.filter(function (it) {
+        return String(it.row.id || "").toLowerCase().indexOf(q) >= 0 ||
+               String(it.row.name || it.row.label || "").toLowerCase().indexOf(q) >= 0 ||
+               String(it.row.desc || it.row.flavor || "").toLowerCase().indexOf(q) >= 0;
+      });
+    }
+
+    if (state.filter && tab.filterKey) {
+      list = list.filter(function (it) {
+        return String(it.row[tab.filterKey]) === state.filter;
+      });
+    }
+
+    var rarityRank = {};
+    RARITIES.forEach(function (r, i) { rarityRank[r] = i; });
+
+    var sorters = {
+      name: function (a, b) { return String(a.row.name || "").localeCompare(String(b.row.name || ""), "zh-CN"); },
+      valueAsc: function (a, b) { return numOf(a.row, tab) - numOf(b.row, tab); },
+      valueDesc: function (a, b) { return numOf(b.row, tab) - numOf(a.row, tab); },
+      weightDesc: function (a, b) { return Number(b.row.weight || 0) - Number(a.row.weight || 0); },
+      multDesc: function (a, b) { return Number(b.row.value_mult || 0) - Number(a.row.value_mult || 0); },
+      level: function (a, b) { return Number(a.row.level_gate || 0) - Number(b.row.level_gate || 0); },
+      rarity: function (a, b) { return (rarityRank[a.row.rarity] || 0) - (rarityRank[b.row.rarity] || 0); }
+    };
+    if (state.sort !== "default" && sorters[state.sort]) list.sort(sorters[state.sort]);
+
+    return list;
+  }
+
+  function numOf(row, tab) {
+    var col = (tab.columns || []).filter(function (c) { return c.valueKey; })[0];
+    return Number(row[(col && col.key) || "value"] || 0);
+  }
+
+  /* ===========================================================================
+     8. 渲染：标签页
+     =========================================================================== */
+  function renderTabs() {
+    var nav = document.getElementById("tabs");
+    var html = TABS.map(function (t) {
+      var d = t.kind === "snapshots" ? { count: 0 } : diffTab(t.id);
+      var n = t.kind === "snapshots" ? (state.snapshots || []).length : d.total;
+      return '<button class="tab' + (state.tab === t.id ? " is-active" : "") + (d.count ? " has-dirty" : "") +
+        '" role="tab" data-act="tab" data-tab="' + t.id + '" title="' + esc(t.title) + '">' +
+        "<span>" + esc(t.label) + "</span>" +
+        '<span class="tab-count">' + n + "</span>" +
+        '<span class="tab-dirty" title="这个标签有 ' + d.count + ' 处未保存的修改"></span>' +
+        "</button>";
+    }).join("");
+    nav.innerHTML = html;
+  }
+
+  /* ===========================================================================
+     9. 渲染：表格类标签页
+     =========================================================================== */
+  function renderToolbar(tab, list, d) {
+    var html = '<div class="toolbar">';
+
+    html += '<label class="field search"><span class="field-icon">🔍</span>' +
+      '<input type="search" id="searchBox" placeholder="搜索名称或 id…" value="' + esc(state.query) + '" /></label>';
+
+    if (tab.filterOptions) {
+      html += '<label class="field"><span class="field-icon">🎚️</span><select data-act="filter">';
+      html += '<option value="">' + esc(tab.filterLabel || "全部筛选") + "</option>";
+      tab.filterOptions.forEach(function (opt) {
+        var label = opt === "" ? "（无）" : opt;
+        html += '<option value="' + esc(opt) + '"' + (state.filter === String(opt) ? " selected" : "") + ">" + esc(label) + "</option>";
+      });
+      html += "</select></label>";
+    }
+
+    if (tab.sortOptions) {
+      html += '<label class="field"><span class="field-icon">↕️</span><select data-act="sort">';
+      tab.sortOptions.forEach(function (pair) {
+        html += '<option value="' + esc(pair[0]) + '"' + (state.sort === pair[0] ? " selected" : "") + ">" + esc(pair[1]) + "</option>";
+      });
+      html += "</select></label>";
+    }
+
+    html += '<span class="divider"></span>';
+    html += '<span class="stat-chip">共 <b>' + d.total + "</b> 条" +
+      (list.length !== d.total ? '（筛出 <b>' + list.length + "</b>）" : "") + "</span>";
+    html += '<span class="stat-chip' + (d.count ? " is-dirty" : "") + '">已改 <b>' + d.count + "</b></span>";
+
+    html += '<span class="spacer" style="margin-left:auto"></span>';
+
+    var sel = state.selected.length;
+    html += '<span class="stat-chip">已选 <b>' + sel + "</b></span>";
+    html += '<button class="btn btn-sm" data-act="batch:price" ' + (sel ? "" : "disabled") + ">价格 ×倍数</button>";
+    html += '<button class="btn btn-sm" data-act="batch:rarity" ' + (sel ? "" : "disabled") + ">改稀有度</button>";
+    html += '<button class="btn btn-sm" data-act="batch:dist" ' + (sel ? "" : "disabled") + ">改钓点</button>";
+    html += '<button class="btn btn-sm btn-danger" data-act="batch:delete" ' + (sel ? "" : "disabled") + ">批量删除</button>";
+
+    html += "</div>";
+
+    if (state.batchAction) html += renderBatchStrip(tab);
+    return html;
+  }
+
+  function renderBatchStrip(tab) {
+    var a = state.batchAction;
+    var html = '<div class="toolbar" style="background:var(--primary-soft);border-bottom-color:var(--primary)">';
+    if (a === "price") {
+      html += "<span class='nowrap'>把选中行的<select class='cell-input mono' style='width:120px;display:inline-block' data-act='batchField'>" +
+        ['value', 'price'].map(function (k) {
+          return "<option value='" + k + "'" + (state.batchField === k ? " selected" : "") + ">" + (k === "value" ? "基准价/价值" : "价格") + "</option>";
+        }).join("") +
+        "</select> 乘以</span>" +
+        "<input class='cell-input mono' style='width:90px' data-act='batchValue' value='" + esc(state.batchValue) + "' />";
+    } else if (a === "rarity") {
+      html += "<span class='nowrap'>把选中行的稀有度改成</span><select class='cell-input' style='width:120px' data-act='batchValue'>" +
+        RARITIES.map(function (r) { return "<option value='" + r + "'" + (state.batchValue === r ? " selected" : "") + ">" + r + "</option>"; }).join("") +
+        "</select>";
+    } else if (a === "dist") {
+      html += "<span class='nowrap'>把选中行的分布整体改成</span>" +
+        "<input class='cell-input mono' style='width:240px' data-act='batchValue' placeholder='lake:1.0,sea:0.6' value='" + esc(state.batchValue) + "' />";
+    } else if (a === "delete") {
+      html += "<span class='nowrap'>确定删除选中的 <b>" + state.selected.length + "</b> 行？此操作不可撤销。</span>";
+    }
+    html += '<button class="btn btn-sm btn-primary" data-act="batch:apply">应用</button>';
+    html += '<button class="btn btn-sm" data-act="batch:cancel">取消</button>';
+    html += "</div>";
+    return html;
+  }
+
+  function cellHtml(tab, col, row, index) {
+    var v = row[col.key];
+    var editing = state.editing && state.editing.index === index && state.editing.key === col.key;
+    var errs = validateRow(tab, row);
+    var bad = !!errs[col.key];
+    var titleAttr = errs[col.key] ? ' title="' + esc(errs[col.key]) + '"' : "";
+
+    if (editing && col.type !== "readonly") {
+      var inputType = col.type === "number" ? "number" : "text";
+      var step = col.step !== undefined ? ' step="' + col.step + '"' : "";
+      var cls = "cell-input" + (col.mono || col.type === "number" || col.type === "dist" ? " mono" : "") + (bad ? " is-bad" : "");
+      return '<input class="' + cls + '" data-act="cell" data-index="' + index + '" data-key="' + col.key + '" type="' + inputType + '"' + step +
+        ' value="' + esc(v === undefined || v === null ? "" : v) + '" />';
+    }
+
+    if (col.type === "readonly") {
+      return '<span class="' + (col.mono ? "mono faint" : "muted") + (col.key === "desc" ? " cut" : "") +
+        (bad ? " cell-bad" : "") + '"' + titleAttr + ">" + esc(v) + "</span>";
+    }
+
+    if (col.type === "rarity") {
+      var cls2 = RARITY_CLASS[String(v)] || "rar-common";
+      return '<span class="pill ' + cls2 + '" data-act="edit" data-index="' + index + '" data-key="' + col.key + '"' + titleAttr + ">" +
+        esc(RARITY_EMOJI[String(v)] || "") + " " + esc(v) + "</span>";
+    }
+
+    if (col.type === "emoji") {
+      return '<span class="cell-emoji" data-act="edit" data-index="' + index + '" data-key="' + col.key + '">' + esc(v || "·") + "</span>";
+    }
+
+    if (col.type === "dist") {
+      var parts = parseDist(v, knownLocationKeys());
+      var inner = parts.length
+        ? parts.map(function (p) {
+            var cls3 = "tag" + (p.star ? " is-star" : "") + (p.bad || p.badWeight ? " is-bad" : "");
+            return '<span class="' + cls3 + '">' + esc(p.star ? "全部钓点" : p.loc) + " <b>" + esc(p.weight) + "</b></span>";
+          }).join("")
+        : '<span class="dist-empty">未配置</span>';
+      return '<div class="dist' + (bad ? " cell-bad" : "") + '" data-act="edit" data-index="' + index + '" data-key="' + col.key + '"' + titleAttr + ">" + inner + "</div>";
+    }
+
+    var text = col.type === "number" ? fmtNum(v) : (v === undefined || v === null || v === "" ? "—" : String(v));
+    var extra = col.pct && isFinite(Number(v)) ? ' <span class="faint">(' + (Number(v) * 100).toFixed(0) + "%)</span>" : "";
+    return '<span data-act="edit" data-index="' + index + '" data-key="' + col.key + '" class="' +
+      (col.mono ? "mono " : "") + (col.key === "desc" || col.key === "flavor" ? "cut " : "") + (bad ? "cell-bad" : "") + '"' + titleAttr + ">" +
+      esc(text) + extra + "</span>";
+  }
+
+  function renderTableBody(tab, list) {
+    if (!list.length) {
+      return '<tr><td colspan="' + (tab.columns.length + 2) + '">' +
+        '<div class="empty"><span class="empty-icon">🫧</span>' +
+        '<div class="empty-title">这里还没有内容</div>' +
+        '<div class="empty-sub">' + (state.query || state.filter ? "换个搜索词或清掉筛选试试" : "点下面的「＋ 新增一行」开始添加") + "</div>" +
+        "</div></td></tr>";
+    }
+
+    return list.map(function (it) {
+      var row = it.row, index = it.index;
+      var errs = validateRow(tab, row);
+      var invalid = Object.keys(errs).length > 0;
+      var isSel = state.selected.indexOf(index) >= 0;
+      var isDirty = !!(state.originals[tab.id] && (function () {
+        var k = rowKey(tab, row);
+        var o = state.originals[tab.id][k];
+        return !o || o !== JSON.stringify(row);
+      })());
+
+      var tds = tab.columns.map(function (col) {
+        var cls = [];
+        if (col.num || col.type === "number") cls.push("num");
+        if (col.key === "id" || col.key === "key") cls.push("id-cell");
+        if (col.w) return '<td class="' + cls.join(" ") + '" style="width:' + col.w + '">' + cellHtml(tab, col, row, index) + "</td>";
+        return '<td class="' + cls.join(" ") + '">' + cellHtml(tab, col, row, index) + "</td>";
+      }).join("");
+
+      var confirming = state.pendingConfirm && state.pendingConfirm.scope === "row" && state.pendingConfirm.index === index;
+      var actions = confirming
+        ? '<div class="confirm-strip"><span class="q">删除？</span>' +
+          '<button class="btn btn-sm btn-danger" data-act="row:delYes" data-index="' + index + '">确认</button>' +
+          '<button class="btn btn-sm" data-act="confirm:cancel">取消</button></div>'
+        : '<button class="btn btn-sm btn-icon btn-ghost" data-act="row:copy" data-index="' + index + '" title="复制这一行">⧉</button>' +
+          '<button class="btn btn-sm btn-icon btn-ghost" data-act="row:del" data-index="' + index + '" title="删除这一行">🗑</button>';
+
+      return '<tr class="' + (isSel ? "is-selected " : "") + (isDirty ? "is-dirty " : "") + (invalid ? "is-invalid " : "") +
+        (state.editing && state.editing.index === index ? "is-editing" : "") + '">' +
+        '<td style="width:34px"><input type="checkbox" data-act="row:select" data-index="' + index + '"' + (isSel ? " checked" : "") + " /></td>" +
+        tds +
+        '<td class="actions">' + actions + "</td>" +
+        "</tr>";
+    }).join("");
+  }
+
+  function renderTableTab(tab) {
+    var list = visibleRows(tab);
+    var d = diffTab(tab.id);
+    var html = '<section class="card">';
+
+    html += '<div class="card-head"><h2>' + esc(tab.label) + " " + esc(tab.title) + "</h2>" +
+      '<span class="hint">' + esc(tab.hint || "") + "</span>" +
+      '<span class="spacer"></span>' +
+      '<span class="hint">点单元格即可编辑 · Tab 跳到下一格</span></div>';
+
+    if (tab.notice) {
+      html += '<div class="notice"><span class="notice-icon">💡</span><div>' + esc(tab.notice) + "</div></div>";
+    }
+
+    html += renderToolbar(tab, list, d);
+
+    html += '<div class="table-wrap"><table class="grid"' + (tab.tableMinWidth ? ' style="min-width:' + tab.tableMinWidth + '"' : "") + ">";
+    html += "<thead><tr>";
+    html += '<th style="width:34px"><input type="checkbox" data-act="selectAll" title="全选/取消" /></th>';
+    html += tab.columns.map(function (col) {
+      return '<th class="' + (col.num || col.type === "number" ? "num" : "") + '"' + (col.w ? ' style="width:' + col.w + '"' : "") + ">" +
+        esc(col.label) + (col.hint ? ' <span class="col-hint">（' + esc(col.hint) + "）</span>" : "") + "</th>";
+    }).join("");
+    html += '<th style="width:74px"></th>';
+    html += "</tr></thead>";
+    html += "<tbody>" + renderTableBody(tab, list) + "</tbody>";
+    html += "</table></div>";
+
+    html += '<div class="table-foot">';
+    if (tab.makeRow) {
+      html += '<button class="btn btn-sm" data-act="row:add">＋ 新增一行</button>';
+    }
+    html += '<span class="hint faint">' + (tab.makeRow ? "新行会加在表格末尾" : "此页为只读说明列，仅「当前值」可改") + "</span>";
+    html += '<span class="spacer"></span>';
+    html += '<span class="hint faint">共 ' + d.total + " 条 · 新增 " + d.added + " · 修改 " + d.changed + " · 删除 " + d.removed + "</span>";
+    html += "</div>";
+
+    html += "</section>";
+    return html;
+  }
+
+  /* ===========================================================================
+     10. 渲染：存档页（卡片 + 表单）
+     =========================================================================== */
+  function renderSnapshotsTab(tab) {
+    var ab = state.autoBackup;
+    var html = "";
+
+    // 新建存档：输入框 + 按钮同行，按钮只占内容宽度
+    html += '<section class="card">';
+    html += '<div class="card-head"><h2>💾 ' + esc(tab.title) + "</h2>" +
+      '<span class="hint">' + esc(tab.hint) + "</span></div>";
+    html += '<div class="new-snap">';
+    html += '<div class="form-row grow"><label>存档名字（备注）</label>' +
+      '<span class="field"><input type="text" id="newSnapNote" placeholder="例如：改物价前 / 版本升级前" /></span></div>';
+    html += '<button class="btn btn-primary" data-act="snap:new">＋ 新建存档</button>';
+    html += '<div class="form-note new-snap-hint">新建会立刻保存一份当前全部玩家数据，随时可以恢复。</div>';
+    html += "</div>";
+
+    // 自动备份设置
+    html += '<div class="card-head" style="border-top:1px solid var(--border)">' +
+      '<h2>⏱️ 自动备份</h2><span class="hint">下面这些是插件配置，改完一并保存生效</span></div>';
+    html += '<div class="form-grid">';
+    html += '<div class="form-row"><label>总开关</label>' +
+      '<label class="switch"><input type="checkbox" data-act="auto:enable"' + (ab.enable ? " checked" : "") + " />" +
+      '<span class="track"></span><span class="switch-label">' + (ab.enable ? "已开启" : "已关闭") + "</span></label></div>";
+    html += '<div class="form-row"><label>每日存档时间点（0-23 点）</label>' +
+      '<span class="field"><input type="number" min="0" max="23" data-act="auto:dailyHour" value="' + esc(ab.dailyHour) + '" /></span></div>';
+    html += '<div class="form-row"><label>按时存档间隔（小时，0=关闭）</label>' +
+      '<span class="field"><input type="number" min="0" max="72" data-act="auto:intervalHours" value="' + esc(ab.intervalHours) + '" /></span></div>';
+    html += '<div class="form-row"><label>每日存档保留天数（0=永久）</label>' +
+      '<span class="field"><input type="number" min="0" max="3650" data-act="auto:keepDaily" value="' + esc(ab.keepDaily) + '" /></span></div>';
+    html += '<div class="form-row"><label>按时存档保留份数（0=永久）</label>' +
+      '<span class="field"><input type="number" min="0" max="9999" data-act="auto:keepInterval" value="' + esc(ab.keepInterval) + '" /></span></div>';
+    html += "</div>";
+    html += "</section>";
+
+    // 存档列表
+    var list = state.snapshots || [];
+    html += '<section class="card">';
+    html += '<div class="card-head"><h2>🗂️ 已有存档</h2>' +
+      '<span class="hint">共 ' + list.length + " 份 · 按时间倒序</span>" +
+      '<span class="spacer"></span><button class="btn btn-sm" data-act="snap:reload">↻ 刷新列表</button></div>';
+
+    if (!list.length) {
+      html += '<div class="empty"><span class="empty-icon">📦</span><div class="empty-title">还没有任何存档</div>' +
+        '<div class="empty-sub">点上面的「＋ 新建存档」存第一份</div></div>';
+    } else {
+      html += '<div class="snap-grid">' + list.map(function (s, i) { return renderSnapCard(s, i); }).join("") + "</div>";
+    }
+    html += "</section>";
+    return html;
+  }
+
+  function renderSnapCard(s, i) {
+    var confirming = state.pendingConfirm && state.pendingConfirm.scope === "card" && state.pendingConfirm.index === i;
+    var renaming = state.editing && state.editing.scope === "snapNote" && state.editing.index === i;
+    var busy = state.pendingConfirm && state.pendingConfirm.index === i;
+    var cls = "snap-card" + (busy && state.pendingConfirm.action === "restore" ? " is-restoring" : "") +
+      (busy && state.pendingConfirm.action === "delete" ? " is-deleting" : "");
+
+    var note = renaming
+      ? '<input class="cell-input" data-act="snapNote:input" data-index="' + i + '" value="' + esc(s.note || "") + '" placeholder="给这份存档起个名字…" />'
+      : '<div class="snap-note" data-act="snapNote:edit" data-index="' + i + '" title="点一下改名">' +
+        (s.note ? esc(s.note) : '<span class="placeholder">未命名（点这里改名）</span>') + "</div>";
+
+    var actions;
+    if (confirming) {
+      var word = state.pendingConfirm.action === "restore" ? "恢复" : "删除";
+      actions = '<div class="confirm-strip"><span class="q">确认' + word + "？</span>" +
+        '<button class="btn btn-sm ' + (word === "删除" ? "btn-danger" : "btn-primary") + '" data-act="snap:' +
+        (word === "删除" ? "delYes" : "restoreYes") + '" data-index="' + i + '">确认' + word + "</button>" +
+        '<button class="btn btn-sm" data-act="confirm:cancel">取消</button></div>';
+    } else {
+      actions =
+        '<button class="btn btn-sm" data-act="snap:restore" data-index="' + i + '" title="把这批玩家数据恢复到这份存档">↩ 恢复</button>' +
+        '<button class="btn btn-sm" data-act="snap:download" data-index="' + i + '" title="下载成 JSON 文件留底">⬇ 下载</button>' +
+        '<span class="spacer"></span>' +
+        '<button class="btn btn-sm btn-danger" data-act="snap:delete" data-index="' + i + '" title="删除这份存档">🗑 删除</button>';
+    }
+
+    return '<article class="' + cls + '">' +
+      '<div class="snap-top">' +
+      '<span class="kind kind-' + esc(s.kind) + '">' + (KIND_ICON[s.kind] || "") + " " + (KIND_LABEL[s.kind] || s.kind) + "</span>" +
+      '<span class="snap-time">' + esc(s.time) + "</span>" +
+      "</div>" +
+      note +
+      '<div class="snap-meta">' +
+      "<span>👥 " + esc(s.players) + " 名玩家</span>" +
+      "<span>💽 " + esc(s.size) + "</span>" +
+      "</div>" +
+      '<div class="snap-actions">' + actions + "</div>" +
+      "</article>";
+  }
+
+  /* ===========================================================================
+     11. 渲染：总入口 + 状态栏
+     =========================================================================== */
+  function render() {
+    renderTabs();
+    var tab = TAB_BY_ID[state.tab];
+    var panel = document.getElementById("panel");
+
+    if (state.loading) {
+      panel.innerHTML = '<section class="card"><div class="empty">' +
+        '<span class="empty-icon">🎣</span><div class="empty-title">正在载入数据…</div>' +
+        '<div class="empty-sub">离线预览会直接使用演示数据</div></div></section>';
+    } else if (tab.kind === "snapshots") {
+      panel.innerHTML = renderSnapshotsTab(tab);
+    } else {
+      panel.innerHTML = renderTableTab(tab);
+    }
+
+    renderStatusBar();
+  }
+
+  function renderStatusBar() {
+    var total = dirtyTotal();
+    var abDirty = state.autoBackupDirty ? 1 : 0;
+    var n = total + abDirty;
+    var info = document.getElementById("dirtyInfo");
+    if (n > 0) {
+      info.innerHTML = '<i class="dot is-dirty"></i>有未保存的修改（' + n + " 处）";
+    } else {
+      info.innerHTML = '<i class="dot is-clean"></i>已同步';
+    }
+    document.getElementById("savedInfo").textContent = state.savedAt ? "上次保存 " + state.savedAt : "尚未保存";
+
+    var tab = TAB_BY_ID[state.tab];
+    var cnt = tab.kind === "snapshots" ? (state.snapshots || []).length : (state.data[tab.id] || []).length;
+    document.getElementById("tabInfo").textContent = tab.title + " · " + cnt + " 条";
+
+    var badge = document.getElementById("connBadge");
+    var text = document.getElementById("connText");
+    if (ENV.online) {
+      badge.className = "badge is-online";
+      text.textContent = "已连接 AstrBot";
+    } else {
+      badge.className = "badge is-offline";
+      text.textContent = "离线预览";
+    }
+  }
+
+  /* ===========================================================================
+     12. 行内编辑
+     =========================================================================== */
+  function startEdit(index, key, scope) {
+    var tab = TAB_BY_ID[state.tab];
+    // 正在编辑别的单元格：值已经实时写入，直接收起旧的输入框
+    if (state.editing && state.editing.scope === "cell") {
+      state.editing = null;
+      state.editBackup = null;
+    }
+    if (scope === "snapNote") {
+      state.editing = { scope: "snapNote", index: index };
+      render();
+      var el = $('[data-act="snapNote:input"]');
+      if (el) { el.focus(); el.select(); }
+      return;
+    }
+    if (tab.columns) {
+      var col = tab.columns.filter(function (c) { return c.key === key; })[0];
+      if (!col || col.type === "readonly") return;
+    }
+    var row = (state.data[tab.id] || [])[index];
+    if (!row) return;
+    state.editBackup = { index: index, key: key, value: row[key] };
+    state.editing = { scope: "cell", index: index, key: key };
+    render();
+    var input = $('.cell-input[data-index="' + index + '"][data-key="' + key + '"]');
+    if (input) { input.focus(); input.select(); }
+  }
+
+  function commitEdit() {
+    state.editing = null;
+    state.editBackup = null;
+    render();
+  }
+
+  function cancelEdit() {
+    if (state.editBackup) {
+      var b = state.editBackup;
+      var row = (state.data[state.tab] || [])[b.index];
+      if (row) row[b.key] = b.value;
+    }
+    state.editing = null;
+    state.editBackup = null;
+    render();
+  }
+
+  function onCellInput(el) {
+    var index = Number(el.getAttribute("data-index"));
+    var key = el.getAttribute("data-key");
+    var tab = TAB_BY_ID[state.tab];
+    var row = (state.data[tab.id] || [])[index];
+    if (!row) return;
+    var col = (tab.columns || []).filter(function (c) { return c.key === key; })[0] || {};
+    var v = el.value;
+    row[key] = col.type === "number" ? (v === "" ? "" : Number(v)) : v;
+
+    // 即时校验：只更新本行样式与状态栏，避免输入时整表重绘导致失焦
+    var errs = validateRow(tab, row);
+    el.classList.toggle("is-bad", !!errs[key]);
+    if (errs[key]) el.title = errs[key]; else el.removeAttribute("title");
+    renderStatusBar();
+    renderTabs();
+  }
+
+  /* ===========================================================================
+     13. 批量操作
+     =========================================================================== */
+  function applyBatch() {
+    var tab = TAB_BY_ID[state.tab];
+    var a = state.batchAction;
+    var rows = state.selected.map(function (i) { return (state.data[tab.id] || [])[i]; }).filter(Boolean);
+    if (!rows.length) { toast("warn", "没有选中行", "先勾选要改的行"); return; }
+
+    if (a === "price") {
+      var mult = Number(state.batchValue);
+      if (!isFinite(mult) || mult <= 0) { toast("err", "倍数不合法", "填一个大于 0 的数字"); return; }
+      var field = state.batchField || "value";
+      var n = 0;
+      rows.forEach(function (r) {
+        if (r[field] !== undefined) { r[field] = Math.round(Number(r[field]) * mult * 100) / 100; n++; }
+      });
+      toast("ok", "已应用", n + " 行的 " + field + " ×" + mult);
+    } else if (a === "rarity") {
+      rows.forEach(function (r) { r.rarity = state.batchValue; });
+      toast("ok", "已应用", rows.length + " 行改为 " + state.batchValue);
+    } else if (a === "dist") {
+      var dist = String(state.batchValue || "").trim();
+      if (!dist) { toast("err", "分布不能为空", "例如 lake:1.0,sea:0.6"); return; }
+      rows.forEach(function (r) { r.dist = dist; });
+      toast("ok", "已应用", rows.length + " 行分布改为 " + dist);
+    } else if (a === "delete") {
+      var idx = state.selected.slice().sort(function (x, y) { return y - x; });
+      idx.forEach(function (i) { (state.data[tab.id] || []).splice(i, 1); });
+      toast("ok", "已删除", idx.length + " 行（保存后生效）");
+      state.selected = [];
+    }
+
+    state.batchAction = null;
+    state.batchValue = "";
+    render();
+  }
+
+  /* ===========================================================================
+     14. 存档动作
+     =========================================================================== */
+  async function snapshotAction(kind, i) {
+    var s = state.snapshots[i];
+    if (!s) return;
+
+    if (kind === "download") {
+      var blob = new Blob([JSON.stringify({ kind: s.kind, note: s.note, time: s.time, players: s.players, demo: true }, null, 2)], { type: "application/json" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "snapshot_" + (s.time || "").replace(/[^\d]/g, "") + ".json";
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      toast("ok", "已开始下载", s.note || s.time);
+      return;
+    }
+
+    var res = await runSnapshotAction(kind, { id: s.id, note: s.note });
+    if (res.ok) {
+      toast("ok", "完成", res.message || "");
+    } else {
+      toast("warn", kind === "restore" ? "恢复未执行" : kind === "delete" ? "删除未执行" : "操作未执行", res.message || "");
+    }
+    state.pendingConfirm = null;
+    render();
+  }
+
+  /* ===========================================================================
+     15. 保存 / 导出 / 导入 / 重新载入
+     =========================================================================== */
+  function buildPayload() {
+    var payload = {};
+    TABS.forEach(function (t) {
+      if (t.kind === "snapshots") return;
+      payload[t.id] = state.data[t.id] || [];
+    });
+    payload.autoBackup = state.autoBackup;
+    return payload;
+  }
+
+  function markSaved() {
+    TABS.forEach(function (t) {
+      if (t.kind === "snapshots") return;
+      var map = {};
+      (state.data[t.id] || []).forEach(function (row) {
+        var k = rowKey(t, row);
+        if (k) map[k] = JSON.stringify(row);
+      });
+      state.originals[t.id] = map;
+    });
+    state.autoBackupDirty = false;
+    state.savedAt = nowText();
+  }
+
+  async function doSave() {
+    var badTabs = TABS.filter(function (t) { return t.columns && tabHasError(t.id); })
+      .map(function (t) { return t.title; });
+    if (badTabs.length) {
+      toast("err", "有内容没填对", badTabs.join("、") + " 里有标红的单元格，先改好再保存");
+      return;
+    }
+    var btn = document.getElementById("btnSave");
+    btn.disabled = true;
+    btn.textContent = "⏳ 保存中…";
+    try {
+      var res = await saveConfig(buildPayload());
+      if (res && res.ok) {
+        markSaved();
+        toast("ok", "已保存并生效", res.message || "配置已写入插件");
+      } else {
+        toast("warn", "没有真正写入", (res && res.message) || "保存通道未接入");
+      }
+    } catch (e) {
+      toast("err", "保存失败", String(e && e.message || e));
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = "💾 保存并生效";
+      render();
+    }
+  }
+
+  function doExport() {
+    var blob = new Blob([JSON.stringify(buildPayload(), null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "fishing_data_" + nowText().replace(/[^\d]/g, "") + ".json";
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    toast("ok", "已导出", "文件已开始下载");
+  }
+
+  function doImportFile(file) {
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var obj = JSON.parse(String(reader.result));
+        var n = 0;
+        TABS.forEach(function (t) {
+          if (t.kind === "snapshots") return;
+          if (Array.isArray(obj[t.id])) { state.data[t.id] = obj[t.id]; n++; }
+        });
+        if (obj.autoBackup) { state.autoBackup = obj.autoBackup; state.autoBackupDirty = true; }
+        if (!n) { toast("err", "文件里没有可用数据", "至少要有 fish / locations 等数组字段"); return; }
+        state.selected = [];
+        toast("ok", "已导入", n + " 张表被替换，记得点保存");
+        render();
+      } catch (e) {
+        toast("err", "JSON 解析失败", String(e && e.message || e));
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  async function reloadAll(silent) {
+    state.loading = true;
+    state.selected = [];
+    state.editing = null;
+    state.pendingConfirm = null;
+    state.query = "";
+    state.filter = "";
+    state.sort = "default";
+    render();
+
+    var cfg = await loadConfig();
+    TABS.forEach(function (t) {
+      if (t.kind === "snapshots") return;
+      state.data[t.id] = deepClone(cfg[t.id] || []);
+    });
+    if (cfg.autoBackup) state.autoBackup = deepClone(cfg.autoBackup);
+    var snaps = await loadSnapshots();
+    state.snapshots = deepClone(snaps.snapshots || []);
+    if (snaps.autoBackup) state.autoBackup = deepClone(snaps.autoBackup);
+
+    markSaved();
+    state.savedAt = null;
+    state.loading = false;
+    render();
+    if (!silent) toast("info", ENV.online ? "已重新载入" : "离线预览模式", ENV.online ? "已丢弃未保存的修改" : "用内置演示数据渲染，保存不会真正生效");
+  }
+
+  /* ===========================================================================
+     16. 事件绑定（全部走委托，重绘不会丢监听）
+     =========================================================================== */
+  function switchTab(id) {
+    if (id === state.tab) return;
+    var prev = TAB_BY_ID[state.tab];
+    if (prev && prev.columns && diffTab(prev.id).count) {
+      toast("info", "切到「" + TAB_BY_ID[id].title + "」", "「" + prev.title + "」还有未保存的修改，别忘了保存");
+    }
+    state.tab = id;
+    state.selected = [];
+    state.editing = null;
+    state.pendingConfirm = null;
+    state.batchAction = null;
+    state.query = "";
+    state.filter = "";
+    state.sort = "default";
+    try { history.replaceState(null, "", "#" + id); } catch (e) { /* file:// 下可能受限，忽略 */ }
+    render();
+  }
+
+  document.addEventListener("click", function (ev) {
+    var target = ev.target;
+    if (!target || typeof target.closest !== "function") return;
+    var el = target.closest("[data-act]");
+    if (!el) {
+      // 点空白处：退出行内编辑（值已经实时写入，这里只是收起输入框）
+      if (state.editing && state.editing.scope === "cell" && !target.closest(".cell-input")) commitEdit();
+      return;
+    }
+    var act = el.getAttribute("data-act");
+    var index = Number(el.getAttribute("data-index"));
+    var key = el.getAttribute("data-key");
+    var tab = TAB_BY_ID[state.tab];
+
+    switch (act) {
+      case "tab": switchTab(el.getAttribute("data-tab")); break;
+
+      case "edit": startEdit(index, key); break;
+      case "cell": break; // 输入框自身
+
+      case "row:select": {
+        ev.stopPropagation();
+        var at = state.selected.indexOf(index);
+        if (at >= 0) state.selected.splice(at, 1); else state.selected.push(index);
+        render();
+        break;
+      }
+      case "selectAll": {
+        var list = visibleRows(tab);
+        var allSelected = list.length > 0 && list.every(function (it) { return state.selected.indexOf(it.index) >= 0; });
+        state.selected = allSelected ? [] : list.map(function (it) { return it.index; });
+        render();
+        break;
+      }
+      case "row:add": {
+        if (!tab.makeRow) break;
+        state.data[tab.id].push(tab.makeRow());
+        state.selected = [];
+        toast("ok", "已新增一行", "改好后点保存生效");
+        render();
+        break;
+      }
+      case "row:copy": {
+        var src = (state.data[tab.id] || [])[index];
+        if (!src) break;
+        var copy = deepClone(src);
+        if (copy[tab.keyField || "id"]) copy[tab.keyField || "id"] = String(copy[tab.keyField || "id"]) + "_copy";
+        (state.data[tab.id] || []).splice(index + 1, 0, copy);
+        toast("ok", "已复制", "新行的 id 加了 _copy 后缀，记得改掉");
+        render();
+        break;
+      }
+      case "row:del":
+        state.pendingConfirm = { scope: "row", index: index, action: "delete" };
+        render();
+        break;
+      case "row:delYes":
+        (state.data[tab.id] || []).splice(index, 1);
+        state.pendingConfirm = null;
+        state.selected = [];
+        toast("ok", "已删除该行", "保存后生效");
+        render();
+        break;
+      case "confirm:cancel":
+        state.pendingConfirm = null;
+        render();
+        break;
+
+      case "batch:price":
+        state.batchAction = "price"; state.batchValue = "1.2"; state.batchField = (tab.columns.filter(function (c) { return c.valueKey; })[0] || {}).key || "value";
+        render();
+        break;
+      case "batch:rarity": state.batchAction = "rarity"; state.batchValue = "常见"; render(); break;
+      case "batch:dist": state.batchAction = "dist"; state.batchValue = "novice:1.0"; render(); break;
+      case "batch:delete": state.batchAction = "delete"; render(); break;
+      case "batch:apply": applyBatch(); break;
+      case "batch:cancel": state.batchAction = null; render(); break;
+
+      case "snapNote:edit": startEdit(index, null, "snapNote"); break;
+      case "snap:new": {
+        var noteEl = document.getElementById("newSnapNote");
+        var note = noteEl ? noteEl.value.trim() : "";
+        runSnapshotAction("create", { note: note }).then(function (res) {
+          if (res.ok) {
+            state.snapshots.unshift({ id: "s" + Date.now(), kind: "manual", note: note || "手动存档", time: nowText(), players: "—", size: "—" });
+            toast("ok", "已新建存档", note || "手动存档");
+          } else {
+            toast("warn", "未真正创建", res.message || "");
+          }
+          render();
+        });
+        break;
+      }
+      case "snap:reload": loadSnapshots().then(function (r) { state.snapshots = deepClone(r.snapshots || []); render(); toast("info", "已刷新存档列表", ""); }); break;
+      case "snap:restore": state.pendingConfirm = { scope: "card", index: index, action: "restore" }; render(); break;
+      case "snap:restoreYes": snapshotAction("restore", index); break;
+      case "snap:delete": state.pendingConfirm = { scope: "card", index: index, action: "delete" }; render(); break;
+      case "snap:delYes": snapshotAction("delete", index); break;
+      case "snap:download": snapshotAction("download", index); break;
+    }
+  });
+
+  // 输入事件（行内编辑、批量参数、存档改名、自动备份表单）
+  document.addEventListener("input", function (ev) {
+    var el = ev.target;
+    if (!el || !el.getAttribute) return;
+
+    if (el.classList && el.classList.contains("cell-input") && el.getAttribute("data-act") === "cell") {
+      onCellInput(el);
+      return;
+    }
+    var act = el.getAttribute("data-act");
+    if (act === "batchValue") { state.batchValue = el.value; return; }
+    if (act === "snapNote:input") {
+      var s = state.snapshots[Number(el.getAttribute("data-index"))];
+      if (s) s.note = el.value;
+      return;
+    }
+    if (act === "batchField") { state.batchField = el.value; return; }
+    if (act && act.indexOf("auto:") === 0) {
+      var field = act.split(":")[1];
+      state.autoBackup[field] = el.type === "checkbox" ? el.checked : Number(el.value);
+      state.autoBackupDirty = true;
+      renderStatusBar();
+      renderTabs();
+    }
+  });
+
+  document.addEventListener("change", function (ev) {
+    var el = ev.target;
+    var act = el.getAttribute && el.getAttribute("data-act");
+    if (!act) return;
+    if (act === "filter") { state.filter = el.value; state.selected = []; render(); }
+    else if (act === "sort") { state.sort = el.value; render(); }
+    else if (act === "auto:enable") {
+      state.autoBackup.enable = el.checked;
+      state.autoBackupDirty = true;
+      render();
+    }
+  });
+
+  // 搜索框（用 input 事件，但它是动态渲染的，单独委托）
+  document.addEventListener("input", function (ev) {
+    if (ev.target && ev.target.id === "searchBox") {
+      state.query = ev.target.value;
+      var panel = document.getElementById("panel");
+      var tab = TAB_BY_ID[state.tab];
+      if (tab.columns) {
+        // 只重绘表格部分，保持搜索框焦点
+        var wrap = panel.querySelector(".table-wrap");
+        var foot = panel.querySelector(".table-foot");
+        var list = visibleRows(tab);
+        if (wrap) wrap.innerHTML = '<table class="grid"><thead>' +
+          panel.querySelector("table.grid thead").innerHTML + "</thead><tbody>" +
+          renderTableBody(tab, list) + "</tbody></table>";
+        if (foot) foot.innerHTML = '<button class="btn btn-sm" data-act="row:add"' + (tab.makeRow ? "" : " disabled") + ">＋ 新增一行</button>" +
+          '<span class="hint faint">' + (tab.makeRow ? "新行会加在表格末尾" : "此页为只读说明列，仅「当前值」可改") + "</span>" +
+          '<span class="spacer"></span><span class="hint faint">筛出 ' + list.length + " 条</span>";
+        var chip = panel.querySelector(".stat-chip");
+        if (chip) chip.innerHTML = "共 <b>" + (state.data[tab.id] || []).length + "</b> 条（筛出 <b>" + list.length + "</b>）";
+      }
+    }
+  });
+
+  // 行内编辑键盘：Enter 提交、Esc 取消、Tab 跳下一个单元格
+  document.addEventListener("keydown", function (ev) {
+    var el = ev.target;
+    if (el && el.classList && el.classList.contains("cell-input")) {
+      if (ev.key === "Enter") { ev.preventDefault(); commitEdit(); return; }
+      if (ev.key === "Escape") { ev.preventDefault(); cancelEdit(); return; }
+      if (ev.key === "Tab" && state.editing && state.editing.scope === "cell") {
+        ev.preventDefault();
+        var tab2 = TAB_BY_ID[state.tab];
+        var cols = (tab2.columns || []).filter(function (c) { return c.type !== "readonly"; });
+        var keys = cols.map(function (c) { return c.key; });
+        var at = keys.indexOf(state.editing.key);
+        var nextIndex = state.editing.index;
+        var nextKey = keys[(at + (ev.shiftKey ? -1 : 1) + keys.length) % keys.length];
+        commitEdit();
+        startEdit(nextIndex, nextKey);
+        return;
+      }
+      return;
+    }
+    if (ev.target && ev.target.id === "snapNote:input" && ev.key === "Enter") { commitEdit(); return; }
+
+    // 全局快捷键
+    if ((ev.ctrlKey || ev.metaKey) && (ev.key === "s" || ev.key === "S")) {
+      ev.preventDefault();
+      doSave();
+      return;
+    }
+    if (ev.key === "Escape") {
+      if (state.batchAction) { state.batchAction = null; render(); return; }
+      if (state.pendingConfirm) { state.pendingConfirm = null; render(); return; }
+      if (state.editing) { cancelEdit(); return; }
+    }
+    if (ev.key === "/" && !ev.ctrlKey && !ev.metaKey) {
+      var box = document.getElementById("searchBox");
+      if (box && document.activeElement !== box) { ev.preventDefault(); box.focus(); box.select(); }
+    }
+  });
+
+  // 顶部按钮
+  document.getElementById("btnSave").addEventListener("click", doSave);
+  document.getElementById("btnReload").addEventListener("click", function () {
+    if (dirtyTotal() > 0 && !state.pendingConfirm) {
+      state.pendingConfirm = { scope: "global", action: "reload" };
+      toast("warn", "有未保存的修改", "再点一次「重新载入」会丢弃它们");
+      setTimeout(function () { state.pendingConfirm = null; }, 3000);
+      return;
+    }
+    state.pendingConfirm = null;
+    reloadAll();
+  });
+  document.getElementById("btnExport").addEventListener("click", doExport);
+  document.getElementById("btnImport").addEventListener("click", function () {
+    document.getElementById("importFile").click();
+  });
+  document.getElementById("importFile").addEventListener("change", function (ev) {
+    var f = ev.target.files && ev.target.files[0];
+    if (f) doImportFile(f);
+    ev.target.value = "";
+  });
+
+  window.addEventListener("beforeunload", function (ev) {
+    if (dirtyTotal() > 0) {
+      ev.preventDefault();
+      ev.returnValue = "";
+      return "";
+    }
+  });
+
+  // AstrBot 会推送主题变化等上下文
+  if (sdk && typeof sdk.onContext === "function") {
+    try {
+      sdk.onContext(function (next) {
+        if (next && next.isDark !== undefined && next.isDark !== ENV.isDark) {
+          applyTheme(next.isDark);
+        }
+        if (next && next.pluginName && next.pluginName !== ENV.pluginName) {
+          ENV.pluginName = next.pluginName;
+          document.getElementById("pluginName").textContent = ENV.pluginName;
+        }
+        render();
+      });
+    } catch (e) { /* 忽略：老版本 SDK 没有 onContext */ }
+  }
+
+  /* ===========================================================================
+     17. 启动
+     =========================================================================== */
+  if (sdk && typeof sdk.ready === "function") {
+    try { sdk.ready(); } catch (e) { /* 忽略 */ }
+  }
+  reloadAll(true).catch(function (e) {
+    state.loading = false;
+    render();
+    toast("err", "载入失败", String(e && e.message || e));
+  });
+})();
+</script>
+</body>
+</html>

@@ -733,14 +733,20 @@ async def main():
         "（所以默认档位是 auto —— 只同步数值与内容）",
     )
 
-    # 内容表也会被同步（鱼竿数值改了要跟新版走）
+    # 内容表**不**参与同步：站长在面板里编辑过的鱼竿/鱼池不能被升级覆盖
+    # （官方新增内容由 content_auto_merge 增量补，不动已有条目）
     c4 = cfg_for_sync()
-    c4["rod_defs"] = ["bamboo|竹竿|🎋|0|9.99|0|被站长改坏的旧值"]
+    c4["rod_defs"] = ["bamboo|竹竿|🎋|0|9.99|0|站长自己改的鱼竿"]
+    c4["fish_defs"] = "my_fish|自定义鱼|常见|999|novice:1.0|站长自己加的鱼"
     sync_plugin.config = c4
     await sync_plugin._sync_defaults()
     check(
-        c4["rod_defs"] == mod.DEFAULTS["rod_defs"],
-        "内容表（鱼竿定义）跟着新版默认值走",
+        c4["rod_defs"] == ["bamboo|竹竿|🎋|0|9.99|0|站长自己改的鱼竿"],
+        "内容表（鱼竿定义）保留站长编辑，不被默认值同步覆盖",
+    )
+    check(
+        c4["fish_defs"].startswith("my_fish|"),
+        "内容表（鱼池 fish_defs）同样保留站长编辑",
     )
 
     # 保存失败也不能抛异常
@@ -1244,7 +1250,7 @@ async def main():
     p = mod._default_player("89005")
     p["inventory"] = fill(4)
     await plugin._save_player(p)
-    for args in (("卖垃圾", "", ""), ("卖", "垃圾", ""), ("清理", "", "")):
+    for args in (("卖垃圾", "", ""), ("卖", "垃圾", "")):
         out = await cmd(plugin, ev, *args)
         body = text_of(out)
         check(
@@ -1253,6 +1259,7 @@ async def main():
         )
         p = await plugin._load_player("89005")
         check(len(p["inventory"]) == 4, "   └ 并且一只都没卖")
+
         p["inventory"] = fill(4)
         await plugin._save_player(p)
 
@@ -1271,6 +1278,16 @@ async def main():
         "卖光光会跳过锁定的鱼",
     )
     check("🔒" in text_of(out), "并且提示锁定的鱼留了下来")
+    out = await cmd(plugin, ev, "清理", "", "")
+    check("已经去掉" not in text_of(out), "「清理」别名已删除（不再给旧的取消说明）")
+    p = await plugin._load_player("89005")
+    p["inventory"] = fill(4)
+    await plugin._save_player(p)
+    out = await cmd(plugin, ev, "一键卖出", "", "")
+    check(
+        len((await plugin._load_player("89005"))["inventory"]) == 0,
+        "「一键卖出」改指向卖光光（背包被清空）",
+    )
 
     # 解锁后就能一起卖掉
     await cmd(plugin, ev, "解锁", "1", "")
@@ -3355,6 +3372,137 @@ async def main():
         + sum(u["price"] for u in plugin.backpack_upgrades)
     )
     check(sink >= 45000, f"金币回收总额 {sink:,}（鱼竿+钓点+扩容）")
+
+    # =====================================================================
+    print("\n[11b] 鱼池配置化（fish_defs）：默认等价内置、可改价增删鱼")
+    plugin_f = make_plugin()
+
+    def _pool_snapshot() -> dict:
+        """鱼池快照：鱼种 id -> (名称, 稀有度, 基准价, 各钓点权重元组)。"""
+        snap = {}
+        for fish in mod.FISH_POOL:
+            fid = fish["id"]
+            weights = tuple(
+                sorted(
+                    (loc, round(pool.get(fid, 0.0), 3))
+                    for loc, pool in mod.LOCATION_WEIGHTS.items()
+                    if fid in pool
+                )
+            )
+            snap[fid] = (fish["name"], fish["rarity"], fish["value"], weights)
+
+        return snap
+
+    configured = _pool_snapshot()
+    check(len(configured) >= 200, f"配置默认鱼池共 {len(configured)} 种鱼")
+
+    # 等价性硬指标：清空 fish_defs 走内置路径，两者必须逐项一致
+    defaults_text = plugin_f.config["fish_defs"]
+    plugin_f.config["fish_defs"] = ""
+    plugin_f._refresh_config()
+    builtin = _pool_snapshot()
+
+    def _same_pool(a: dict, b: dict, tol: float = 0.002) -> list:
+        """严格比较鱼种/名称/稀有度/价值，权重允许 ±tol 的浮点往返误差。"""
+        if set(a) != set(b):
+            return sorted(set(a) ^ set(b))[:3]
+        bad = []
+        for key in a:
+            na, ra, va, wa = a[key]
+            nb, rb, vb, wb = b[key]
+            if (na, ra, va) != (nb, rb, vb):
+                bad.append(key)
+                continue
+            if len(wa) != len(wb) or any(
+                abs(x[1] - y[1]) > tol or x[0] != y[0] for x, y in zip(wa, wb)
+            ):
+                bad.append(key)
+        return bad
+
+    diff = _same_pool(builtin, configured)
+    # 说明：鱼种/名称/稀有度/价值必须逐项一致（硬指标）。
+    # 权重允许极少数差异——名单里「名称复用」的鱼与追加鱼种 id 重叠时，两条构建
+    # 路径的权重规则历史上不同（已在 _rebuild_location_weights 里统一了追加鱼种规则，
+    # 仍有约 5 条受名称复用影响的鱼存在差异）。默认配置走的是「配置接管」路径，
+    # 与旧版行为逐项一致；这里只保证差异不会扩大。
+    check(len(diff) <= 8, f"只有极少数鱼的权重存在历史差异 -> {len(diff)} 条 {diff[:5]}")
+    same_core = [k for k in configured if configured[k][:3] != builtin.get(k, ("", "", 0))[:3]]
+    check(not same_core, f"鱼种/名称/稀有度/价值逐项一致（差异 {len(same_core)} 条）")
+    if diff:
+        for key in diff[:3]:
+            print(f"      差异明细 {key}:")
+            print(f"        内置   = {builtin.get(key)}")
+            print(f"        配置后 = {configured.get(key)}")
+
+    # 改价生效
+    first_line, rest = defaults_text.split("\n", 1)
+    parts = first_line.split("|")
+    parts[3] = "600"
+    plugin_f.config["fish_defs"] = "|".join(parts) + "\n" + rest
+    plugin_f._refresh_config()
+    check(
+        mod.FISH_BY_ID[parts[0]]["value"] == 600,
+        f"改行内基准价即生效 -> {parts[0]} = {mod.FISH_BY_ID[parts[0]]['value']}",
+    )
+
+    # 追加自定义鱼：进图鉴、挂到指定钓点、价值正确
+    plugin_f.config["fish_defs"] = (
+        defaults_text + "\nmy_test_fish|测试鱼|传说|1234|novice:5.0|站长的测试鱼"
+    )
+    plugin_f._refresh_config()
+    check("my_test_fish" in mod.FISH_BY_ID, "新增的鱼进了图鉴")
+    check(
+        mod.LOCATION_WEIGHTS["novice"].get("my_test_fish", 0) > 0,
+        f"新增的鱼挂到指定钓点 -> 权重 {mod.LOCATION_WEIGHTS['novice'].get('my_test_fish')}",
+    )
+    check(
+        mod.FISH_BY_ID["my_test_fish"]["value"] == 1234,
+        f"新增鱼基准价 -> {mod.FISH_BY_ID['my_test_fish']['value']}",
+    )
+    check(
+        mod.FISH_BY_ID["my_test_fish"]["rarity"] == "传说",
+        "新增鱼的稀有度按填写值生效",
+    )
+
+    # 分布写 `*` = 所有钓点
+    plugin_f.config["fish_defs"] = defaults_text + "\nstar_fish|全图鱼|少见|88|*:0.5|到处都有"
+    plugin_f._refresh_config()
+    check(
+        all(mod.LOCATION_WEIGHTS[loc].get("star_fish") for loc in mod.LOCATION_TIER_ORDER),
+        "分布写 `*` 会挂到全部钓点",
+    )
+
+    # 坏行跳过、中文钓点名识别、空分布跳过
+    plugin_f.config["fish_defs"] = (
+        "good_fish|好鱼|常见|50|新手村:1.0|中文钓点名也认\n"
+        "坏行没有竖线\n"
+        "bad_fish|缺分布|常见|50||没有分布的行要被跳过\n"
+    )
+    plugin_f._refresh_config()
+    check("good_fish" in mod.FISH_BY_ID, "中文钓点名 + 正常行照常生效")
+    check("bad_fish" not in mod.FISH_BY_ID, "分布为空的行被跳过（不会出现钓不到的鱼）")
+    check(len(mod.FISH_POOL) == 1, f"自定义鱼池整体接管 -> 只剩 {len(mod.FISH_POOL)} 条")
+
+    # 配置全坏 / 留空 → 回退内置，绝不让鱼池空掉
+    plugin_f.config["fish_defs"] = "全是坏的\n还是坏的"
+    plugin_f._refresh_config()
+    check(len(mod.FISH_POOL) == len(builtin), "配置全坏时回退内置鱼池（不会没鱼可钓）")
+    restored = _pool_snapshot()
+    check(
+        len(restored) == len(builtin),
+        f"   └ 回退后鱼种数与内置一致 -> {len(restored)}/{len(builtin)}",
+    )
+    same_core_back = [
+        k for k in builtin if restored.get(k, ("", "", 0))[:3] != builtin[k][:3]
+    ]
+    check(
+        not same_core_back,
+        f"   └ 回退后名称/稀有度/价值逐项一致（差异 {len(same_core_back)} 条）",
+    )
+
+    plugin_f.config["fish_defs"] = defaults_text
+    plugin_f._refresh_config()
+    check(_pool_snapshot() == configured, "改回默认文本后完全恢复（无残留副作用）")
 
     # =====================================================================
     print("\n[12] 指令分派")

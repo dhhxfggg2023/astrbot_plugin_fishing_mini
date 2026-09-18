@@ -235,6 +235,86 @@ def _parse_aquarium_slots(raw: Any) -> list[dict[str, Any]]:
         slots.append({"name": parts[0], "price": max(0, _to_int(parts[1], 0))})
     return slots
 
+
+def _parse_fish_defs(
+    raw: Any,
+    *,
+    location_ids: tuple[str, ...],
+    name_to_id: dict[str, str],
+    rarity_order: tuple[str, ...],
+    warn: Any = None,
+) -> list[dict[str, Any]]:
+    """解析 `fish_defs`：一行一条鱼 ``id|名称|稀有度|基准价|分布|说明``。
+
+    容错点：空行与 `#` 注释、全角 `｜`/`，`/`：`、多余空格、中文钓点名都认；
+    分布的 `*` 表示「所有钓点」，省略权重 = 1.0；
+    稀有度写错 → 退回最常见那一档；**分布为空的行会被跳过**
+    （否则会变成「加了鱼却永远钓不到」这种玄学问题）。
+    """
+    text = str(raw or "")
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    first_bad = ""
+    for raw_line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = line.replace("｜", "|")
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) < 4 or not parts[0] or not parts[1]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        fid, name, rarity = parts[0], parts[1], parts[2]
+        try:
+            value = int(round(float(parts[3].replace(",", "").replace("，", ""))))
+        except (TypeError, ValueError):
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        if rarity not in rarity_order:
+            rarity = rarity_order[0]
+        dist: list[tuple[str, float]] = []
+        for chunk in (parts[4] if len(parts) > 4 else "").replace("，", ",").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            loc_part, weight_part = chunk, ""
+            for sep in (":", "："):
+                if sep in chunk:
+                    loc_part, _, weight_part = chunk.partition(sep)
+                    break
+            loc_part = loc_part.strip()
+            try:
+                weight = float(weight_part) if weight_part.strip() else 1.0
+            except ValueError:
+                weight = 1.0
+            weight = max(0.0, weight)
+            if loc_part in ("*", "全部", "所有"):
+                targets = list(location_ids)
+            else:
+                targets = [name_to_id.get(loc_part, loc_part)]
+            for loc in targets:
+                if loc in location_ids:
+                    dist.append((loc, weight))
+        if not dist:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        rows.append(
+            {
+                "id": fid,
+                "name": name,
+                "rarity": rarity,
+                "value": max(1, value),
+                "dist": dist,
+                "flavor": (parts[5] if len(parts) > 5 else "")[:24],
+            }
+        )
+    if bad and warn:
+        warn(f"{bad} 行格式有问题已跳过（首条：{first_bad[:60]}）")
+    return rows
+
 def _parse_escape_map(raw: Any) -> dict[str, float]:
     """解析 ``传说:0.22,神话:0.32`` 形式的逃脱率表。"""
     result: dict[str, float] = {}

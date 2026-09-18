@@ -138,6 +138,8 @@ DEFAULTS: dict[str, Any] = {
     "fish_cost": 0,
     # 体力：每钓一次消耗 1 点，攒着最多 stamina_max 点；每 stamina_regen_seconds 秒回 1 点。
     # 任一项填 0 = 本服不限体力（相当于关掉这套机制）。
+    # 鱼池定义（一行一条鱼）：留空 = 用内置鱼池；默认值在下方由 _fish_data 注入
+    "fish_defs": "",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
     # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
@@ -273,6 +275,19 @@ DEFAULTS_SYNC_EXCLUDE_PREFIXES: tuple[str, ...] = ("data_", "backup_")
 #: 这些键同上（开关类与管理项，跟着指纹一起变但没有意义）
 DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
     {"button_mode", "content_auto_merge", "defaults_sync_mode", "config_fingerprint"}
+)
+#: 内容表（鱼池/钓点/鱼竿/鱼饵/道具/水族馆栏位…）**不参与默认值同步**：
+#: 站长自己编辑过的内容不能被升级覆盖；官方新增内容由 content_auto_merge 增量补。
+DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
+    {
+        "fish_defs",
+        "location_defs",
+        "rod_defs",
+        "bait_defs",
+        "item_defs",
+        "aquarium_slots",
+        "backpack_upgrades",
+    }
 )
 
 
@@ -504,6 +519,122 @@ def _load_roster_data() -> dict[str, list[dict[str, Any]]]:
     return {}
 
 
+def _load_fish_defs_default() -> str:
+    """读取 `_fish_data.py` 里的 `FISH_DEFS_DEFAULT`，作为 `fish_defs` 的配置默认值。
+
+    放在独立数据文件里，是为了不让 232 行数据把 main.py 撑大（站长要求主文件瘦身）。
+    """
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_fish_data.py")
+        spec = importlib.util.spec_from_file_location("astrbot_fishing_fish_defs", path)
+        if spec is None or spec.loader is None:
+            return ""
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return str(getattr(module, "FISH_DEFS_DEFAULT", "") or "")
+    except Exception as e:  # pragma: no cover - 只在数据文件损坏时触发
+        logger.warning(f"读取 fish_defs 默认值失败，改用内置鱼池：{e}")
+        return ""
+
+
+def _apply_fish_defs(cfg: dict[str, Any]) -> None:
+    """用 `fish_defs` 接管鱼池：鱼种、基准价、各钓点权重都能在配置面板里改。
+
+    优先级：`fish_value_overrides`（单条改价）> `fish_defs` 行内基准价 ×
+    `fish_value_mult`（全局闸门）> 内置鱼池。
+    行内权重是「基础权重」，运行时会再乘 `rarity_spawn_weights` 的稀有度倍数，
+    所以站长既能逐条微调，也能整体调稀有度分布。留空则完全不介入（保持内置）。
+    """
+    global FISH_LOCATION_POOLS
+
+    def _restore_builtin() -> None:
+        """恢复内置鱼池：用模块加载时的快照（含追加鱼种与隐藏鱼的正确权重），
+        再按当前稀有度权重缩放一遍。"""
+        FISH_POOL[:] = [dict(_f) for _f in BUILTIN_FISH_POOL]
+        FISH_BY_ID.clear()
+        FISH_BY_ID.update({fish["id"]: fish for fish in FISH_POOL})
+        FISH_LOCATION_POOLS = dict(BUILTIN_FISH_LOCATION_POOLS)
+        # 权重表按模块加载时的同一套步骤重建，保证与「出厂内置」逐项一致：
+        # ① 名单静态权重 × 稀有度倍数 ② 追加鱼种 ③ 隐藏生物保底
+        LOCATION_WEIGHTS.clear()
+        LOCATION_WEIGHTS.update(_rebuild_location_weights())
+        for _fish in EXTRA_FISH:
+            _pool = LOCATION_WEIGHTS.setdefault(_fish["home"], {})
+            _pool[_fish["id"]] = round(
+                ROSTER_RARITY_WEIGHT[_fish["rarity"]] * 0.7, 3
+            )
+        for _loc in list(LOCATION_WEIGHTS):
+            for _fid in HIDDEN_EVERYWHERE:
+                LOCATION_WEIGHTS[_loc].setdefault(_fid, HIDDEN_WEIGHT)
+
+    raw = _cfg_str(cfg, "fish_defs").strip()
+    if not raw:
+        _restore_builtin()
+        return
+    rows = CALC._parse_fish_defs(
+        raw,
+        location_ids=LOCATION_TIER_ORDER,
+        name_to_id=_LOCATION_NAME_TO_ID,
+        rarity_order=tuple(RARITY_ORDER),
+        warn=lambda msg: _tunable_warn("fish_defs", msg),
+    )
+    if not rows:
+        _tunable_warn("fish_defs", "没有解析出有效鱼，已回退内置鱼池")
+        _restore_builtin()
+        return
+
+    pool: list[dict[str, Any]] = []
+    weights: dict[str, dict[str, float]] = {loc: {} for loc in LOCATION_TIER_ORDER}
+    home: dict[str, list[str]] = {}
+    for row in rows:
+        fid = row["id"]
+        rarity = row["rarity"]
+        old = FISH_BY_ID.get(fid) or {}
+        # 行内权重是「基础权重」（导出时已除掉稀有度权重），这里乘回**当前**的
+        # 稀有度权重：默认配置下与内置权重逐项相同，站长调 rarity_spawn_weights
+        # 时也照常生效。隐藏生物走独立保底权重，不参与稀有度缩放。
+        if fid in HIDDEN_EVERYWHERE:
+            rarity_weight = 1.0
+        else:
+            rarity_weight = float(ROSTER_RARITY_WEIGHT.get(rarity, 0.0) or 0.0)
+        value = int(round(row["value"] * max(0.0, FISH_VALUE_MULT)))
+        override = FISH_VALUE_OVERRIDES.get(fid)
+        if override is None:
+            override = FISH_VALUE_OVERRIDES.get(row["name"])
+        if override:
+            value = int(round(float(override)))
+        pool.append(
+            {
+                "id": fid,
+                "name": row["name"],
+                "rarity": rarity,
+                "value": max(1, value),
+                "weight": round(max((w for _l, w in row["dist"]), default=1.0), 3),
+                "diff": _safe_number(old.get("diff"), 0.0),
+                "drift": _safe_number(old.get("drift"), 0.0),
+                "flavor": row["flavor"] or str(old.get("flavor") or ""),
+            }
+        )
+        for loc, weight in row["dist"]:
+            scaled = (
+                HIDDEN_WEIGHT
+                if fid in HIDDEN_EVERYWHERE
+                else weight * max(0.0, rarity_weight)
+            )
+            weights[loc][fid] = round(weights[loc].get(fid, 0.0) + scaled, 3)
+            home.setdefault(fid, [])
+            if loc not in home[fid]:
+                home[fid].append(loc)
+
+    # 全部原地替换：其它模块是通过命名空间注入引用这些对象的，重新赋值会失联
+    FISH_POOL[:] = pool
+    FISH_BY_ID.clear()
+    FISH_BY_ID.update({fish["id"]: fish for fish in pool})
+    FISH_LOCATION_POOLS = {fid: tuple(locs) for fid, locs in home.items()}
+    LOCATION_WEIGHTS.clear()
+    LOCATION_WEIGHTS.update({loc: w for loc, w in weights.items() if w})
+
+
 def _build_roster() -> tuple[
     list[dict[str, Any]], dict[str, dict[str, float]], dict[str, str]
 ]:
@@ -698,6 +829,8 @@ FISH_POOL.extend(HIDDEN_FISH)
 
 #: 这些鱼在每个钓点都会出现（出现率极低，属于「藏起来的小惊喜」）
 HIDDEN_EVERYWHERE: tuple[str, ...] = tuple(f["id"] for f in HIDDEN_FISH)
+#: 追加鱼种 id（它们的权重规则是「稀有度权重 × 0.7」，与模块加载时保持一致）
+EXTRA_FISH_IDS: frozenset[str] = frozenset(f["id"] for f in EXTRA_FISH)
 
 # 去重：同 id 只保留第一条（内容表/追加表可能重复写同一种鱼，重复会让图鉴永远集不齐）
 _seen_fish_ids: set[str] = set()
@@ -990,6 +1123,7 @@ def _builtin_defaults() -> dict[str, Any]:
     }
 
 
+DEFAULTS["fish_defs"] = _load_fish_defs_default() or DEFAULTS["fish_defs"]
 BUILTIN: dict[str, Any] = _builtin_defaults()
 
 
@@ -1029,7 +1163,12 @@ def _rebuild_location_weights() -> dict[str, dict[str, float]]:
             continue
         homes = FISH_LOCATION_POOLS.get(fid) or ()
         home = next((h for h in homes if h in result), LOCATION_TIER_ORDER[0])
-        base_weight = LEGACY_EXTRA_WEIGHT.get(fish["rarity"], 1.0)
+        if fid in EXTRA_FISH_IDS:
+            # 追加鱼种：与模块加载时同一条规则（稀有度权重 × 0.7），
+            # 否则站长一调稀有度权重，这批鱼的权重就会跳变到旧保底值
+            base_weight = ROSTER_RARITY_WEIGHT.get(fish["rarity"], 1.0) * 0.7
+        else:
+            base_weight = LEGACY_EXTRA_WEIGHT.get(fish["rarity"], 1.0)
         rarity = fish["rarity"]
         base = float(baseline.get(rarity, 0.0) or 0.0)
         mult = (float(current.get(rarity, 0.0) or 0.0) / base) if base > 0 else 1.0
@@ -1050,6 +1189,14 @@ for _fish in EXTRA_FISH:
 for _loc_id in list(LOCATION_WEIGHTS):
     for _fid in HIDDEN_EVERYWHERE:
         LOCATION_WEIGHTS[_loc_id].setdefault(_fid, HIDDEN_WEIGHT)
+
+#: 内置鱼池快照：`fish_defs` 为空或写坏时用它恢复，
+#: 保证站长把配置改坏也绝不会出现「没有鱼可钓」。
+BUILTIN_FISH_POOL: list[dict[str, Any]] = [dict(_f) for _f in FISH_POOL]
+BUILTIN_FISH_LOCATION_POOLS: dict[str, tuple[str, ...]] = dict(FISH_LOCATION_POOLS)
+BUILTIN_LOCATION_WEIGHTS: dict[str, dict[str, float]] = {
+    _loc: dict(_pool) for _loc, _pool in LOCATION_WEIGHTS.items()
+}
 
 
 def _location_pool(location_id: str) -> list[tuple[dict[str, Any], float]]:
@@ -1557,6 +1704,9 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
 
     # 派生表：鱼池权重依赖稀有度权重/价值因子/属性范围，必须重建
     LOCATION_WEIGHTS = _rebuild_location_weights()
+
+    # 站长自定义的鱼池优先级最高：整体接管鱼种 / 基准价 / 各钓点权重
+    _apply_fish_defs(cfg)
 
 
 
@@ -3127,13 +3277,15 @@ class FishingPlugin(
         if key in ("背包", "包", "bag", "鱼篓"):
             handler = self._cmd_bag(event, user_id, after_sub)
         elif key in (
-            "卖", "卖鱼", "sell", "卖垃圾", "清理", "一键卖出", "junk",
-            "卖光光", "卖光", "清空", "全卖", "空背包", "sellall",
+            "卖", "卖鱼", "sell", "卖垃圾",
+            "卖光光", "卖光", "清空", "全卖", "空背包", "sellall", "一键卖出",
         ):
             # 「卖光光」= 清空背包（锁定的留着）；旧词「卖垃圾/清理」不再有单独玩法
-            if key in ("卖光光", "卖光", "清空", "全卖", "空背包", "sellall") and not tokens:
+            if key in (
+                "卖光光", "卖光", "清空", "全卖", "空背包", "sellall", "一键卖出"
+            ) and not tokens:
                 tokens = ["光光"]
-            elif key in ("卖垃圾", "清理", "一键卖出", "junk") and not tokens:
+            elif key == "卖垃圾" and not tokens:
                 tokens = ["__junk_removed__"]
             handler = self._cmd_sell(event, user_id, *tokens)
         elif key in ("图鉴", "收集", "collection"):
@@ -3141,7 +3293,7 @@ class FishingPlugin(
         elif key in ("水族馆", "馆", "aquarium", "缸"):
             handler = self._cmd_aquarium(event, user_id, a2, after_first)
         # 背包扩容（排在「商店」之前，否则「商店 扩容」会被商店吞掉）
-        elif key in ("扩建背包", "扩容", "背包扩容", "鱼篓扩容", "鱼篓"):
+        elif key in ("扩建背包", "扩容", "背包扩容", "鱼篓扩容"):
             handler = self._cmd_backpack_upgrade(event, user_id)
         elif key in ("锁定", "锁", "lock"):
             handler = self._cmd_lock(event, user_id, *tokens)
@@ -3454,7 +3606,7 @@ CAST_WORDS = {
 #: 只列「后面跟数字/序号」这类会自然粘连的子命令；参数是用户 ID 或
 #: 名字的子命令不列，否则形如 `查鱼` 的输入会被误拆成「查 + 鱼」。
 SUBCOMMAND_WORDS = {
-    "帮助", "菜单", "指令", "背包", "鱼篓", "卖", "清理", "一键卖出",
+    "帮助", "菜单", "指令", "背包", "鱼篓", "卖", "一键卖出",
     "图鉴", "收集", "水族馆", "锁定", "解锁", "今日", "排行", "排行榜",
     "商店", "鱼饵", "道具", "用", "使用", "档案", "体力", "签到",
     "订单", "任务", "钓点", "地点", "地图", "鱼竿", "杂物", "漂流瓶",
@@ -3468,7 +3620,7 @@ SUBCOMMAND_WORDS = {
 NAME_ARG_WORDS = {
     "商店", "鱼饵", "道具", "用", "使用", "水族馆", "馆", "缸", "鱼竿", "竿",
     "钓点", "地点", "地图", "去", "前往", "卖", "图鉴", "订单", "任务",
-    "清理", "卖垃圾", "一键卖出",
+    "卖垃圾", "一键卖出",
 }
 AQUARIUM_ACTIONS = (
     "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
