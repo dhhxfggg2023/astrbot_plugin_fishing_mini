@@ -419,5 +419,80 @@
     "description": "各鱼饵的咬钩率（= 这一竿中鱼的概率，空钩极低、带饵才容易上鱼）。格式 id:概率 逗号分隔；也认中文饵名与百分数（面包屑:0.8、worm:80 都行），漏写的饵按 0.3 处理。中鱼后就是鱼，不会再被杂物抢走；没中鱼时才有可能钩上杂物（见 item_drop_chance）",
     "type": "string",
     "default": "none:0.30,bread:0.72,worm:0.80,bloodworm:0.86,corn:0.90,shrimp:0.94,livebait:0.96,secret:1.0"
+  },
+  "rarity_spawn_weights": {
+    "description": "鱼种品质的基础出现权重（格式：品质:权重，逗号分隔）。数值越大越常见，改它就能调爆率",
+    "type": "string",
+    "default": "常见:14,少见:4.6,稀有:0.95,传说:0.2,神话:0.04"
+  },
+  "rarity_value_factors": {
+    "description": "各品质鱼相对同档「常见」鱼的价值倍数（格式：品质:倍数）",
+    "type": "string",
+    "default": "常见:1.0,少见:2.6,稀有:6.0,传说:15.0,神话:34.0"
+  },
+  "rarity_difficulty": {
+    "description": "各品质鱼的拉线难度 0~1（只对需要拉线的品质有意义；越大窗口越短、越容易跑）",
+    "type": "string",
+    "default": "常见:0,少见:0,稀有:0.22,传说:0.5,神话:0.82"
+  },
+  "rarity_attr_ranges": {
+    "description": "各品质鱼上钩时的三维属性范围（格式：品质:下限-上限）",
+    "type": "string",
+    "default": "常见:40-78,少见:48-85,稀有:55-92,传说:62-97,神话:70-100"
+  },
+  "tier_base_values": {
+    "description": "16 个钓点各自的「常见」鱼基准价，按钓点顺序逗号分隔（要整体抬价请优先用 fish_value_mult）",
+    "type": "string",
+    "default": "5,6,7,10,12,14,18,23,26,32,41,49,60,73,90,113"
+  },
+  "value_variance": {
+    "description": "同一条鱼每次上钩的个体差异范围（格式：下限-上限）；上钩时固定，投喂不会重掷",
+    "type": "string",
+    "default": "0.92-1.12"
+  },
+  "attr_weights": {
+    "description": "三维属性在售价里的权重（格式：meat:0.45,spirit:0.3,sheen:0.25）",
+    "type": "string",
+    "default": "meat:0.45,spirit:0.3,sheen:0.25"
+  },
+  "attr_labels": {
+    "description": "三维属性的展示名（格式：meat:肉质,spirit:灵性,sheen:光泽）",
+    "type": "string",
+    "default": "meat:肉质,spirit:灵性,sheen:光泽"
+  },
+  "attr_par": {
+    "description": "属性的「及格线」：三维加权平均等于该值时，价格系数正好是 1.0",
+    "type": "float",
+    "default": 60.0
+  },
+  "quality_tiers": {
+    "description": "个体品质档位（格式：名称:下限-上限:emoji，逗号分隔，从低到高）",
+    "type": "string",
+    "default": "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑"
+  },
+  "hook_rate_fallback": {
+    "description": "鱼饵上钩率解析失败 / 键不认识时的兜底值（0.30 = 与空钩同档，不会变成 100%）",
+    "type": "float",
+    "default": 0.3
+  },
+  "default_escape_rate": {
+    "description": "没有被 rarity_escape_chance 列出的品质，其默认逃脱率（只影响需要拉线的品质）",
+    "type": "float",
+    "default": 0.25
+  },
+  "hostile_keywords": {
+    "description": "水族馆里「不好惹」的鱼名关键词（逗号分隔，用于隐藏的敌对判定，玩家侧无任何提示）",
+    "type": "string",
+    "default": "鳄,鲨,蛇,鳗,鳝,乌贼,章鱼,食人,水虎,龙鱼,巨齿,利维坦,归墟,古龙,鲸,鮟鱇,电鳗,鳄雀"
+  },
+  "fish_value_mult": {
+    "description": "所有鱼基准价的全局倍率（1.0 = 原价）。想整体抬价/降价就改这个，不必逐条改鱼",
+    "type": "float",
+    "default": 1.0
+  },
+  "fish_value_overrides": {
+    "description": "单条鱼的基准价覆盖（格式：鱼名或id:价格，逗号分隔，例如 锦鲤:120,鲲:25000）",
+    "type": "string",
+    "default": ""
   }
 }

@@ -1,0 +1,441 @@
+# -*- coding: utf-8 -*-
+"""交互与推送：按钮 payload、@ 提醒、随机插曲、群播报、拉线小游戏
+
+这些方法是从 main.py 原样搬过来的（缩进未变），可以直接引用 main.py 的常量与
+工具函数——共享方式是「main 在模块末尾把自己的全局注入本模块」，详见 main.py
+顶部的说明。之所以能这样搬，是为了不改动几百处调用点。
+
+⚠️ 维护约定：
+  1. 不要在本模块对共享的模块级常量做重新赋值（`X = ...` 只会改到本模块副本），
+     需要改数值请在 main.py 的 `_apply_tunable_config()` 里改。
+  2. 本模块的方法通过 `self.` 互相调用，跨模块调用也一样。
+"""
+
+from __future__ import annotations
+
+
+class InteractionsMixin:
+    """交互与推送：按钮 payload、@ 提醒、随机插曲、群播报、拉线小游戏（由 FishingPlugin 继承，见 main.py 的类定义）。"""
+
+    def _reply(self, event: AstrMessageEvent, text: str):
+        """统一的回复入口。
+
+        不同平台对文本的处理不一样，这里做一层适配：
+
+        - **QQ 官方机器人（qq_official）**：不支持原生 markdown 时会由 AstrBot
+          自动降级为纯文本，所以我们统一走 ``plain_result`` 即可，安全。
+        - 其余平台：同样是纯文本，不做额外处理。
+
+        单独包一个函数是为了将来接按钮/模板消息时只需改这一个地方。
+        当前 AstrBot（v4.28.1）的消息组件里没有 Button/Keyboard，
+        QQ 官方机器人的按钮需要直接用 botpy 的 keyboard payload，
+        不属于插件公开 API，因此这里不做，改用清晰的分行文本指令引导。
+        """
+        return event.plain_result(text)
+
+    # -------------------------------------------------------------------------
+    # 玩家数据读写（插件级 KV 存储）
+    # -------------------------------------------------------------------------
+
+
+    # -------------------------------------------------------------------------
+    # QQ 官方机器人：内联键盘（按钮）
+    # -------------------------------------------------------------------------
+    #
+    # AstrBot 的消息组件里没有按钮，所以这里在**平台允许时**直接调用
+    # botpy 的原生接口发一条带 keyboard 的消息（官方文档：
+    # /v2/groups/{group_openid}/messages 的 keyboard 字段）。
+    # 按钮一律用 action.type = 2（指令按钮）：点击后等价于玩家发出 data 里的指令，
+    # 这样按钮走的是 AstrBot 正常的指令链路，不需要额外的回调接口。
+    # 其它平台 / 发送失败时自动退回纯文本，并在正文里把指令写清楚。
+
+    @staticmethod
+    def _btn(label: str, data: str, style: int = 1) -> dict[str, Any]:
+        """构造一个官方「指令按钮」。"""
+        return {
+            "id": f"b{abs(zlib.crc32(data.encode('utf-8'))) % 100000000}",
+            "render_data": {
+                "label": label[:10],
+                "visited_label": label[:10],
+                "style": style,
+            },
+            "action": {
+                "type": 2,  # 2 = 指令按钮
+                "permission": {"type": 2},  # 2 = 所有人可用
+                "data": data,
+                "enter": True,   # 单聊里点一下直接发送
+                "reply": False,
+            },
+        }
+
+    @staticmethod
+    def _keyboard(rows: list[list[dict[str, Any]]]) -> dict[str, Any] | None:
+        rows = [r for r in rows if r]
+        if not rows:
+            return None
+        return {"content": {"rows": [{"buttons": r} for r in rows]}}
+
+    async def _send_with_buttons(
+        self, event: AstrMessageEvent, text: str, rows: list[list[dict[str, Any]]]
+    ) -> bool:
+        """发一条带按钮的消息；不支持/失败返回 False（调用方退回纯文本）。
+
+        官方文档里「带键盘的消息」示例是 **markdown + keyboard**（msg_type=2），
+        但纯文本 + keyboard（msg_type=0）在部分场景也能用，而且 markdown 需要
+        额外权限。所以这里按配置 `button_mode` 依次尝试，并把**哪种形态成功**
+        （或具体报错）写进日志，方便定位「为什么没有按钮」。
+        """
+        keyboard = self._keyboard(rows)
+        if keyboard is None:
+            return False
+        mode = str(self.cfg.get("button_mode") or "自动").strip().lower()
+        if mode in ("关闭", "off", "none", "false", "0"):
+            return False
+        try:
+            platform = str(event.get_platform_name() or "").lower()
+        except Exception:
+            return False
+        if platform not in ("qq_official", "qq_official_webhook"):
+            return False
+        bot = getattr(event, "bot", None)
+        api = getattr(bot, "api", None)
+        msg_obj = getattr(event, "message_obj", None)
+        if api is None or msg_obj is None:
+            return False
+
+        raw = getattr(msg_obj, "raw_message", None)
+        msg_id = str(getattr(msg_obj, "message_id", "") or "")
+        body = (text or "").strip()
+
+        shapes: list[dict[str, Any]] = []
+        if mode in ("自动", "auto", "markdown", "md"):
+            shapes.append({"msg_type": 2, "markdown": {"content": body}})
+        if mode in ("自动", "auto", "text", "纯文本"):
+            shapes.append({"msg_type": 0, "content": body})
+
+        group_openid = str(
+            getattr(raw, "group_openid", "") or getattr(msg_obj, "group_id", "") or ""
+        )
+        author = getattr(raw, "author", None)
+        openid = str(getattr(author, "user_openid", "") or "")
+
+        last_error: Exception | None = None
+        for shape in shapes:
+            payload = dict(shape)
+            payload["keyboard"] = keyboard
+            payload["msg_seq"] = random.randint(1, 99999)
+            if msg_id:
+                payload["msg_id"] = msg_id
+            try:
+                if group_openid and hasattr(api, "post_group_message"):
+                    await api.post_group_message(group_openid=group_openid, **payload)
+                elif openid and hasattr(api, "post_c2c_message"):
+                    await api.post_c2c_message(openid=openid, **payload)
+                else:
+                    return False
+                # 成功了：记一次是怎么发出去的，以后排查有据可依
+                if not getattr(self, "_button_ok_logged", False):
+                    self._button_ok_logged = True
+                    logger.info(
+                        f"QQ 官方按钮发送成功（msg_type={shape['msg_type']}，"
+                        f"{len(rows)} 行按钮）"
+                    )
+                return True
+            except Exception as e:  # 换下一种形态
+                last_error = e
+
+        if last_error is not None and not getattr(self, "_button_warned", False):
+            self._button_warned = True
+            logger.warning(
+                f"QQ 官方按钮发送失败，已退回纯文本：{last_error}\n"
+                f"　已尝试的形态：{[s['msg_type'] for s in shapes]}；"
+                f"可在插件配置里把 button_mode 设为 markdown 或 text 单独试，"
+                f"或设为「关闭」不再尝试。常见原因：适配器不支持 keyboard、"
+                f"机器人没有内联键盘/markdown 权限。"
+            )
+        elif last_error is not None:
+            logger.debug(f"带按钮的消息发送失败，改用纯文本：{last_error}")
+        return False
+
+    def _with_at(self, event: AstrMessageEvent, result: Any) -> Any:
+        """给一条回复加上 @发送者（只用在每条指令的第一条消息上）。
+
+        平台支持 At 组件时才加；不支持/出错就原样返回，不影响功能。
+        """
+        try:
+            platform = str(event.get_platform_name() or "").lower()
+            if platform not in ("aiocqhttp", "qq_official", "qq_official_webhook"):
+                return result
+            text = getattr(result, "text", None)
+            if not isinstance(text, str) or not text:
+                return result
+            from astrbot.api.message_components import At, Plain
+
+            uid = str(event.get_sender_id())
+            return event.chain_result([At(qq=uid), Plain("\n" + text)])
+        except Exception:
+            return result
+
+    async def _say(
+        self,
+        event: AstrMessageEvent,
+        text: str,
+        rows: list[list[dict[str, Any]]] | None = None,
+    ):
+        """**统一输出出口**：能发按钮就发按钮，否则退回纯文本。
+
+        用法：``async for r in self._say(event, text, rows): yield r``
+        """
+        if rows and await self._send_with_buttons(event, text, rows):
+            return
+        yield event.plain_result(text)
+
+
+
+
+
+
+
+
+    def _maybe_start_event(self, player: dict[str, Any]) -> dict[str, Any] | None:
+        """偶尔触发一次小插曲（触发条件不对外说明）。"""
+        if player.get("event"):
+            return None
+        chance = _clamp(
+            _safe_number(self.cfg.get("story_chance"), 0.06), 0.0, 1.0
+        )
+        if chance <= 0 or random.random() >= chance:
+            return None
+        total = sum(e["weight"] for e in RANDOM_EVENTS)
+        point = random.uniform(0, total)
+        acc = 0.0
+        for event_def in RANDOM_EVENTS:
+            acc += event_def["weight"]
+            if point < acc:
+                return event_def
+        return RANDOM_EVENTS[-1]
+
+    def _interaction_window(
+        self, fish: dict[str, Any], weather: dict[str, Any] | None = None
+    ) -> dict[str, Any] | None:
+        """算出一条鱼的拉线窗口参数；不需要互动则返回 None。
+
+        窗口时长、最佳点位、逃脱率都由鱼种的 ``diff``（难度）与 ``drift``（偏移）决定，
+        所以**每种鱼的窗口期时间和位置都不一样**；天气会再整体缩放窗口与逃脱率。
+        """
+        rarity = fish["rarity"]
+        if rarity not in self.interactive_rarities:
+            return None
+
+        diff = _clamp(_safe_number(fish.get("diff"), 0.5), 0.0, 1.0)
+        drift = _clamp(_safe_number(fish.get("drift"), 0.0), -0.5, 0.5)
+        window_mult = _clamp(
+            _safe_number((weather or {}).get("window_mult"), 1.0), 0.3, 3.0
+        )
+        escape_mult = _clamp(
+            _safe_number((weather or {}).get("escape_mult"), 1.0), 0.2, 3.0
+        )
+
+        w_min = int(self.cfg["window_min"])
+        w_max = int(self.cfg["window_max"])
+        # 难度越高 -> 越短的窗口
+        scaled_min = max(2, int(round(w_min * (1.0 - 0.35 * diff) * window_mult)))
+        scaled_max = max(
+            scaled_min + 1, int(round(w_max * (1.0 - 0.40 * diff) * window_mult))
+        )
+        window = random.uniform(float(scaled_min), float(scaled_max))
+
+        # 最佳点位：默认居中，按 drift 偏移，并留出安全边距
+        half = self.cfg["sweet_spot_width"] / 2.0
+        center = _clamp(0.5 + drift, half + 0.05, 1.0 - half - 0.05)
+
+        base_escape = self.escape_map.get(rarity, DEFAULT_ESCAPE_RATE)
+        escape = _clamp(base_escape * (0.75 + 0.5 * diff) * escape_mult, 0.0, 0.95)
+
+        return {
+            "window": window,
+            "center": center,
+            "half": half,
+            "escape": escape,
+        }
+
+    def _judge_pull(
+        self, pos: float, spec: dict[str, Any]
+    ) -> tuple[str, float, float, str]:
+        """根据落点位置判定评价。纯函数，方便单测。
+
+        ``pos`` 是 0~1 的落点（0 = 刚咬钩，1 = 窗口结束）。
+        返回 ``(评价, 品质幸运加成, 逃脱率倍数, 标记 emoji)``。
+        """
+        center = _clamp(_safe_number(spec.get("center"), 0.5), 0.0, 1.0)
+        half = _clamp(_safe_number(spec.get("half"), 0.17), 0.01, 0.5)
+        drift = abs(_clamp(pos, 0.0, 1.0) - center)
+
+        if drift <= half * 0.5:
+            return (
+                "完美",
+                float(self.cfg["perfect_bonus"]),
+                float(self.cfg["perfect_escape_factor"]),
+                "🎯",
+            )
+        if drift <= half * 1.5:
+            return "良好", float(self.cfg["good_bonus"]), 1.0, "👍"
+        return "偏差", 0.0, float(self.cfg["edge_escape_factor"]), "😅"
+
+    async def _play_minigame(
+        self,
+        event: AstrMessageEvent,
+        user_id: str,
+        fish: dict[str, Any],
+        bait_id: str,
+        spec: dict[str, Any],
+    ):
+        """拉线互动：提示 -> 等「拉」 -> 按落点评价。
+
+        异步生成器：先 yield 若干提示消息，最后 yield 一个 dict 结果
+        （异步生成器不能用带值的 return，所以用最后 yield dict 回传）。
+        结果格式：``{"catch": 鱼实例 | None, "rating": "完美/良好/偏差/失败", ...}``
+        """
+        window = spec["window"]
+        center = spec["center"]
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[float] = loop.create_future()
+        # 先注册等待、再提示玩家，避免「提示已发出但还没开始监听」的竞态
+        self._pending_pulls[user_id] = {
+            "future": future,
+            "session": self._session_key(event),
+            "deadline": time.monotonic() + window,
+        }
+
+        tips = ["竿尖猛地弯了下去", "浮漂一下子沉进水里", "线被拽得吱吱响",
+                "水面炸开一朵水花", "手里的竿传来一股大力"]
+        hook_text = (
+            f"{_fish_emoji(fish)} {fish['name']} 咬钩了！{random.choice(tips)}\n"
+            f"⚡ {window:.0f} 秒内发 /钓鱼 拉（或点下面的按钮）"
+        )
+        async for reply in self._say(event, hook_text, self._pull_rows()):
+            yield reply
+
+        started = time.monotonic()
+        try:
+            await asyncio.wait_for(asyncio.shield(future), timeout=window)
+            hit = True
+            elapsed = time.monotonic() - started
+        except asyncio.TimeoutError:
+            hit = False
+            elapsed = window
+        except asyncio.CancelledError:
+            if not future.done():
+                future.cancel()
+            raise
+        finally:
+            self._pending_pulls.pop(user_id, None)
+
+        if not hit:
+            yield event.plain_result(
+                f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
+                f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
+            )
+            yield {"catch": None, "rating": "失败", "bonus": 0.0}
+            return
+
+        # 落点：0~1 的位置，越靠近 center 越准
+        pos = _clamp(elapsed / window, 0.0, 1.0) if window > 0 else 0.0
+        rating, bonus, factor, mark = self._judge_pull(pos, spec)
+
+        escape = _clamp(spec["escape"] * factor, 0.0, 0.95)
+        if random.random() < escape:
+            yield event.plain_result(
+                f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
+            )
+            yield {"catch": None, "rating": rating, "bonus": 0.0}
+            return
+
+        bait = self.baits.get(bait_id) or {}
+        quality_mult = _roll_quality_mult(
+            self.cfg["quality_weights"],
+            bait_luck=_safe_number(bait.get("luck"), 0.0) + spec.get("weather_luck", 0.0),
+            extra_luck=bonus,
+        )
+        catch = _new_instance(
+            fish["id"],
+            quality_mult,
+            variant=spec.get("variant"),
+            value_bonus=spec.get("rod_value_bonus", 0.0),
+            location_mult=spec.get("location_mult", 1.0),
+            codex_mult=spec.get("codex_mult", 1.0),
+        )
+        yield {"catch": catch, "rating": rating, "bonus": bonus, "mark": mark}
+
+    async def _run_minigame(self, event, user_id, fish, bait_id, spec):
+        """驱动 minigame，返回 (消息列表, 结果 dict)。"""
+        messages: list[Any] = []
+        result: dict[str, Any] | None = None
+        async for item in self._play_minigame(event, user_id, fish, bait_id, spec):
+            if isinstance(item, dict):
+                result = item
+            else:
+                messages.append(item)
+        if result is None:
+            result = {"catch": None, "rating": "失败", "bonus": 0.0}
+        return messages, result
+
+    @staticmethod
+    def _session_key(event: AstrMessageEvent) -> str:
+        """当前会话标识，用于避免跨群误触发互动。"""
+        try:
+            return str(event.unified_msg_origin)
+        except Exception:
+            try:
+                return f"{event.get_platform_name()}:{event.get_group_id()}"
+            except Exception:
+                return "unknown"
+
+    def _resolve_pull(self, event: AstrMessageEvent) -> bool:
+        """若该玩家正在等「拉」，唤醒等待。返回是否触发。"""
+        try:
+            user_id = str(event.get_sender_id())
+        except Exception:
+            return False
+        pending = self._pending_pulls.get(user_id)
+        if not pending:
+            return False
+        session = pending.get("session")
+        if session and session != self._session_key(event):
+            return False
+        future = pending.get("future")
+        if future is None or future.done():
+            return False
+        future.set_result(time.monotonic())
+        return True
+
+    async def _maybe_trigger_story(self, event: AstrMessageEvent, user_id: str):
+        """抛竿收尾：偶尔来一段小插曲（触发条件不对外说明）。
+
+        钓鱼与「钓上杂物」两条路径都要走这里，所以单独抽出来，避免复制粘贴。
+        """
+        player = await self._load_player(user_id)
+        story = self._maybe_start_event(player)
+        if story is None:
+            return
+        player["event"] = {"id": story["id"], "ts": int(time.time())}
+        self._recent_events[self._session_key(event)] = (user_id, time.time())
+        await self._save_player(player)
+        text, rows = self._event_prompt(story)
+        async for reply in self._say(event, text, rows):
+            yield reply
+
+    async def _broadcast(self, event: AstrMessageEvent, catch: dict[str, Any]) -> None:
+        try:
+            sender = event.get_sender_name() or str(event.get_sender_id())
+            await event.send(
+                event.plain_result(f"📢 {sender} 钓到了 {_instance_line(catch)}！")
+            )
+        except Exception as e:
+            logger.warning(f"群播报失败：{e}")
+
+    # -------------------------------------------------------------------------
+    # 每日订单
+    # -------------------------------------------------------------------------
+

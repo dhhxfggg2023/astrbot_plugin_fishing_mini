@@ -11,6 +11,30 @@
 - MILESTONES     累计钓获里程碑
 - ACHIEVEMENTS   成就
 
+====================== 想加内容 / 改内容？改这个文件 ======================
+每个表都是一行一条，加一行就多一个内容，删一行就没了：
+
+- COLLECTIBLES   杂物：`id / name / emoji / weight（出现权重，越大越多）/ value（卖价）/ desc`
+                 —— 想调「一竿钓上杂物的概率」用配置 `item_drop_chance`
+- BOTTLE_NOTES   漂流瓶纸条：纯字符串列表（概率看配置 `bottle_note_chance`）
+- VARIANTS       变异：`id / name / emoji / weight / mult（价值倍率）/ desc`
+- WEATHERS       天气：`id / name / emoji / weight / rarity_mult（{品质: 权重倍数}，晴天写 {}）/
+                 window_mult（拉线窗口倍数）/ luck（本日手气加成）/
+                 escape_mult（逃脱率倍数）/ desc`
+- EASTER_EGGS    上鱼后的小惊喜：`id / weight / text / 效果`，
+                 效果键按需挑一个：`gold`（给金币）/ `note`（得一张纸条，写 true）/
+                 `luck`（本竿手气 +N）/ `heal_bait`（返还鱼饵，写 true）
+- RANDOM_EVENTS  抛竿小插曲：`id / weight / text / choices[]`（**两个**选项），
+                 每个选项：`label`（按钮文字）/ `text`（选择后的描述）/
+                 `good`（好结果文案）/ `idle`（空手文案），
+                 奖励键可选：`gold` / `note` / `bait`（给几个鱼饵）
+- MILESTONES     里程碑：`{累计钓获: 文案}`
+- ACHIEVEMENTS   成就：`{id: 文案}`（id 会写进玩家存档，别改已有的）
+
+⚠️ 已经上线的 **id 不要改**（存档与图鉴按 id 记录）；只改名字/描述/数值是安全的。
+改完重载插件即生效；本文件缺失时插件会用内置兜底内容继续跑。
+=========================================================================
+
 字段含义见 main.py 顶部的模块说明。删掉本文件插件仍能启动，
 但会退化成「只有内置兜底内容」的精简版。
 """

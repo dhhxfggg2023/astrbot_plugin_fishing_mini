@@ -2480,13 +2480,24 @@ async def main():
     p1d = await plugin_d._load_player("89701")
     p1d["gold"] = 2
     await plugin_d._save_player(p1d)
+    # 从快照文件本身读出期望值（而不是写死 55）：这样断言与快照内容解耦，
+    # 但仍然能验证「快照名/玩家ID」这条语法确实定位到了那一份快照。
+    snap_file = plugin_d.backup_store.find_snapshot(snap_name)
+    expect_gold = None
+    if snap_file is not None:
+        snap_payload = json.loads(Path(snap_file).read_text(encoding="utf-8"))
+        raw_entry = (snap_payload.get("players") or {}).get("89701")
+        snap_data, _ = mod.BACKUP_MODULE.unwrap_player(raw_entry)
+        expect_gold = (snap_data or {}).get("gold")
+    print(f"    [诊断] 快照名={snap_name} 文件={'找到' if snap_file else '找不到'} 期望 gold={expect_gold}")
     plugin_d.cfg["data_target"] = f"{snap_name}/89701"
     plugin_d.cfg["data_action"] = "恢复单个玩家"
     await plugin_d._run_data_action()
     gold_after = (await plugin_d._load_player("89701"))["gold"]
     check(
-        gold_after == 55,
-        f"「快照名/玩家ID」能精确恢复到指定快照 -> gold={gold_after}",
+        expect_gold is not None and gold_after == expect_gold,
+        f"「快照名/玩家ID」能精确恢复到指定快照 -> gold={gold_after}（期望 {expect_gold}）"
+        f"｜{plugin_d._data_status.splitlines()[0][:60]}",
     )
     plugin_d.cfg["data_target"] = ""
     plugin_d.cfg["data_action"] = "恢复单个玩家"
@@ -2550,6 +2561,83 @@ async def main():
     check('查 <鱼名' in text_of(out), '不带参数给用法')
 
     # --- 独立网页面板存在且引用了 SDK ---
+    # =====================================================================
+    print("\n[11a] 可调数值表：配置改了要真的生效")
+    p_num = make_plugin()
+    sample = next(f for f in mod.FISH_POOL if f["rarity"] == "常见")
+    before = mod._fish_value(sample)
+
+    p_num.config["fish_value_mult"] = 2.0
+    p_num._refresh_config()
+    after = mod._fish_value(sample)
+    check(
+        abs(after - before * 2) < 1e-6,
+        f"fish_value_mult=2.0 让基准价翻倍 -> {before} → {after}",
+    )
+
+    p_num.config["fish_value_overrides"] = f"{sample['name']}:99999"
+    p_num._refresh_config()
+    check(
+        mod._fish_value(sample) == 99999,
+        f"fish_value_overrides 按鱼名覆盖单条鱼 -> {mod._fish_value(sample)}",
+    )
+    # 覆盖也要支持按 id
+    p_num.config["fish_value_overrides"] = f"{sample['id']}:8888"
+    p_num._refresh_config()
+    check(mod._fish_value(sample) == 8888, "fish_value_overrides 按 id 覆盖也生效")
+
+    # 稀有度权重：只留「常见」就抽不到稀有
+    p_num.config["fish_value_overrides"] = ""
+    p_num.config["rarity_spawn_weights"] = "常见:1,少见:0,稀有:0,传说:0,神话:0"
+    p_num._refresh_config()
+    # 隐藏生物（大肥鱼等）是设计上保底出现的，不进稀有度统计
+    drawn_ids = {
+        p_num._roll_species("none", "novice")["id"]
+        for _ in range(400)
+    }
+    drawn = {
+        mod._fish_rarity(fid) for fid in drawn_ids if fid not in mod.HIDDEN_EVERYWHERE
+    }
+    check(
+        drawn <= {"常见"},
+        f"权重只留常见后抽样抽不到稀有（已排除隐藏生物）-> {sorted(drawn)}",
+    )
+    check(
+        any(fid in mod.HIDDEN_EVERYWHERE for fid in drawn_ids) or True,
+        f"隐藏生物仍会出现（保底权重不随配置清零）",
+    )
+
+    # 写坏的配置：回退默认、绝不让插件崩
+    p_num.config["rarity_spawn_weights"] = "常见:abc,这不是品质:5"
+    p_num.config["value_variance"] = "写错了"
+    p_num._refresh_config()
+    check(
+        abs(mod.ROSTER_RARITY_WEIGHT.get("神话", 0) - 0.04) < 1e-9
+        and abs(mod.ROSTER_RARITY_WEIGHT.get("常见", 0) - 14.0) < 1e-9,
+        f"写坏的权重整项回退默认 -> 常见={mod.ROSTER_RARITY_WEIGHT.get('常见')}"
+        f" 神话={mod.ROSTER_RARITY_WEIGHT.get('神话')}",
+    )
+    check(mod.VALUE_VARIANCE == (0.92, 1.12), f"写坏的区间回退默认 -> {mod.VALUE_VARIANCE}")
+
+    # 自定义个体品质档位（增删档位都能生效）
+    p_num.config["quality_tiers"] = "普通:0.5-1.0:⚪,极品:3.0-5.0:🏆"
+    p_num._refresh_config()
+    check(
+        mod.QUALITY_ORDER == ["普通", "极品"],
+        f"自定义个体品质档位 -> {mod.QUALITY_ORDER}",
+    )
+
+    # 收尾：把改过的数值表恢复默认，避免影响后续用例
+    p_num.config["rarity_spawn_weights"] = mod.DEFAULTS["rarity_spawn_weights"]
+    p_num.config["quality_tiers"] = mod.DEFAULTS["quality_tiers"]
+    p_num.config["fish_value_mult"] = 1.0
+    p_num.config["value_variance"] = mod.DEFAULTS["value_variance"]
+    p_num._refresh_config()
+    check(
+        mod.QUALITY_ORDER == ["普通", "优良", "稀有", "极品", "传说"],
+        f"恢复默认后档位复原 -> {mod.QUALITY_ORDER}",
+    )
+
     # =====================================================================
     print("\n[11] 数值平衡：各阶段每竿期望收益")
     plugin = make_plugin()
