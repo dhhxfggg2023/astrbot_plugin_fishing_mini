@@ -3822,12 +3822,12 @@ async def main():
         return bad
 
     diff = _same_pool(builtin, configured)
-    # 说明：鱼种/名称/稀有度/价值必须逐项一致（硬指标）。
-    # 权重允许极少数差异——名单里「名称复用」的鱼与追加鱼种 id 重叠时，两条构建
-    # 路径的权重规则历史上不同（已在 _rebuild_location_weights 里统一了追加鱼种规则，
-    # 仍有约 5 条受名称复用影响的鱼存在差异）。默认配置走的是「配置接管」路径，
-    # 与旧版行为逐项一致；这里只保证差异不会扩大。
-    check(len(diff) <= 8, f"只有极少数鱼的权重存在历史差异 -> {len(diff)} 条 {diff[:5]}")
+    # 硬指标：两条构建路径（配置接管 / 清空后回退内置）必须**逐项等价**。
+    # 历史问题：EXTRA_FISH 里有 4 条鱼复用了名单鱼的 id（reed_frog / dock_octopus /
+    # mangrove_mudskipper / trench_amphipod），写入权重时用的覆盖语义让「回退内置」
+    # 路径的权重与「配置接管」不同。现已统一为「不覆盖已存在的 id」（名单鱼优先），
+    # 因此这里不再允许任何差异。
+    check(not diff, f"两条构建路径逐项等价（权重差异 {len(diff)} 条）-> {diff[:5]}")
     same_core = [k for k in configured if configured[k][:3] != builtin.get(k, ("", "", 0))[:3]]
     check(not same_core, f"鱼种/名称/稀有度/价值逐项一致（差异 {len(same_core)} 条）")
     if diff:
@@ -3905,6 +3905,115 @@ async def main():
     plugin_f.config["fish_defs"] = defaults_text
     plugin_f._refresh_config()
     check(_pool_snapshot() == configured, "改回默认文本后完全恢复（无残留副作用）")
+
+    # =====================================================================
+    print("\n[11c] 内容表配置化（杂物/变异/天气/彩蛋）")
+    import importlib.util as _ilu_gd
+
+    _gd_spec = _ilu_gd.spec_from_file_location("gd_builtin", PLUGIN_DIR / "_game_data.py")
+    gd_builtin = _ilu_gd.module_from_spec(_gd_spec)
+    _gd_spec.loader.exec_module(gd_builtin)
+
+    _CONTENT_TABLES = (
+        ("COLLECTIBLES", "collectible_defs"),
+        ("VARIANTS", "variant_defs"),
+        ("WEATHERS", "weather_defs"),
+        ("EASTER_EGGS", "easter_egg_defs"),
+    )
+
+    # --- 等价性硬指标：默认配置接管后必须与内置数据逐项一致 ---
+    plugin_c = make_plugin()
+    for _table, _key in _CONTENT_TABLES:
+        _live = getattr(mod, _table)
+        _builtin = getattr(gd_builtin, _table)
+        check(
+            len(_live) == len(_builtin) and all(a == b for a, b in zip(_live, _builtin)),
+            f"{_key} 与内置逐项等价（{len(_live)} 条）",
+        )
+    check(
+        len(getattr(mod, "COLLECTIBLES")) == 7
+        and len(getattr(mod, "VARIANTS")) == 6
+        and len(getattr(mod, "WEATHERS")) == 6
+        and len(getattr(mod, "EASTER_EGGS")) == 7,
+        "4 张表条目数正确（7/6/6/7）",
+    )
+
+    # --- 改配置真的生效 ---
+    _cfg_c = load_schema_config()
+    _cfg_c["collectible_defs"] = "test_junk|测试杂物|🗑️|5|7|测试用"
+    _cfg_c["variant_defs"] = "test_var|测试变异|✨|10|1.75|测试用"
+    plugin_c = make_plugin(_cfg_c)
+    _junk = getattr(mod, "COLLECTIBLES")
+    check(
+        len(_junk) == 1 and _junk[0]["id"] == "test_junk" and _junk[0]["value"] == 7,
+        f"杂物表被配置接管 -> {[c['id'] for c in _junk]}",
+    )
+    _var = getattr(mod, "VARIANTS")
+    check(
+        len(_var) == 1 and _var[0]["mult"] == 1.75,
+        f"变异表被配置接管（价值倍率 {_var[0]['mult']}）",
+    )
+
+    # --- 空值 / 写坏 → 回退内置 ---
+    _cfg_back = load_schema_config()
+    plugin_c = make_plugin(_cfg_back)
+    check(
+        getattr(mod, "COLLECTIBLES") == getattr(gd_builtin, "COLLECTIBLES"),
+        "清空配置后杂物表恢复内置",
+    )
+    _cfg_bad = load_schema_config()
+    _cfg_bad["variant_defs"] = "全是坏行没有竖线"
+    plugin_c = make_plugin(_cfg_bad)
+    check(
+        getattr(mod, "VARIANTS") == getattr(gd_builtin, "VARIANTS"),
+        "配置全部写坏时回退内置（不再残留上次的值）",
+    )
+
+    # --- 解析容错（直接打解析器）---
+    _rows = mod.CALC._parse_collectible_defs("y|测试杂物|🗑️|5|7|说明")
+    check(
+        _rows and _rows[0]["weight"] == 5 and _rows[0]["value"] == 7,
+        "杂物解析：权重与价值正确",
+    )
+    _rows = mod.CALC._parse_variant_defs("x|测试变异|✨|10|1.75|说明")
+    check(
+        _rows and _rows[0]["mult"] == 1.75 and _rows[0]["desc"] == "说明",
+        "变异解析：价值倍率与字段名正确",
+    )
+    _rows = mod.CALC._parse_weather_defs(
+        "rain|下雨|🌧️|16|少见:1.4，稀有:1.5|0.9|0.04|1.0|雨天\n"
+        "坏行没有竖线\n"
+        "# 注释行\n"
+        "\n"
+        "sunny|晴朗|☀️|30||1.0|0.0|1.0|风平浪静"
+    )
+    check(len(_rows) == 2, f"天气解析：坏行跳过、注释与空行忽略 -> {len(_rows)} 条")
+    check(
+        _rows[0]["rarity_mult"] == {"少见": 1.4, "稀有": 1.5},
+        "天气解析：全角逗号与中文键都能认",
+    )
+    check(
+        _rows[1]["rarity_mult"] == {} and _rows[1]["window_mult"] == 1.0,
+        "天气解析：稀有度倍率留空 = 无加成",
+    )
+    _eggs = mod.CALC._parse_easter_egg_defs(
+        "a|10|文案一|gold=12;note=1\nb|5|文案二|luck=0.08;heal_bait=1"
+    )
+    check(
+        len(_eggs) == 2
+        and _eggs[0]["gold"] == 12
+        and _eggs[0]["note"] is True
+        and _eggs[1]["luck"] == 0.08
+        and _eggs[1]["heal_bait"] is True,
+        "彩蛋解析：数值型与开关型效果都正确",
+    )
+
+    # --- 内容表不该被默认值同步覆盖（与 fish_defs 同规则）---
+    for _key in ("collectible_defs", "variant_defs", "weather_defs", "easter_egg_defs"):
+        check(
+            _key in mod.DEFAULTS_SYNC_EXCLUDE_KEYS,
+            f"{_key} 已排除默认值自动同步（站长编辑不会被升级覆盖）",
+        )
 
     # =====================================================================
     print("\n[12] 指令分派")

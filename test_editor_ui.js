@@ -155,7 +155,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 10, "标签页数量 = 10", Object.keys(T.TAB_BY_ID).join(","));
+  check(Object.keys(T.TAB_BY_ID).length === 11, "标签页数量 = 11", Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个", (T.state.data.locations || []).length);
   check((T.state.snapshots || []).length === 4, "演示存档 4 份", (T.state.snapshots || []).length);
@@ -204,7 +204,7 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 10, "10 个标签都有条目数徽标");
+  check(tabsHtml.split("tab-count").length - 1 === 11, "11 个标签都有条目数徽标");
   check(T.state.autoBackupDirty !== true, "自动备份表单未被标记为已改");
 
   console.log("\n[1d] 空状态（表空 / 筛选无结果 都别只剩表头）");
@@ -323,7 +323,7 @@ function runAssertions() {
   check(["fish", "locations", "baits", "rods", "items", "collectibles", "variants", "weather", "numbers"]
     .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 9 张表");
   check(!!payload.autoBackup && payload.autoBackup.dailyHour === 4, "载荷带上自动备份设置");
-  check(Object.keys(payload).length === 10, "载荷字段数 = 10（9 表 + autoBackup）", Object.keys(payload).length);
+  check(Object.keys(payload).length === 11, "载荷字段数 = 11（9 表 + numbers + autoBackup）", Object.keys(payload).length);
 
   const snapWithNote = T.renderSnapCard({ kind: "manual", note: "改物价前", time: "2026-09-18 18:20", players: 35, size: "131 KB" }, 0);
   check(snapWithNote.indexOf("改物价前") >= 0, "存档卡片显示备注名");
@@ -372,8 +372,8 @@ function runAssertions() {
    ============================================================================= */
 function channelHelpers() {
   console.log("\n[12] 数据通道：配置 <-> 表格 的转换");
-  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations",
-    "5 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
+  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs",
+    "9 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
   check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
     "fish_defs 是文本表（多行），其余是字符串数组");
   check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
@@ -407,8 +407,8 @@ function channelHelpers() {
 
   // 序列化
   const serialized = T.serializeContentTables();
-  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs",
-    "序列化输出 5 张配置表", Object.keys(serialized).join(","));
+  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs",
+    "序列化输出 9 张配置表", Object.keys(serialized).join(","));
   check(typeof serialized.fish_defs === "string"
     && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
     "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",

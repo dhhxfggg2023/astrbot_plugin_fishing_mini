@@ -1145,6 +1145,67 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
                 cell(Math.max(1, num(r.level_gate, 1))), cell(num(r.gold_gate, 0)),
                 cell(num(r.value_mult, 1)), cell(r.desc)].join(SEP);
       }
+    },
+    collectibles: {
+      configKey: "collectible_defs",
+      configType: "text",
+      /* id|名称|emoji|权重|价值|说明 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 4 || !p[0] || !p[1]) return null;
+        return { id: p[0], name: p[1], emoji: text(p[2], "🥫"), weight: toNum(p[3]),
+                 value: toNum(p[4]), desc: text(p[5]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.weight, 0)),
+                cell(num(r.value, 0)), cell(r.desc)].join(SEP);
+      }
+    },
+    variants: {
+      configKey: "variant_defs",
+      configType: "text",
+      /* id|名称|emoji|相对权重|价值倍率|说明 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 5 || !p[0] || !p[1]) return null;
+        return { id: p[0], name: p[1], emoji: text(p[2], "✨"), weight: toNum(p[3]),
+                 value_mult: toNum(p[4], 1), desc: text(p[5]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.weight, 0)),
+                cell(num(r.value_mult, 1)), cell(r.desc)].join(SEP);
+      }
+    },
+    weather: {
+      configKey: "weather_defs",
+      configType: "text",
+      /* id|名称|emoji|权重|稀有度倍率|窗口倍率|运气|逃脱倍率|说明 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 4 || !p[0] || !p[1]) return null;
+        return { id: p[0], name: p[1], emoji: text(p[2], "🌤️"), weight: toNum(p[3]),
+                 rarity_mult: text(p[4]), window_mult: toNum(p[5], 1),
+                 luck: toNum(p[6], 0), escape_mult: toNum(p[7], 1), desc: text(p[8]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.weight, 0)),
+                cell(r.rarity_mult), cell(num(r.window_mult, 1)),
+                cell(num(r.luck, 0)), cell(num(r.escape_mult, 1)), cell(r.desc)].join(SEP);
+      }
+    },
+    easter_eggs: {
+      configKey: "easter_egg_defs",
+      configType: "text",
+      /* id|权重|文案|效果(gold=…;note=1;luck=…;heal_bait=1) */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 3 || !p[0] || !p[2]) return null;
+        return { id: p[0], weight: toNum(p[1]), text: text(p[2]), effects: text(p[3]) };
+      },
+      serialize: function (r) {
+        return [cell(r.id), cell(num(r.weight, 0)), cell(r.text),
+                cell(r.effects)].join(SEP);
+      }
     }
   };
 
@@ -1632,12 +1693,19 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { id: "rainbow", emoji: "🌈", name: "虹彩", weight: 3,  value_mult: 3.20, desc: "换角度看就是另一种颜色" }
       ],
       weather: [
-        { id: "sunny",  emoji: "☀️", name: "晴朗", weight: 30, rarity_mult: 1.00, escape_mult: 1.00, desc: "风平浪静，什么都有可能" },
-        { id: "cloudy", emoji: "⛅", name: "多云", weight: 26, rarity_mult: 1.05, escape_mult: 1.00, desc: "光线柔和，鱼口稳定" },
-        { id: "rainy",  emoji: "🌧️", name: "小雨", weight: 20, rarity_mult: 1.15, escape_mult: 1.05, desc: "雨点打在水面，鱼反而活跃" },
-        { id: "foggy",  emoji: "🌫️", name: "起雾", weight: 12, rarity_mult: 1.60, escape_mult: 1.15, desc: "能见度低，大鱼靠岸" },
-        { id: "moon",   emoji: "🌙", name: "月夜", weight: 8,  rarity_mult: 1.35, escape_mult: 0.95, desc: "夜里灯火通明，夜行鱼活跃" },
-        { id: "storm",  emoji: "⛈️", name: "雷雨", weight: 4,  rarity_mult: 1.25, escape_mult: 1.30, desc: "鱼很凶，但也不好拉" }
+        { id: "sunny",  emoji: "☀️", name: "晴朗", weight: 30, rarity_mult: "", window_mult: 1.0, luck: 0.0, escape_mult: 1.00, desc: "风平浪静，什么都有可能" },
+        { id: "cloudy", emoji: "⛅", name: "多云", weight: 26, rarity_mult: "", window_mult: 1.0, luck: 0.0, escape_mult: 1.00, desc: "光线柔和，鱼口稳定" },
+        { id: "rainy",  emoji: "🌧️", name: "小雨", weight: 20, rarity_mult: "少见:1.4,稀有:1.5", window_mult: 1.0, luck: 0.0, escape_mult: 1.05, desc: "雨点打在水面，鱼反而活跃" },
+        { id: "foggy",  emoji: "🌫️", name: "起雾", weight: 12, rarity_mult: "稀有:1.6,传说:1.8", window_mult: 1.0, luck: 0.0, escape_mult: 1.15, desc: "能见度低，大鱼靠岸" },
+        { id: "moon",   emoji: "🌙", name: "月夜", weight: 8,  rarity_mult: "传说:1.7,神话:2.0", window_mult: 1.0, luck: 0.0, escape_mult: 0.95, desc: "夜里灯火通明，夜行鱼活跃" },
+        { id: "storm",  emoji: "⛈️", name: "雷雨", weight: 4,  rarity_mult: "少见:1.3,稀有:1.4", window_mult: 1.0, luck: 0.0, escape_mult: 1.30, desc: "鱼很凶，但也不好拉" }
+      ],
+      easter_eggs: [
+        { id: "coin_in_fish", weight: 22, text: "🪙 鱼肚子里居然有一枚硬币！", effects: "gold=12" },
+        { id: "old_map",      weight: 16, text: "🗺️ 鱼鳞上沾着一张湿透的旧地图碎片……", effects: "note=1" },
+        { id: "lucky_scale",  weight: 18, text: "✨ 摘下一片闪着光的鱼鳞，手感很吉利。", effects: "luck=0.08" },
+        { id: "bait_back",    weight: 12, text: "🪱 收线时鱼饵还好好地挂在钩上。", effects: "heal_bait=1" },
+        { id: "lost_ring",    weight: 5,  text: "💍 鱼线上缠着一枚旧戒指，不知道是谁的。", effects: "gold=80" }
       ],
       numbers: [
         { key: "stamina_max",           label: "体力上限",     value: 20,   unit: "点",   desc: "攒满需要 stamina_regen_seconds × 上限" },
@@ -1826,7 +1894,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       id: "weather",
       label: "🌦️ 天气",
       title: "天气",
-      hint: "稀有度倍率越高越容易出好鱼；拉线难度影响逃脱率",
+      hint: "稀有度倍率写成 少见:1.4,稀有:1.5（留空=不加成）；窗口倍率越小窗口越短；运气越高越容易出好鱼",
       keyField: "id",
       sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["weightDesc", "按权重（高→低）"]],
       columns: [
@@ -1834,12 +1902,31 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { key: "emoji",        label: "图标",       type: "emoji",  w: "60px" },
         { key: "name",         label: "名称",       type: "text",   w: "110px" },
         { key: "weight",       label: "权重",       type: "number", w: "90px", num: true, step: 1 },
-        { key: "rarity_mult",  label: "稀有度倍率", type: "number", w: "108px", num: true, step: 0.05 },
-        { key: "escape_mult",  label: "拉线难度",   type: "number", w: "108px", num: true, step: 0.05 },
+        { key: "rarity_mult",  label: "稀有度倍率", type: "text",   w: "190px" },
+        { key: "window_mult",  label: "窗口倍率",   type: "number", w: "100px", num: true, step: 0.05 },
+        { key: "luck",         label: "运气",       type: "number", w: "90px",  num: true, step: 0.01 },
+        { key: "escape_mult",  label: "拉线难度",   type: "number", w: "100px", num: true, step: 0.05 },
         { key: "desc",         label: "说明",       type: "text" }
       ],
       makeRow: function () {
         return { id: "new_weather_" + rand(100, 999), emoji: "🌤️", name: "新天气", weight: 10, rarity_mult: 1.0, escape_mult: 1.0, desc: "" };
+      }
+    },
+    {
+      id: "easter_eggs",
+      label: "🎉 彩蛋",
+      title: "上鱼彩蛋",
+      hint: "上鱼后可能触发的额外惊喜；效果写 gold=12 / luck=0.08 / note=1 / heal_bait=1",
+      keyField: "id",
+      sortOptions: [["default", "默认顺序"], ["name", "按 id"], ["weightDesc", "按权重（高→低）"]],
+      columns: [
+        { key: "id",      label: "id",   type: "text",   w: "140px" },
+        { key: "weight",  label: "权重", type: "number", w: "90px", num: true, step: 1 },
+        { key: "text",    label: "文案", type: "text" },
+        { key: "effects", label: "效果", type: "text",   w: "200px" }
+      ],
+      makeRow: function () {
+        return { id: "new_egg_" + rand(100, 999), weight: 10, text: "✨ 发生了点小惊喜", effects: "gold=10" };
       }
     },
     {

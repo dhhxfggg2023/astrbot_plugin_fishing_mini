@@ -40,7 +40,7 @@ AstrBot 的插件页面（``pages/<目录名>/index.html``）只拿到一个很�
 =============================== 安全边界 ===============================
 
 * 只认白名单里的 action，其余一律拒绝并回写中文原因。
-* ``save_content`` 只接受 5 张**内容表**（``fish_defs / rod_defs / bait_defs /
+* ``save_content`` 只接受 9 张**内容表**（``fish_defs / rod_defs / bait_defs /
   item_defs / location_defs``）；``editor_status``、``data_action`` 这类
   管理项递进来会被明确拒绝。
 * ``save_numbers`` 只接受**数值类**键：从 ``DEFAULTS`` 里筛掉
@@ -79,8 +79,12 @@ CONTENT_TABLES: dict[str, type] = {
     "rod_defs": list,   # 字符串数组，一条 = 一根竿
     "bait_defs": list,
     "item_defs": list,
-    "location_defs": list,
+    "location_defs": list,    "collectible_defs": str,
+    "variant_defs": str,
+    "weather_defs": str,
+    "easter_egg_defs": str,
 }
+
 
 #: 数值键的黑名单（后缀 / 前缀）—— 与 main 的「默认值同步」口径保持一致
 NUMBER_KEY_BAD_SUFFIXES: tuple[str, ...] = ("_defs", "_slots", "_upgrades")

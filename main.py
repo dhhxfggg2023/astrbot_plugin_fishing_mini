@@ -141,6 +141,11 @@ DEFAULTS: dict[str, Any] = {
     # 任一项填 0 = 本服不限体力（相当于关掉这套机制）。
     # 鱼池定义（一行一条鱼）：留空 = 用内置鱼池；默认值在下方由 _fish_data 注入
     "fish_defs": "",
+    # 以下 4 张内容表同样可以在配置面板里改（默认值来自 _game_data.py）
+    "collectible_defs": "",
+    "variant_defs": "",
+    "weather_defs": "",
+    "easter_egg_defs": "",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
     # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
@@ -285,6 +290,10 @@ DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
 DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
     {
         "fish_defs",
+            "collectible_defs",
+            "variant_defs",
+            "weather_defs",
+            "easter_egg_defs",
         "location_defs",
         "rod_defs",
         "bait_defs",
@@ -523,6 +532,77 @@ def _load_roster_data() -> dict[str, list[dict[str, Any]]]:
     return {}
 
 
+
+
+# -----------------------------------------------------------------------------
+# 内容表接入（杂物 / 变异 / 天气 / 彩蛋）
+# 与 fish_defs 同构：配置接管 → 空值或写坏则回退内置（首调用时记录的内置快照）。
+# -----------------------------------------------------------------------------
+#: 表名 -> (配置键, 解析器名)
+CONTENT_TABLE_MAP: dict[str, tuple[str, str]] = {
+    "COLLECTIBLES": ("collectible_defs", "_parse_collectible_defs"),
+    "VARIANTS": ("variant_defs", "_parse_variant_defs"),
+    "WEATHERS": ("weather_defs", "_parse_weather_defs"),
+    "EASTER_EGGS": ("easter_egg_defs", "_parse_easter_egg_defs"),
+}
+
+#: 内置快照：首次应用时记录，之后回退一直用它（避免配置写坏后残留上一次的值）
+_BUILTIN_CONTENT: dict[str, list[dict[str, Any]]] = {}
+
+
+def _builtin_content(table: str, current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """取内置快照；第一次调用时用当前值建立快照。"""
+    if table not in _BUILTIN_CONTENT:
+        _BUILTIN_CONTENT[table] = [dict(item) for item in current]
+    return _BUILTIN_CONTENT[table]
+
+
+def _restore_content(table: str, target: list[dict[str, Any]]) -> None:
+    """把模块级常量恢复成内置快照（原地替换，保持对象引用不变）。"""
+    target[:] = [dict(item) for item in _builtin_content(table, target)]
+
+
+def _load_content_defaults() -> dict[str, str]:
+    """读取 _game_data.py 里的 4 个 `*_DEFS_DEFAULT`，作为配置项默认值。"""
+    result: dict[str, str] = {}
+    try:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_game_data.py")
+        spec = importlib.util.spec_from_file_location("astrbot_fishing_content_defs", path)
+        if spec is None or spec.loader is None:
+            return result
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for table, (key, _parser) in CONTENT_TABLE_MAP.items():
+            const = table[:-1] + "_DEFS_DEFAULT" if table.endswith("S") else ""
+            # 去掉三引号常量末尾的换行，保证与 schema 的默认值逐字节一致
+            text = str(getattr(module, const, "") or "").strip("\n")
+            if text:
+                result[key] = text
+    except Exception as e:  # pragma: no cover - 只在数据文件损坏时触发
+        logger.warning(f"读取内容表默认值失败，改用内置数据：{e}")
+    return result
+
+
+def _apply_content_tables(cfg: dict[str, Any]) -> None:
+    """用配置接管 4 张内容表；留空或写坏则回退内置。"""
+    for table, (key, parser_name) in CONTENT_TABLE_MAP.items():
+        target = globals().get(table)
+        if not isinstance(target, list):
+            continue
+        raw = _cfg_str(cfg, key).strip()
+        if not raw:
+            _restore_content(table, target)
+            continue
+        parser = getattr(CALC, parser_name, None)
+        if parser is None:
+            _restore_content(table, target)
+            continue
+        rows = parser(raw, warn=lambda msg, _k=key: _tunable_warn(_k, msg))
+        if not rows:
+            _tunable_warn(key, "没有解析出有效内容，已回退内置")
+            _restore_content(table, target)
+            continue
+        target[:] = rows
 def _load_fish_defs_default() -> str:
     """读取 `_fish_data.py` 里的 `FISH_DEFS_DEFAULT`，作为 `fish_defs` 的配置默认值。
 
@@ -564,8 +644,10 @@ def _apply_fish_defs(cfg: dict[str, Any]) -> None:
         LOCATION_WEIGHTS.update(_rebuild_location_weights())
         for _fish in EXTRA_FISH:
             _pool = LOCATION_WEIGHTS.setdefault(_fish["home"], {})
-            _pool[_fish["id"]] = round(
-                ROSTER_RARITY_WEIGHT[_fish["rarity"]] * 0.7, 3
+            # ⚠️ 用 setdefault：追加鱼种与名单鱼 id 撞车时（4 条历史遗留）
+            # 必须让名单鱼优先，否则「回退内置」与「配置接管」两条路径权重不一致。
+            _pool.setdefault(
+                _fish["id"], round(ROSTER_RARITY_WEIGHT[_fish["rarity"]] * 0.7, 3)
             )
         for _loc in list(LOCATION_WEIGHTS):
             for _fid in HIDDEN_EVERYWHERE:
@@ -976,7 +1058,8 @@ for _fish_id, _home in ROSTER_HOME.items():
     FISH_LOCATION_POOLS.setdefault(_fish_id, (_home,))
 # 追加鱼种也要登记归属，否则会被当成「无家可归」塞进第一个钓点
 for _entry in EXTRA_FISH:
-    FISH_LOCATION_POOLS[_entry["id"]] = (_entry["home"],)
+    # setdefault：名单鱼已登记过归属时保持名单的（避免 id 冲突时归属跳变）
+    FISH_LOCATION_POOLS.setdefault(_entry["id"], (_entry["home"],))
 
 LOCATION_WEIGHTS: dict[str, dict[str, float]] = {
     "novice": {
@@ -1128,6 +1211,8 @@ def _builtin_defaults() -> dict[str, Any]:
 
 
 DEFAULTS["fish_defs"] = _load_fish_defs_default() or DEFAULTS["fish_defs"]
+for _ckey, _ctext in _load_content_defaults().items():
+    DEFAULTS[_ckey] = _ctext or DEFAULTS.get(_ckey, "")
 BUILTIN: dict[str, Any] = _builtin_defaults()
 
 
@@ -1185,8 +1270,9 @@ LOCATION_WEIGHTS = _rebuild_location_weights()
 # 追加鱼种并入各自钓点
 for _fish in EXTRA_FISH:
     _pool = LOCATION_WEIGHTS.setdefault(_fish["home"], {})
-    _pool[_fish["id"]] = round(
-        ROSTER_RARITY_WEIGHT[_fish["rarity"]] * 0.7, 3
+    # 与名单鱼 id 冲突的追加鱼种不覆盖（见 _restore_builtin 里的同一处理）
+    _pool.setdefault(
+        _fish["id"], round(ROSTER_RARITY_WEIGHT[_fish["rarity"]] * 0.7, 3)
     )
 
 # 隐藏生物：每个钓点都塞一份（出现率极低）
@@ -1711,6 +1797,7 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
 
     # 站长自定义的鱼池优先级最高：整体接管鱼种 / 基准价 / 各钓点权重
     _apply_fish_defs(cfg)
+    _apply_content_tables(cfg)
 
 
 

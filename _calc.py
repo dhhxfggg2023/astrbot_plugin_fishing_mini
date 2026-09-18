@@ -1504,3 +1504,161 @@ def _sort_key(instance: dict[str, Any]) -> tuple[int, int, int]:
         -RARITY_RANK.get(_fish_rarity(instance.get("fish_id", "")), 0),
         -_instance_value(instance),
     )
+
+
+# -----------------------------------------------------------------------------
+# 内容表解析（collectible_defs / variant_defs / weather_defs / easter_egg_defs）
+# 与 `_parse_fish_defs` 同一套容错风格：空行与 # 注释、全角标点、坏行跳过并告警。
+# -----------------------------------------------------------------------------
+def _defs_lines(raw: Any) -> list[str]:
+    """把多行文本切成干净的行（空行与 `#` 注释丢掉，全角竖线转半角）。"""
+    text = str(raw or "").replace("\r\n", "\n").replace("\r", "\n")
+    out: list[str] = []
+    for raw_line in text.split("\n"):
+        line = raw_line.strip().replace("｜", "|")
+        if not line or line.startswith("#"):
+            continue
+        out.append(line)
+    return out
+
+
+def _defs_num(value: Any, default: float = 0.0) -> float:
+    """宽容的数字解析：支持 `1,200`、`1，200`、`12.5`。"""
+    try:
+        return float(str(value).replace(",", "").replace("，", "").strip())
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _parse_collectible_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]]:
+    """解析 `collectible_defs`：``id|名称|emoji|权重|价值|说明``。"""
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    first_bad = ""
+    for line in _defs_lines(raw):
+        p = [x.strip() for x in line.split("|")]
+        if len(p) < 4 or not p[0] or not p[1]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        rows.append({
+            "id": p[0],
+            "name": p[1],
+            "emoji": p[2] if len(p) > 2 else "🥫",
+            "weight": max(0.0, _defs_num(p[3] if len(p) > 3 else 0, 0)),
+            "value": int(round(_defs_num(p[4] if len(p) > 4 else 0, 0))),
+            "desc": p[5] if len(p) > 5 else "",
+        })
+    if bad and warn:
+        warn(f"collectible_defs 有 {bad} 行格式不对已跳过（首条：{first_bad[:40]}）")
+    return rows
+
+
+def _parse_variant_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]]:
+    """解析 `variant_defs`：``id|名称|emoji|相对权重|价值倍率|说明``。
+
+    输出字段名与 `_game_data.VARIANTS` 保持一致（价值倍率键名是 ``mult``）。
+    """
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    first_bad = ""
+    for line in _defs_lines(raw):
+        p = [x.strip() for x in line.split("|")]
+        if len(p) < 5 or not p[0] or not p[1]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        mult = _defs_num(p[4] if len(p) > 4 else 1.0, 1.0)
+        rows.append({
+            "id": p[0],
+            "name": p[1],
+            "emoji": p[2] if len(p) > 2 else "✨",
+            "weight": max(0.0, _defs_num(p[3] if len(p) > 3 else 0, 0)),
+            "mult": max(0.1, mult),
+            "desc": p[5] if len(p) > 5 else "",
+        })
+    if bad and warn:
+        warn(f"variant_defs 有 {bad} 行格式不对已跳过（首条：{first_bad[:40]}）")
+    return rows
+
+
+def _parse_weather_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]]:
+    """解析 `weather_defs`：``id|名称|emoji|权重|稀有度倍率|窗口倍率|运气|逃脱倍率|说明``。
+
+    稀有度倍率写成 ``少见:1.4,稀有:1.5,传说:1.3``（留空 = 该天气不额外加成）。
+    """
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    first_bad = ""
+    for line in _defs_lines(raw):
+        p = [x.strip() for x in line.split("|")]
+        if len(p) < 4 or not p[0] or not p[1]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        rarity_mult: dict[str, float] = {}
+        for chunk in (p[4] if len(p) > 4 else "").replace("，", ",").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            key, _, value = chunk.replace("：", ":").partition(":")
+            key = key.strip()
+            if key:
+                rarity_mult[key] = _defs_num(value, 1.0)
+        rows.append({
+            "id": p[0],
+            "name": p[1],
+            "emoji": p[2] if len(p) > 2 else "🌤️",
+            "weight": max(0.0, _defs_num(p[3] if len(p) > 3 else 0, 0)),
+            "rarity_mult": rarity_mult,
+            "window_mult": _defs_num(p[5] if len(p) > 5 else 1.0, 1.0),
+            "luck": _defs_num(p[6] if len(p) > 6 else 0.0, 0.0),
+            "escape_mult": _defs_num(p[7] if len(p) > 7 else 1.0, 1.0),
+            "desc": p[8] if len(p) > 8 else "",
+        })
+    if bad and warn:
+        warn(f"weather_defs 有 {bad} 行格式不对已跳过（首条：{first_bad[:40]}）")
+    return rows
+
+
+def _parse_easter_egg_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]]:
+    """解析 `easter_egg_defs`：``id|权重|文案|效果``。
+
+    效果写成 ``gold=12`` / ``luck=0.08`` / ``note=1`` / ``heal_bait=1``（分号分隔多个）；
+    ``note`` 与 ``heal_bait`` 是开关型效果，写 1/true/yes 都算开启。
+    """
+    rows: list[dict[str, Any]] = []
+    bad = 0
+    first_bad = ""
+    for line in _defs_lines(raw):
+        p = [x.strip() for x in line.split("|")]
+        if len(p) < 3 or not p[0] or not p[2]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        row: dict[str, Any] = {
+            "id": p[0],
+            "weight": max(0.0, _defs_num(p[1] if len(p) > 1 else 0, 0)),
+            "text": p[2],
+        }
+        for chunk in (p[3] if len(p) > 3 else "").replace("；", ";").split(";"):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            key, _, value = chunk.replace("：", "=").partition("=")
+            key = key.strip()
+            value = value.strip()
+            if not key:
+                continue
+            if key in ("note", "heal_bait"):
+                row[key] = value.lower() in ("1", "true", "yes", "on", "y", "")
+            elif key in ("gold", "luck"):
+                row[key] = (
+                    int(round(_defs_num(value, 0)))
+                    if key == "gold"
+                    else _defs_num(value, 0.0)
+                )
+        rows.append(row)
+    if bad and warn:
+        warn(f"easter_egg_defs 有 {bad} 行格式不对已跳过（首条：{first_bad[:40]}）")
+    return rows
