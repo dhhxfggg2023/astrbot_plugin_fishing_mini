@@ -64,6 +64,7 @@ CONTENT_TABLES: dict[str, type] = {
     "variant_defs": str,
     "weather_defs": str,
     "easter_egg_defs": str,
+    "button_defs": str,   # 场景|文案|点击后发送|样式（回复里的按钮）
 }
 
 
@@ -77,6 +78,7 @@ AUTOBACKUP_KEYS: dict[str, tuple[str, int, int]] = {
     "interval_hours": ("backup_interval_hours", 0, 72),
     "keep_daily": ("backup_keep_daily", 0, 3650),
     "keep_interval": ("backup_keep_interval", 0, 1000),
+    "keep_manual": ("backup_keep_manual", 0, 10000),
 }
 
 #: 自动备份字段的别名：页面/任务书里可能写成别的名字，统一归一到上面的键。
@@ -94,6 +96,9 @@ AUTOBACKUP_ALIASES: dict[str, str] = {
     "dailyhour": "daily_hour",
     "intervalhours": "interval_hours",
     "keepdaily": "keep_daily",
+    "backup_keep_manual": "keep_manual",
+    "keepmanual": "keep_manual",
+    "keep_manual_snapshots": "keep_manual",
 }
 
 #: editor_status 里 kind 的中文名（存档卡片徽标用）
@@ -659,7 +664,13 @@ class EditorBridgeMixin(EditorApiMixin):
         return ok, message
 
     async def _editor_snapshot_delete(self, payload: dict[str, Any]) -> tuple[bool, str]:
-        """删除一份存档（删除前自动存一份，防手滑）。"""
+        """删除一份存档。
+
+        注意：**删除不建快照**。删档只是删掉一个备份文件，不动任何玩家数据，
+        所以「删除前自动存档」纯属多余 —— 更糟的是删一份会立刻冒出一份新的，
+        站长永远清不干净（历史 bug：manual 里因此攒了 55 份）。
+        真正会改玩家数据的「恢复」才建快照，那份是有意义的。
+        """
         store = getattr(self, "backup_store", None)
         if store is None:
             return False, "存档模块不可用（_backup.py 是否缺失？）"
@@ -670,10 +681,9 @@ class EditorBridgeMixin(EditorApiMixin):
         if path is None:
             return False, f"找不到存档「{name}」（可能已经被删了）"
         target = path.name
-        safety = await self._snapshot("manual", note=f"删除「{name}」前的自动存档")
         if not store.delete_snapshot(target):
             return False, f"删除「{target}」失败（文件可能被占用）"
-        return True, f"已删除存档「{target}」；删除前的快照：{safety}"
+        return True, f"已删除存档「{target}」"
 
     async def _editor_snapshot_rename(self, payload: dict[str, Any]) -> tuple[bool, str]:
         """给一份存档改备注（不动文件名，保持「最新 = 按 mtime」的语义）。"""
@@ -736,6 +746,7 @@ class EditorBridgeMixin(EditorApiMixin):
             "interval_hours": int(self._editor_cfg_get("backup_interval_hours", 6) or 0),
             "keep_daily": int(self._editor_cfg_get("backup_keep_daily", 30) or 0),
             "keep_interval": int(self._editor_cfg_get("backup_keep_interval", 20) or 0),
+            "keep_manual": int(self._editor_cfg_get("backup_keep_manual", 0) or 0),
         }
 
         payload = {

@@ -348,6 +348,7 @@ ACHIEVEMENTS: dict[str, str] = {
 #   变异  id|名称|emoji|相对权重|价值倍率|说明
 #   天气  id|名称|emoji|权重|稀有度倍率|窗口倍率|运气|逃脱倍率|说明
 #   彩蛋  id|权重|文案|效果(gold=…;note=1;luck=…;heal_bait=1)
+#   按钮  场景|文案|点击后发送|样式（见文件末尾 BUTTON_DEFS_DEFAULT 的说明）
 # =============================================================================
 
 COLLECTIBLE_DEFS_DEFAULT: str = """\
@@ -387,3 +388,31 @@ bait_back|12|🪱 收线时鱼饵还好好地挂在钩上。|heal_bait=1
 pearl_in_mouth|10|🦪 鱼嘴里含着一颗小珍珠！|gold=35
 lost_ring|5|💍 鱼线上缠着一枚旧戒指，不知道是谁的。|gold=80
 """
+
+
+# =============================================================================
+# button_defs 默认值（在配置面板 / 编辑器页面里改的就是这段文本）
+# 行格式：
+#   场景|按钮文案|点击后发送|样式
+#   场景  cast=抛竿结果 / pull=咬钩提示（拉线） / bag=背包视图
+#         location=钓点视图 / story=随机插曲（模板：{label}=选项文案，{n}=第几个选项）
+#   样式  default（灰）/ primary（蓝），也可以直接写数字（QQ 的 render_data.style）
+#   同一场景的多行 = 多个按钮，顺序即显示顺序；每行最多摆几个由代码决定
+#   （cast/bag/location/pull 每行 3 个，story 每个选项一行）
+#   点击后发送必须是本插件认识的指令（/钓鱼 …），否则这一行会被跳过
+# =============================================================================
+
+BUTTON_DEFS_DEFAULT: str = """\
+cast|再来一竿|/钓鱼|default
+cast|看背包|/钓鱼 背包|default
+cast|今日|/钓鱼 今日|default
+cast|卖光光|/钓鱼 卖光光|default
+cast|帮助|/钓鱼 帮助|default
+pull|拉线！|/钓鱼 拉|primary
+bag|卖光光|/钓鱼 卖光光|default
+bag|水族馆|/钓鱼 水族馆|default
+bag|再来一竿|/钓鱼|default
+location|查图鉴|/钓鱼 图鉴|default
+location|背包|/钓鱼 背包|default
+location|今日|/钓鱼 今日|default
+story|{label}|/钓鱼 事件 {n}|default"""

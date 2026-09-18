@@ -57,41 +57,65 @@ class ViewsMixin:
     # 变异个体
     # -------------------------------------------------------------------------
 
+    def _scene_buttons(self, scene: str) -> list[tuple[str, str, int]]:
+        """取某场景的按钮：配置优先，缺失或整段被过滤光则回退内置默认。"""
+        items = BUTTONS.get(scene) or []
+        if not items:
+            items = _BUILTIN_BUTTONS.get(scene) or []
+        return list(items)
+
+    def _button_rows(
+        self, scene: str, label: str = "", n: int = 0
+    ) -> list[list[dict[str, Any]]]:
+        """按配置生成按钮行：每行最多 ``BUTTONS_PER_ROW[scene]`` 个。
+
+        ``label`` / ``n`` 供 story 场景的模板占位符 ``{label}`` / ``{n}`` 使用；
+        其它场景没有占位符时就是原样文案。内容全部来自配置项 ``button_defs``。
+        """
+        items = self._scene_buttons(scene)
+        per_row = max(1, int(BUTTONS_PER_ROW.get(scene, 3)))
+        rows: list[list[dict[str, Any]]] = []
+        for start in range(0, len(items), per_row):
+            rows.append([
+                self._btn(
+                    _fill_button_text(text, label, n),
+                    _fill_button_text(data, label, n),
+                    style,
+                )
+                for text, data, style in items[start:start + per_row]
+            ])
+        return rows
+
     def _bag_rows(self) -> list[list[dict[str, Any]]]:
-        """背包视图的按钮：卖光光 / 水族馆 / 再来一竿。"""
-        return [[
-            self._btn("卖光光", "/钓鱼 卖光光"),
-            self._btn("水族馆", "/钓鱼 水族馆"),
-            self._btn("再来一竿", "/钓鱼"),
-        ]]
+        """背包视图的按钮（button_defs 的 bag 行）。"""
+        return self._button_rows("bag")
 
     def _location_rows(self) -> list[list[dict[str, Any]]]:
-        """钓点视图的按钮：图鉴 / 查看背包。"""
-        return [[
-            self._btn("查图鉴", "/钓鱼 图鉴"),
-            self._btn("背包", "/钓鱼 背包"),
-            self._btn("今日", "/钓鱼 今日"),
-        ]]
+        """钓点视图的按钮（button_defs 的 location 行）。"""
+        return self._button_rows("location")
 
     def _cast_rows(self) -> list[list[dict[str, Any]]]:
-        """抛竿结果下面的常用按钮。"""
-        return [
-            [
-                self._btn("再来一竿", "/钓鱼"),
-                self._btn("看背包", "/钓鱼 背包"),
-                self._btn("今日", "/钓鱼 今日"),
-            ],
-            [self._btn("卖光光", "/钓鱼 卖光光"), self._btn("帮助", "/钓鱼 帮助")],
-        ]
+        """抛竿结果下面的常用按钮（button_defs 的 cast 行）。"""
+        return self._button_rows("cast")
 
     def _pull_rows(self) -> list[list[dict[str, Any]]]:
-        """咬钩提示下面的按钮。"""
-        return [[self._btn("拉线！", "/钓鱼 拉", style=4)]]
+        """咬钩提示下面的按钮（button_defs 的 pull 行）。"""
+        return self._button_rows("pull")
 
     def _event_rows(self, event_def: dict[str, Any]) -> list[list[dict[str, Any]]]:
+        """随机插曲的按钮：button_defs 的 story 行是模板，每个选项生成一行。"""
+        template = self._scene_buttons("story")
         rows: list[list[dict[str, Any]]] = []
         for index, choice in enumerate(event_def.get("choices") or [], 1):
-            rows.append([self._btn(f"{choice['label']}", f"/钓鱼 事件 {index}")])
+            label = str(choice.get("label") or "")
+            rows.append([
+                self._btn(
+                    _fill_button_text(text, label, index),
+                    _fill_button_text(data, label, index),
+                    style,
+                )
+                for text, data, style in template
+            ])
         return rows
 
     # -------------------------------------------------------------------------

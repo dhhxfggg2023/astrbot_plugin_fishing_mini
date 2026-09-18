@@ -1273,6 +1273,22 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         return [cell(r.id), cell(num(r.weight, 0)), cell(r.text),
                 cell(r.effects)].join(SEP);
       }
+    },
+    buttons: {
+      configKey: "button_defs",
+      configType: "text",
+      keyField: "scene",
+      /* 场景|按钮文案|点击后发送|样式 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length < 3 || !p[0] || !p[1] || !p[2]) return null;
+        return { scene: String(p[0]).trim().toLowerCase(), label: p[1], data: p[2],
+                 style: text(p[3], "default") };
+      },
+      serialize: function (r) {
+        return [cell(r.scene), cell(r.label), cell(r.data),
+                cell(r.style)].join(SEP);
+      }
     }
   };
 
@@ -1314,8 +1330,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     var tables = {};
     Object.keys(TABLE_DEFS).forEach(function (tabId) {
       var def = TABLE_DEFS[tabId];
+      var keyField = def.keyField || "id";
       var rows = (state.data[tabId] || []).filter(function (row) {
-        return String(row && row.id || "").trim() !== "";
+        return String(row && (row[keyField] || row.id) || "").trim() !== "";
       });
       var lines = rows.map(function (row) { return def.serialize(row); });
       tables[def.configKey] = def.configType === "text" ? lines.join("\n") : lines;
@@ -1346,7 +1363,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       dailyHour: num(ab.daily_hour, 4),
       intervalHours: num(ab.interval_hours, 6),
       keepDaily: num(ab.keep_daily, 30),
-      keepInterval: num(ab.keep_interval, 20)
+      keepInterval: num(ab.keep_interval, 20),
+      keepManual: num(ab.keep_manual, 0)
     };
   }
 
@@ -1357,7 +1375,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       daily_hour: num(ab.dailyHour, 4),
       interval_hours: num(ab.intervalHours, 6),
       keep_daily: num(ab.keepDaily, 30),
-      keep_interval: num(ab.keepInterval, 20)
+      keep_interval: num(ab.keepInterval, 20),
+      keep_manual: num(ab.keepManual, 0)
     };
   }
 
@@ -1686,6 +1705,19 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     "常见": "⚪", "少见": "🟢", "稀有": "🔵", "传说": "🟣", "神话": "🟡"
   };
 
+  /* 回复按钮（button_defs）：场景白名单与样式别名，和插件 _calc.py 里的保持一致 */
+  var BUTTON_SCENES = ["cast", "pull", "bag", "location", "story"];
+  var BUTTON_STYLE_ALIASES = ["", "default", "默认", "灰", "gray", "grey", "primary", "主要", "蓝", "blue"];
+  /** 复合行键的分隔符（只用于内存里的比对，不会写进配置） */
+  var KEY_SEP = "\u0001";
+  function isButtonStyle(v) {
+    var s = String(v === undefined || v === null ? "" : v).trim().toLowerCase();
+    if (BUTTON_STYLE_ALIASES.indexOf(s) >= 0) return true;
+    if (!/^\d+$/.test(s)) return false;
+    var n = Number(s);
+    return n >= 0 && n <= 255;
+  }
+
   var DEMO = {
     config: {
       // 与插件真实钓点对应的 16 个钓点：演示鱼的分布只会引用这里的 id
@@ -1781,6 +1813,18 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { id: "lucky_scale",  weight: 18, text: "✨ 摘下一片闪着光的鱼鳞，手感很吉利。", effects: "luck=0.08" },
         { id: "bait_back",    weight: 12, text: "🪱 收线时鱼饵还好好地挂在钩上。", effects: "heal_bait=1" },
         { id: "lost_ring",    weight: 5,  text: "💍 鱼线上缠着一枚旧戒指，不知道是谁的。", effects: "gold=80" }
+      ],
+      buttons: [
+        { scene: "cast",     label: "再来一竿", data: "/钓鱼",         style: "default" },
+        { scene: "cast",     label: "看背包",   data: "/钓鱼 背包",    style: "default" },
+        { scene: "cast",     label: "今日",     data: "/钓鱼 今日",    style: "default" },
+        { scene: "cast",     label: "卖光光",   data: "/钓鱼 卖光光",  style: "default" },
+        { scene: "cast",     label: "帮助",     data: "/钓鱼 帮助",    style: "default" },
+        { scene: "pull",     label: "拉线！",   data: "/钓鱼 拉",      style: "primary" },
+        { scene: "bag",      label: "卖光光",   data: "/钓鱼 卖光光",  style: "default" },
+        { scene: "bag",      label: "水族馆",   data: "/钓鱼 水族馆",  style: "default" },
+        { scene: "location", label: "查图鉴",   data: "/钓鱼 图鉴",    style: "default" },
+        { scene: "story",    label: "{label}",  data: "/钓鱼 事件 {n}", style: "default" }
       ],
       numbers: [
         { key: "stamina_max",           label: "体力上限",     value: 20,   unit: "点",   desc: "攒满需要 stamina_regen_seconds × 上限" },
@@ -2005,6 +2049,24 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       }
     },
     {
+      id: "buttons",
+      label: "🔘 按钮",
+      title: "回复按钮",
+      hint: "QQ 官方机器人回复下面那排按钮：场景写 cast/pull/bag/location/story，点击后发送必须写本插件指令（/钓鱼 …），样式写 default（灰）或 primary（蓝）",
+      keyFields: ["scene", "label", "data"],
+      sortOptions: [["default", "默认顺序"], ["scene", "按场景"], ["labelAsc", "按文案"]],
+      columns: [
+        { key: "scene", label: "场景",       type: "text", w: "130px", mono: true },
+        { key: "label", label: "按钮文案",   type: "text", w: "150px" },
+        { key: "data",  label: "点击后发送", type: "text", w: "190px", mono: true },
+        { key: "style", label: "样式",       type: "text", w: "110px", mono: true }
+      ],
+      makeRow: function () {
+        return { scene: "cast", label: "新按钮", data: "/钓鱼 帮助", style: "default" };
+      },
+      notice: "场景：cast=抛竿结果的下方、pull=咬钩要拉线时、bag=背包、location=钓点、story=随机插曲（文案里可写 {label} 和 {n}）。同一场景的多行就是多个按钮，顺序即显示顺序；每行摆几个由代码决定（cast/bag/location/pull 每行 3 个，story 每个选项一行）。文案超过 10 字会被 QQ 截断；写了插件不认识的指令（死按钮）会被自动跳过。"
+    },
+    {
       id: "numbers",
       label: "⚙️ 数值",
       title: "核心数值",
@@ -2132,7 +2194,16 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     return list;
   }
 
-  function rowKey(tab, row) { return String(row && row[tab.keyField || "id"] || ""); }
+  function rowKey(tab, row) {
+    // 有的表（按钮）没有天然唯一的 id，就按「场景+文案+指令」组合成键
+    var fields = tab.keyFields || [tab.keyField || "id"];
+    var parts = [];
+    for (var i = 0; i < fields.length; i++) {
+      parts.push(String((row && row[fields[i]]) || ""));
+    }
+    return parts.join(KEY_SEP);
+  }
+
 
   /* 计算某个标签页的改动情况：{ dirtyRows:Set<index>, added, removed, total } */
   function diffTab(tabId) {
@@ -2200,6 +2271,22 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       if (tab.id === "baits" && col.key === "required_rod" && String(v || "").trim()) {
         if (rodIds.indexOf(String(v).trim()) < 0) errs[col.key] = "鱼竿 id 不存在";
       }
+
+      if (tab.id === "buttons") {
+        var raw = String(v === undefined || v === null ? "" : v).trim();
+        if (col.key === "scene" && BUTTON_SCENES.indexOf(raw.toLowerCase()) < 0) {
+          errs[col.key] = "只能是：" + BUTTON_SCENES.join(" / ");
+        }
+        if (col.key === "label" && !raw) {
+          errs[col.key] = "按钮文案不能为空";
+        }
+        if (col.key === "data" && (!raw || raw.indexOf("/钓鱼") !== 0)) {
+          errs[col.key] = "要写本插件指令，例如 /钓鱼 背包";
+        }
+        if (col.key === "style" && !isButtonStyle(raw)) {
+          errs[col.key] = "写 default / primary，或 0-255 的数字";
+        }
+      }
     });
 
     return errs;
@@ -2246,6 +2333,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       weightDesc: function (a, b) { return Number(b.row.weight || 0) - Number(a.row.weight || 0); },
       multDesc: function (a, b) { return Number(b.row.value_mult || 0) - Number(a.row.value_mult || 0); },
       level: function (a, b) { return Number(a.row.level_gate || 0) - Number(b.row.level_gate || 0); },
+      scene: function (a, b) { return String(a.row.scene || "").localeCompare(String(b.row.scene || ""), "zh-CN"); },
+      labelAsc: function (a, b) { return String(a.row.label || "").localeCompare(String(b.row.label || ""), "zh-CN"); },
       rarity: function (a, b) { return (rarityRank[a.row.rarity] || 0) - (rarityRank[b.row.rarity] || 0); }
     };
     if (state.sort !== "default" && sorters[state.sort]) list.sort(sorters[state.sort]);
@@ -2523,6 +2612,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       '<span class="field"><input type="number" min="0" max="3650" data-act="auto:keepDaily" value="' + esc(ab.keepDaily) + '" /></span></div>';
     html += '<div class="form-row"><label>按时存档保留份数（0=永久）</label>' +
       '<span class="field"><input type="number" min="0" max="9999" data-act="auto:keepInterval" value="' + esc(ab.keepInterval) + '" /></span></div>';
+    html += '<div class="form-row"><label>手动存档保留份数（0=永久）</label>' +
+      '<span class="field"><input type="number" min="0" max="10000" data-act="auto:keepManual" value="' + esc(ab.keepManual) + '" /></span></div>';
     html += "</div>";
     html += "</section>";
 

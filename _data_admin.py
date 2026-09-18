@@ -117,10 +117,25 @@ class DataAdminMixin:
             return "存档模块不可用（_backup.py 缺失？）"
         players = await self._dump_all_players()
         path, payload = store.write_snapshot(kind, players, note=note)
+        # 清理会真的删文件，所以每次都把「删了哪几份」写进日志：
+        # 出问题时能一眼看出是哪次清理、清掉了什么（历史上排查过一次存档失踪）。
+        def _log_pruned(removed: list[str]) -> None:
+            if removed:
+                logger.info(
+                    f"{kind} 存档超出保留份数，已清理 {len(removed)} 份："
+                    + "、".join(removed[:5])
+                    + ("…" if len(removed) > 5 else "")
+                )
+
         if kind == "auto":
-            store.prune("auto", int(self.cfg.get("backup_keep_interval", 20)))
+            _log_pruned(store.prune("auto", int(self.cfg.get("backup_keep_interval", 20))))
         if kind == "daily":
-            store.prune_daily_days(int(self.cfg.get("backup_keep_daily", 30)))
+            _log_pruned(store.prune_daily_days(int(self.cfg.get("backup_keep_daily", 30))))
+        if kind == "manual":
+            # 手动存档默认永久保留；站长设了 backup_keep_manual 就只留最近 N 份
+            keep_manual = int(self.cfg.get("backup_keep_manual", 0) or 0)
+            if keep_manual > 0:
+                _log_pruned(store.prune("manual", keep_manual))
         store.rebuild_index()
         return f"{path.name}（{payload['count']} 名玩家）"
 

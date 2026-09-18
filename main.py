@@ -146,6 +146,8 @@ DEFAULTS: dict[str, Any] = {
     "variant_defs": "",
     "weather_defs": "",
     "easter_egg_defs": "",
+    # 回复里那些按钮（QQ 官方内联键盘）：一行一个按钮，场景|文案|指令|样式
+    "button_defs": "",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
     # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
@@ -225,6 +227,8 @@ DEFAULTS: dict[str, Any] = {
     "backup_interval_hours": 6,
     "backup_keep_daily": 30,
     "backup_keep_interval": 20,
+    # 手动存档保留份数（0 = 永久保留；>0 时每次新建手动存档后只留最近 N 份）
+    "backup_keep_manual": 0,
     "backup_dir": "",
     "codex_bonus_per_rarity": [0.03, 0.05, 0.08, 0.12, 0.2],
     "pond_income_per_hour": 0.015,
@@ -292,10 +296,11 @@ DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
 DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
     {
         "fish_defs",
-            "collectible_defs",
-            "variant_defs",
-            "weather_defs",
-            "easter_egg_defs",
+        "collectible_defs",
+        "variant_defs",
+        "weather_defs",
+        "easter_egg_defs",
+        "button_defs",
         "location_defs",
         "rod_defs",
         "bait_defs",
@@ -580,6 +585,10 @@ def _load_content_defaults() -> dict[str, str]:
             text = str(getattr(module, const, "") or "").strip("\n")
             if text:
                 result[key] = text
+        # 按钮表也放在 _game_data.py 里（大块文本不撑大 main.py）
+        button_text = str(getattr(module, "BUTTON_DEFS_DEFAULT", "") or "").strip("\n")
+        if button_text:
+            result["button_defs"] = button_text
     except Exception as e:  # pragma: no cover - 只在数据文件损坏时触发
         logger.warning(f"读取内容表默认值失败，改用内置数据：{e}")
     return result
@@ -605,6 +614,42 @@ def _apply_content_tables(cfg: dict[str, Any]) -> None:
             _restore_content(table, target)
             continue
         target[:] = rows
+#: 按钮表：场景 -> [(文案, 指令, 样式), ...]（可被 button_defs 配置接管，原地更新）
+BUTTONS: dict[str, list[tuple[str, str, int]]] = {}
+#: 内置快照：首次应用时从默认文本解析一次，之后回退一直用它
+_BUILTIN_BUTTONS: dict[str, list[tuple[str, str, int]]] = {}
+
+
+def _builtin_buttons() -> dict[str, list[tuple[str, str, int]]]:
+    """内置按钮表（解析 button_defs 的默认文本，只做一次）。"""
+    if not _BUILTIN_BUTTONS:
+        parsed = CALC._parse_button_defs(DEFAULTS.get("button_defs") or "")
+        _BUILTIN_BUTTONS.update(parsed)
+    return {scene: list(items) for scene, items in _BUILTIN_BUTTONS.items()}
+
+
+def _apply_button_defs(cfg: dict[str, Any]) -> None:
+    """用配置接管按钮表；留空或写坏则回退内置；某场景被过滤光也回退该场景。"""
+    builtin = _builtin_buttons()
+    rows: dict[str, list[tuple[str, str, int]]] = {}
+    raw = _cfg_str(cfg, "button_defs").strip()
+    if raw:
+        rows = CALC._parse_button_defs(
+            raw, warn=lambda msg: _tunable_warn("button_defs", msg)
+        )
+    if not rows:
+        if raw:
+            _tunable_warn("button_defs", "没有解析出有效按钮，已回退内置")
+        rows = {scene: list(items) for scene, items in builtin.items()}
+    else:
+        # 某个场景整段被过滤掉时单独回退，别让玩家看到空键盘
+        for scene, items in builtin.items():
+            if not rows.get(scene):
+                rows[scene] = list(items)
+    BUTTONS.clear()
+    BUTTONS.update(rows)
+
+
 def _load_fish_defs_default() -> str:
     """读取 `_fish_data.py` 里的 `FISH_DEFS_DEFAULT`，作为 `fish_defs` 的配置默认值。
 
@@ -1800,6 +1845,7 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
     # 站长自定义的鱼池优先级最高：整体接管鱼种 / 基准价 / 各钓点权重
     _apply_fish_defs(cfg)
     _apply_content_tables(cfg)
+    _apply_button_defs(cfg)
 
 
 
@@ -2122,6 +2168,9 @@ class FishingPlugin(
         )
         cfg["backup_keep_interval"] = int(
             _clamp(_safe_int(cfg.get("backup_keep_interval"), 20, 0), 0, 1000)
+        )
+        cfg["backup_keep_manual"] = int(
+            _clamp(_safe_int(cfg.get("backup_keep_manual"), 0, 0), 0, 10000)
         )
         cfg["backup_dir"] = str(cfg.get("backup_dir") or "").strip()
         self.backup_dir = (

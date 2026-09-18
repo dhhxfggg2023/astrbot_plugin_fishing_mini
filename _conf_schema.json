@@ -392,6 +392,12 @@
     "type": "int",
     "default": 20
   },
+  "backup_keep_manual": {
+    "description": "手动存档保留份数（0 = 永久保留）。设成 3 就只留最近 3 份，在编辑器页面点「新建存档」时自动清理旧的。注意：删除存档不会再生成新存档。",
+    "type": "int",
+    "default": 0
+  }
+,
   "backup_dir": {
     "description": "存档目录（留空 = 插件目录下的 backups/）",
     "type": "string",
@@ -550,5 +556,11 @@
     "description": "上鱼后的彩蛋定义。每行：id|权重|文案|效果；效果写成 gold=12 / luck=0.08 / note=1（给漂流瓶纸条）/ heal_bait=1（返还鱼饵），分号分隔多个。",
     "type": "text",
     "default": "coin_in_fish|22|🪙 鱼肚子里居然有一枚硬币！|gold=12\nold_map|16|🗺️ 鱼鳞上沾着一张湿透的旧地图碎片……|note=1\nlucky_scale|18|✨ 摘下一片闪着光的鱼鳞，手感很吉利。|luck=0.08\nfriend|14|🐟 它在你手里安静待了一会儿才松开，像是认识你。|luck=0.05\nbait_back|12|🪱 收线时鱼饵还好好地挂在钩上。|heal_bait=1\npearl_in_mouth|10|🦪 鱼嘴里含着一颗小珍珠！|gold=35\nlost_ring|5|💍 鱼线上缠着一枚旧戒指，不知道是谁的。|gold=80"
+  },
+  "button_defs": {
+    "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。场景：cast=抛竿结果 / pull=咬钩提示（拉线）/ bag=背包视图 / location=钓点视图 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）；样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
+    "type": "text",
+    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|今日|/钓鱼 今日|default\ncast|卖光光|/钓鱼 卖光光|default\ncast|帮助|/钓鱼 帮助|default\npull|拉线！|/钓鱼 拉|primary\nbag|卖光光|/钓鱼 卖光光|default\nbag|水族馆|/钓鱼 水族馆|default\nbag|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|背包|/钓鱼 背包|default\nlocation|今日|/钓鱼 今日|default\nstory|{label}|/钓鱼 事件 {n}|default"
   }
+
 }

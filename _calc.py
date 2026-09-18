@@ -1662,3 +1662,126 @@ def _parse_easter_egg_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]
     if bad and warn:
         warn(f"easter_egg_defs 有 {bad} 行格式不对已跳过（首条：{first_bad[:40]}）")
     return rows
+
+
+# -----------------------------------------------------------------------------
+# 按钮表（button_defs）：一行一个按钮，全部可在配置面板里改
+#   场景|按钮文案|点击后发送|样式
+# -----------------------------------------------------------------------------
+#: 允许出现的场景（与 _views.py 里 5 个按钮方法一一对应）
+BUTTON_SCENES: tuple[str, ...] = ("cast", "pull", "bag", "location", "story")
+
+#: 每个场景一行最多摆几个按钮。默认值下与历史版本的按钮排版逐项一致：
+#: cast 有 5 个按钮 -> 3 + 2 两行；bag/location 各 3 个 -> 一行；pull 1 个 -> 一行。
+BUTTONS_PER_ROW: dict[str, int] = {
+    "cast": 3,
+    "bag": 3,
+    "location": 3,
+    "pull": 3,
+    "story": 1,
+}
+
+#: 样式别名 -> QQ 官方键盘的 render_data.style（内置默认只用到 1 和 4）
+BUTTON_STYLE_ALIASES: dict[str, int] = {
+    "": 1,
+    "default": 1,
+    "默认": 1,
+    "灰": 1,
+    "gray": 1,
+    "grey": 1,
+    "primary": 4,
+    "主要": 4,
+    "蓝": 4,
+    "blue": 4,
+}
+
+#: 按钮点击后发送的指令，第一个词必须在这里（否则点了没反应，属于死按钮）。
+#: 与 main.py 子命令分派的 keyword 对齐；`/钓鱼` 单独出现与 `/钓鱼 <数字>` 也算合法。
+BUTTON_COMMAND_WORDS: frozenset[str] = frozenset({
+    "帮助", "菜单", "指令", "背包", "包", "bag", "鱼篓",
+    "卖", "卖鱼", "卖光光", "卖光", "清空", "全卖", "空背包", "sellall", "一键卖出",
+    "图鉴", "收集", "collection", "水族馆", "馆", "缸", "aquarium",
+    "扩建背包", "扩容", "背包扩容", "鱼篓扩容",
+    "锁定", "锁", "lock", "解锁", "解", "unlock",
+    "今日", "天气", "行情", "today", "weather", "market",
+    "排行", "排行榜", "榜", "rank", "top",
+    "商店", "鱼饵", "道具", "shop", "买",
+    "用", "使用", "use", "查", "查询", "鱼", "资料", "fish", "info",
+    "事件", "插曲", "选择", "event",
+    "换饵", "换鱼饵", "装备饵", "上饵", "bait",
+    "体力", "体力值", "活力", "stamina",
+    "档案", "profile", "me", "金币", "gold",
+    "签到", "sign", "订单", "任务", "order", "orders",
+    "钓点", "地点", "地图", "map", "location",
+    "鱼竿", "竿", "rod", "杂物", "漂流瓶", "收集品", "collect",
+    "拉", "去", "前往", "go", "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
+})
+
+
+def _fill_button_text(template: Any, label: str, n: int = 0) -> str:
+    """替换按钮模板里的 ``{label}`` / ``{n}``（不用 str.format，避免文案里的花括号报错）。"""
+    return str(template).replace("{label}", str(label)).replace("{n}", str(n))
+
+
+def _parse_button_style(value: Any) -> int | None:
+    """解析按钮样式；不认识就返回 None（调用方回退默认）。"""
+    raw = str(value or "").strip().lower()
+    if raw in BUTTON_STYLE_ALIASES:
+        return BUTTON_STYLE_ALIASES[raw]
+    try:
+        number = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return number if 0 <= number <= 255 else None
+
+
+def _button_command_ok(data: str) -> bool:
+    """这一行「点击后发送」是不是本插件认识的指令（防止出现点了没反应的死按钮）。"""
+    text = str(data or "").strip()
+    if text == "/钓鱼":
+        return True
+    if not text.startswith("/钓鱼"):
+        return False
+    rest = text[len("/钓鱼"):].strip()
+    if not rest:
+        return True
+    head = rest.split()[0]
+    if head.isdigit():          # /钓鱼 10 = 连钓 10 次
+        return True
+    return head in BUTTON_COMMAND_WORDS
+
+
+def _parse_button_defs(
+    raw: Any, *, warn: Any = None
+) -> dict[str, list[tuple[str, str, int]]]:
+    """解析 `button_defs`：``场景|按钮文案|点击后发送|样式``。
+
+    返回 ``{场景: [(文案, 指令, 样式), ...]}``。坏行（字段不够、场景不认识、
+    指令不认识）跳过并告警；``{label}``/``{n}`` 原样保留给 story 模板用。
+    """
+    rows: dict[str, list[tuple[str, str, int]]] = {}
+    bad = 0
+    first_bad = ""
+    for line in _defs_lines(raw):
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        scene = parts[0].lower()
+        if scene not in BUTTON_SCENES:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        label, data = parts[1], parts[2]
+        if not _button_command_ok(data):
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        style = _parse_button_style(parts[3] if len(parts) > 3 else "default")
+        if style is None:
+            style = 1
+        rows.setdefault(scene, []).append((label, data, style))
+    if bad and warn:
+        warn(f"button_defs 有 {bad} 行不合法已跳过（首条：{first_bad[:40]}）")
+    return rows

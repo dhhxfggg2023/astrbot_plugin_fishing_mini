@@ -119,7 +119,9 @@ const hookNames = [
   "numberValuesFromPage", "parseEditorStatus", "autobackupFromStatus", "autobackupPayload",
   "sendCommand", "bridgeRequest", "describeError", "resolvePluginBase", "fetchRawConfig",
   "sleep", "waitForStatus", "renderBanner", "downloadSnapshot",
-  "refreshSnapshots"
+  "refreshSnapshots",
+  // 回复按钮（button_defs）表
+  "rowKey", "isButtonStyle", "BUTTON_SCENES"
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -155,7 +157,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 11, "标签页数量 = 11", Object.keys(T.TAB_BY_ID).join(","));
+  check(Object.keys(T.TAB_BY_ID).length === 12, "标签页数量 = 12", Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个", (T.state.data.locations || []).length);
   check((T.state.snapshots || []).length === 4, "演示存档 4 份", (T.state.snapshots || []).length);
@@ -204,7 +206,7 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 11, "11 个标签都有条目数徽标");
+  check(tabsHtml.split("tab-count").length - 1 === 12, "12 个标签都有条目数徽标");
   check(T.state.autoBackupDirty !== true, "自动备份表单未被标记为已改");
 
   console.log("\n[1d] 空状态（表空 / 筛选无结果 都别只剩表头）");
@@ -320,10 +322,10 @@ function runAssertions() {
 
   console.log("\n[8] 保存载荷与存档动作");
   const payload = T.buildPayload();
-  check(["fish", "locations", "baits", "rods", "items", "collectibles", "variants", "weather", "numbers"]
-    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 9 张表");
+  check(["fish", "locations", "baits", "rods", "items", "collectibles", "variants", "weather", "numbers", "buttons"]
+    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 10 张表");
   check(!!payload.autoBackup && payload.autoBackup.dailyHour === 4, "载荷带上自动备份设置");
-  check(Object.keys(payload).length === 11, "载荷字段数 = 11（9 表 + numbers + autoBackup）", Object.keys(payload).length);
+  check(Object.keys(payload).length === 12, "载荷字段数 = 12（10 表 + numbers + autoBackup）", Object.keys(payload).length);
 
   const snapWithNote = T.renderSnapCard({ kind: "manual", note: "改物价前", time: "2026-09-18 18:20", players: 35, size: "131 KB" }, 0);
   check(snapWithNote.indexOf("改物价前") >= 0, "存档卡片显示备注名");
@@ -372,8 +374,8 @@ function runAssertions() {
    ============================================================================= */
 function channelHelpers() {
   console.log("\n[12] 数据通道：配置 <-> 表格 的转换");
-  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs",
-    "9 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
+  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,buttons",
+    "10 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
   check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
     "fish_defs 是文本表（多行），其余是字符串数组");
   check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
@@ -401,14 +403,62 @@ function channelHelpers() {
   check(T.TABLE_DEFS.baits.parse("x|y|z|1|2|3") === null,
     "鱼饵少于 7 段解析为 null（插件解析器也是这个门槛）");
 
+  // ---- 回复按钮表（button_defs）：场景|文案|点击后发送|样式 ----
+  console.log("  ── 回复按钮表 ──");
+  const btnRow = T.TABLE_DEFS.buttons.parse("cast|再来一竿|/钓鱼|primary");
+  check(btnRow.scene === "cast" && btnRow.label === "再来一竿" && btnRow.data === "/钓鱼"
+    && btnRow.style === "primary", "按钮行 4 段解析正确");
+  check(T.TABLE_DEFS.buttons.parse("CAST|看背包|/钓鱼 背包").scene === "cast"
+    && T.TABLE_DEFS.buttons.parse("CAST|看背包|/钓鱼 背包").style === "default",
+    "场景大小写归一、样式缺省为 default");
+  check(T.TABLE_DEFS.buttons.parse("cast|半行|") === null
+    && T.TABLE_DEFS.buttons.parse("|缺场景|/钓鱼") === null,
+    "缺字段/缺场景的行解析为 null（插件也会跳过）");
+  check(T.TABLE_DEFS.buttons.serialize({ scene: "story", label: "{label}", data: "/钓鱼 事件 {n}", style: "default" })
+    === "story|{label}|/钓鱼 事件 {n}|default",
+    "按钮行序列化回 4 段（插曲占位符原样保留）");
+  check(T.TABLE_DEFS.buttons.configKey === "button_defs" && T.TABLE_DEFS.buttons.configType === "text",
+    "按钮表写回 button_defs（多行文本）");
+  check(T.BUTTON_SCENES.join(",") === "cast,pull,bag,location,story" && T.TAB_BY_ID.buttons.keyFields.length === 3,
+    "场景白名单与复合行键（场景+文案+指令）就位");
+
+  // 复合行键：默认按钮里有 5 个 cast 行，它们必须互不撞键（否则会被误判成「新增」）
+  const btnTab = T.TAB_BY_ID.buttons;
+  const btnKeys = T.state.data.buttons.map(function (r) { return T.rowKey(btnTab, r); });
+  check(new Set(btnKeys).size === btnKeys.length && btnKeys.length === 10,
+    "10 个按钮的行键互不重复（" + btnKeys.length + " 行 / " + new Set(btnKeys).size + " 键）");
+  check(T.rowKey(btnTab, { scene: "cast", label: "卖光光", data: "/钓鱼 卖光光" })
+    !== T.rowKey(btnTab, { scene: "bag", label: "卖光光", data: "/钓鱼 卖光光" }),
+    "同名按钮在不同场景算两行（卖光光 cast/bag）");
+
+  // 样式：别名与数字都认，乱写不认（前端拦下来，别等插件回退）
+  check(T.isButtonStyle("default") && T.isButtonStyle("primary") && T.isButtonStyle("蓝")
+    && T.isButtonStyle("") && T.isButtonStyle("4") && T.isButtonStyle("0") && T.isButtonStyle("255"),
+    "样式：别名/空/0-255 数字都合法");
+  check(!T.isButtonStyle("红色") && !T.isButtonStyle("256") && !T.isButtonStyle("-1")
+    && !T.isButtonStyle("1.5"), "样式：乱写/越界/小数不合法");
+
+  // 校验：场景、指令、样式都要对，文案不能空
+  const vBtn = function (row) { return Object.keys(T.validateRow(btnTab, row)); };
+  check(vBtn({ scene: "cast", label: "看背包", data: "/钓鱼 背包", style: "default" }).length === 0,
+    "合法按钮行校验通过");
+  check(vBtn({ scene: "xx", label: "看背包", data: "/钓鱼 背包", style: "default" })[0] === "scene",
+    "场景写错会被标红");
+  check(vBtn({ scene: "cast", label: "", data: "/钓鱼 背包", style: "default" })[0] === "label",
+    "文案为空会被标红");
+  check(vBtn({ scene: "cast", label: "看背包", data: "背包", style: "default" })[0] === "data",
+    "「点击后发送」不是本插件指令会被标红");
+  check(vBtn({ scene: "cast", label: "看背包", data: "/钓鱼 背包", style: "红色" })[0] === "style",
+    "样式乱写会被标红");
+
   // 竖线不能进单元格（否则一行会被劈成两列）
   check(T.cell("a|b\nc｜d").indexOf("|") < 0 && T.cell("a|b\nc｜d").indexOf("\n") < 0,
     "cell() 把竖线/换行洗掉", JSON.stringify(T.cell("a|b\nc｜d")));
 
   // 序列化
   const serialized = T.serializeContentTables();
-  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs",
-    "序列化输出 9 张配置表", Object.keys(serialized).join(","));
+  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,button_defs",
+    "序列化输出 10 张配置表", Object.keys(serialized).join(","));
   check(typeof serialized.fish_defs === "string"
     && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
     "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",
@@ -449,14 +499,20 @@ function channelHelpers() {
   check(T.parseEditorStatus({}) === null && T.parseEditorStatus(null) === null,
     "没有 editor_status 时返回 null");
   const ab = T.autobackupFromStatus({ autobackup: { enable: false, daily_hour: 7,
-    interval_hours: 12, keep_daily: 10, keep_interval: 5 } });
+    interval_hours: 12, keep_daily: 10, keep_interval: 5, keep_manual: 0 } });
   check(ab.enable === false && ab.dailyHour === 7 && ab.intervalHours === 12
-    && ab.keepDaily === 10 && ab.keepInterval === 5,
+    && ab.keepDaily === 10 && ab.keepInterval === 5 && ab.keepManual === 0,
     "editor_status -> 表单字段映射正确（蛇形转驼峰）");
   const abPayload = T.autobackupPayload(ab);
   check(JSON.stringify(Object.keys(abPayload).sort()) ===
-    JSON.stringify(["daily_hour", "enable", "interval_hours", "keep_daily", "keep_interval"]),
+    JSON.stringify(["daily_hour", "enable", "interval_hours", "keep_daily", "keep_interval", "keep_manual"]),
     "表单字段 -> 插件字段名正确（以 DEFAULTS 为准）", Object.keys(abPayload).join(","));
+  // 手动存档保留策略：填了就带上去（这是「55 份手动存档」那个坑的开关）
+  const abKeep = T.autobackupPayload({ enable: true, dailyHour: 4, intervalHours: 6,
+    keepDaily: 30, keepInterval: 20, keepManual: 25 });
+  check(abKeep.keep_manual === 25, "「手动存档保留份数」会随保存一起提交", abKeep.keep_manual);
+  check(T.autobackupPayload({ enable: true }).keep_manual === 0,
+    "没填时手动存档保留份数按 0（永久保留）提交");
   // 写通道：走插件自己注册的 Web API（相对路径），不再有 nonce / 上传文件
   check(typeof T.sendCommand === "function" && typeof T.bridgeRequest === "function",
     "写通道 = sendCommand + bridgeRequest（apiPost 到 config / snapshot）");

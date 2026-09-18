@@ -16,6 +16,10 @@ import tempfile
 _SANDBOX_ROOT = os.path.join(tempfile.gettempdir(), "astrbot_plugin_fishing_test")
 os.makedirs(_SANDBOX_ROOT, exist_ok=True)
 os.environ["ASTRBOT_ROOT"] = _SANDBOX_ROOT
+#: 测试用的存档目录。⚠️ 一定要显式钉住：`backup_dir` 的默认值是「真插件目录/backups」，
+#: 而 `_refresh_config()` 会按它重建 `self.backup_store` —— 只要测试里出现过一次热重载
+#: 或启动流程，就会去读写站长的真存档（历史上测试就在这里误删过真快照）。
+_SANDBOX_BACKUP_DIR = os.path.join(_SANDBOX_ROOT, "plugin_dir", "backups")
 
 import asyncio  # noqa: E402
 import collections  # noqa: E402
@@ -137,7 +141,12 @@ class FakeEvent:
 
 
 def make_plugin(config: dict | None = None):
-    plugin = mod.FishingPlugin(context=FakeContext(), config=config or dict(_CFG))
+    cfg = config if config is not None else dict(_CFG)
+    # 存档目录一律钉进沙箱（见 _SANDBOX_BACKUP_DIR 处的说明）。站长真的填了
+    # backup_dir 时才尊重它——测试里没人会填。
+    if not str(cfg.get("backup_dir") or "").strip():
+        cfg["backup_dir"] = _SANDBOX_BACKUP_DIR
+    plugin = mod.FishingPlugin(context=FakeContext(), config=cfg)
     plugin.name = "astrbot_plugin_qq_fishing"
     plugin.author = "dhhxfggg"
     plugin.plugin_id = "dhhxfggg/astrbot_plugin_qq_fishing"
@@ -2174,6 +2183,9 @@ async def main():
     esc_cfg = dict(stam_cfg)
     esc_cfg["interactive_rarities"] = "常见"
     esc_cfg["rarity_escape_chance"] = "常见:0.95"
+    # 只让常见鱼出现：否则「4 竿全是高稀有度」会偶发（约 1%），
+    # 而高稀有度不在 interactive_rarities 里、不会走「跑掉」分支，断言就随机变红。
+    esc_cfg["rarity_spawn_weights"] = "常见:100,少见:0,稀有:0,传说:0,神话:0"
     esc_plugin = make_plugin(esc_cfg)
     pe = mod._default_player("89032")
     pe["gold"] = 1000
@@ -2690,6 +2702,166 @@ async def main():
     )
     check(ok and any(c["kind"] == "c2c" for c in api.calls), "单聊走 post_c2c_message")
 
+    # --- 🔘 按钮表全部可配置（button_defs）---
+    # 默认文本解析出来的按钮，必须与之前硬编码的那一套逐项一致（等价性回归）
+    expect_buttons = {
+        "cast": [
+            ("再来一竿", "/钓鱼", 1),
+            ("看背包", "/钓鱼 背包", 1),
+            ("今日", "/钓鱼 今日", 1),
+            ("卖光光", "/钓鱼 卖光光", 1),
+            ("帮助", "/钓鱼 帮助", 1),
+        ],
+        "pull": [("拉线！", "/钓鱼 拉", 4)],
+        "bag": [
+            ("卖光光", "/钓鱼 卖光光", 1),
+            ("水族馆", "/钓鱼 水族馆", 1),
+            ("再来一竿", "/钓鱼", 1),
+        ],
+        "location": [
+            ("查图鉴", "/钓鱼 图鉴", 1),
+            ("背包", "/钓鱼 背包", 1),
+            ("今日", "/钓鱼 今日", 1),
+        ],
+        "story": [("{label}", "/钓鱼 事件 {n}", 1)],
+    }
+
+    def _buttons_snapshot() -> dict:
+        """当前生效的按钮表（配置解析后的最终结果）。"""
+        return {s: [tuple(b) for b in items] for s, items in mod.BUTTONS.items()}
+
+    check(
+        _buttons_snapshot() == expect_buttons,
+        f"button_defs 默认值 == 历史硬编码按钮（场景 {sorted(_buttons_snapshot())}）",
+        extra=None if _buttons_snapshot() == expect_buttons else repr(_buttons_snapshot()),
+    )
+    check(
+        [len(r) for r in plugin._cast_rows()] == [3, 2]
+        and [
+            len(plugin._bag_rows()),
+            len(plugin._location_rows()),
+            len(plugin._pull_rows()),
+        ]
+        == [1, 1, 1],
+        "默认排版不变：cast 3+2 两行、bag/location/pull 各一行",
+    )
+    check(
+        [b["render_data"]["style"] for r in plugin._pull_rows() for b in r] == [4]
+        and [b["render_data"]["style"] for r in plugin._cast_rows() for b in r]
+        == [1, 1, 1, 1, 1],
+        "样式来自配置（拉线=primary/蓝=4，其余 default=1）",
+    )
+    # story 是模板：每个选项展开成一行
+    ev_def = mod.EVENT_BY_ID[sorted(mod.EVENT_BY_ID)[0]]
+    ev_rows = plugin._event_rows(ev_def)
+    check(
+        len(ev_rows) == len(ev_def["choices"])
+        and all(len(r) == 1 for r in ev_rows)
+        and [r[0]["render_data"]["label"] for r in ev_rows]
+        == [c["label"] for c in ev_def["choices"]]
+        and [r[0]["action"]["data"] for r in ev_rows]
+        == [f"/钓鱼 事件 {i}" for i in range(1, len(ev_def["choices"]) + 1)],
+        "story 模板按选项展开（{label}/{n} 换成真实文案与序号）",
+    )
+
+    # 每个默认按钮点下去都要有反应：指令必须被 dispatcher 认识（防止「死按钮」）
+    live_plugin = make_plugin(dict(_CFG))
+    dead: list[str] = []
+    for _items in expect_buttons.values():
+        for _label, _data, _style in _items:
+            if "{" in _data:
+                continue          # 模板行先展开再测（上面已单独验证）
+            ev_live = FakeEvent("89140")
+            _words = _data.split()[1:]
+            _replies = (
+                await cmd(live_plugin, ev_live, *_words)
+                if _words
+                else await cast(live_plugin, ev_live)
+            )
+            if "不认识" in text_of(_replies):
+                dead.append(f"{_label}->{_data}")
+    check(not dead, f"默认按钮的指令 dispatcher 全都认识 -> {dead}")
+
+    # 自定义：文案 / 顺序 / 指令 / 样式 / 条数 全部按配置走（容错：全角竖线、注释、空行、别名）
+    custom_cfg = dict(_CFG)
+    custom_cfg["button_defs"] = (
+        "# 我的按钮表\n"
+        "cast｜抛一竿｜/钓鱼 3｜primary\n"
+        "\n"
+        "cast|开包|/钓鱼 背包|蓝\n"
+        "cast|看钱|/钓鱼 档案|7\n"
+        "bag|清空|/钓鱼 卖光光|灰\n"
+    )
+    plugin_c = make_plugin(custom_cfg)
+    check(
+        _buttons_snapshot()["cast"]
+        == [("抛一竿", "/钓鱼 3", 4), ("开包", "/钓鱼 背包", 4), ("看钱", "/钓鱼 档案", 7)],
+        f"自定义按钮生效 -> {_buttons_snapshot()['cast']}",
+    )
+    check(
+        [len(r) for r in plugin_c._cast_rows()] == [3]
+        and [b["render_data"]["label"] for r in plugin_c._cast_rows() for b in r]
+        == ["抛一竿", "开包", "看钱"],
+        "自定义 3 个按钮摆成一行、顺序即配置顺序",
+    )
+    check(
+        _buttons_snapshot()["pull"] == expect_buttons["pull"]
+        and _buttons_snapshot()["location"] == expect_buttons["location"]
+        and _buttons_snapshot()["story"] == expect_buttons["story"],
+        "没被配置覆盖的场景各自回退内置（不会整表清空）",
+    )
+    # 超长文案按 QQ 限制截到 10 字（不报错、不空按钮）
+    long_cfg = dict(_CFG)
+    long_cfg["button_defs"] = "cast|这是一个特别特别长的按钮文案|/钓鱼"
+    plugin_long = make_plugin(long_cfg)
+    check(
+        plugin_long._cast_rows()[0][0]["render_data"]["label"] == "这是一个特别特别长的按钮文案"[:10],
+        "超长按钮文案自动截到 10 字",
+    )
+
+    # 坏行过滤：字段不够 / 场景不认识 / 指令不认识（死按钮）都跳过，且只告警一条
+    warns: list[str] = []
+    parsed = mod._parse_button_defs(
+        "cast|只有一个字段\n"
+        "unknown|场景不认识|/钓鱼\n"
+        "cast|点了没反应|/钓鱼 不存在的子命令\n"
+        "cast|好按钮|/钓鱼 帮助\n",
+        warn=warns.append,
+    )
+    check(
+        parsed == {"cast": [("好按钮", "/钓鱼 帮助", 1)]},
+        f"坏行全部跳过、只留合法按钮 -> {parsed}",
+    )
+    check(
+        len(warns) == 1 and "3 行" in warns[0],
+        f"坏行合并成一条告警、不刷屏 -> {warns}",
+    )
+    check(
+        mod._button_command_ok("/钓鱼")
+        and mod._button_command_ok("/钓鱼 拉")
+        and mod._button_command_ok("/钓鱼 事件 1")
+        and mod._button_command_ok("/钓鱼 12")
+        and not mod._button_command_ok("钓鱼")
+        and not mod._button_command_ok("/别的")
+        and not mod._button_command_ok("/钓鱼 乱写的"),
+        "按钮指令白名单：认识的放行、点了没反应的拦掉",
+    )
+    # 整段写坏 -> 全表回退内置
+    make_plugin({**dict(_CFG), "button_defs": "这不是按钮表\n随便写点什么"})
+    check(_buttons_snapshot() == expect_buttons, "button_defs 整段写坏时全表回退内置")
+    # 只配一个场景 -> 其余场景各自回退内置
+    make_plugin({**dict(_CFG), "button_defs": "bag|清空|/钓鱼 卖光光|灰"})
+    check(
+        _buttons_snapshot() == {**expect_buttons, "bag": [("清空", "/钓鱼 卖光光", 1)]},
+        "只配一个场景时，其余场景各自回退内置",
+    )
+    # 留空 -> 全表回退内置（等价于默认）
+    make_plugin({**dict(_CFG), "button_defs": ""})
+    check(_buttons_snapshot() == expect_buttons, "button_defs 留空时全表回退内置")
+    # 改回默认文本后完全恢复（无残留副作用）
+    make_plugin(dict(_CFG))
+    check(_buttons_snapshot() == expect_buttons, "改回默认文本后按钮表完全恢复")
+
     # --- 随机插曲：触发 → 选择 → 结算 → 清空 ---
     story_cfg = dict(_CFG)
     story_cfg["story_chance"] = 1.0
@@ -3019,7 +3191,15 @@ async def main():
     plugin_d.backup_store = mod.BACKUP_MODULE.BackupStore(
         os.path.join(data_root, "backups"), mod.DATA_VERSION
     )
+    # ⚠️ 必须把 backup_dir 也钉进沙箱：_refresh_config() 会按 backup_dir **重建**
+    # self.backup_store（默认值是真插件目录下的 backups/），只赋值 backup_store
+    # 是拦不住它的——下一行若漏了，后面的建/删快照就会打到站长的真存档上。
+    plugin_d.config["backup_dir"] = str(plugin_d.backup_store.root)
+    plugin_d._refresh_config()
     plugin_d.backup_store.ensure_layout()
+    assert str(plugin_d.backup_store.root).startswith(_SANDBOX_ROOT), (
+        f"存档目录必须落在沙箱内，实际是 {plugin_d.backup_store.root}"
+    )
 
     def d_ev(uid="89701"):
         return FakeEvent(uid)
@@ -3373,6 +3553,43 @@ async def main():
         f"POST config 写自动备份成功 -> daily_hour={plugin_d.config.get('backup_daily_hour')}",
     )
 
+    # --- 🔘 按钮表也能从页面写（以前只读，站长只能手改配置文件）---
+    btn_text = "cast|我的按钮|/钓鱼 帮助|primary\nbag|清空|/钓鱼 卖光光|default"
+    res = await plugin_d.editor_api_config_save({"tables": {"button_defs": btn_text}})
+    data = api_dict(res)
+    check(
+        data.get("ok") is True,
+        f"POST config 能写 button_defs（内容表白名单已含按钮）-> {data.get('message')}",
+    )
+    check(
+        str(plugin_d.config.get("button_defs", "")).startswith("cast|我的按钮")
+        and mod.BUTTONS.get("cast", [])[:1] == [("我的按钮", "/钓鱼 帮助", 4)],
+        f"写完后运行期按钮表立刻生效 -> {mod.BUTTONS.get('cast')}",
+    )
+    check(
+        mod.BUTTONS.get("pull") and mod.BUTTONS["pull"][0][0] == "拉线！",
+        "只改了 cast/bag，其余场景仍是内置按钮（按场景回退）",
+    )
+
+    # --- 手动存档保留份数也能从页面写 ---
+    res = await plugin_d.editor_api_config_save({"autobackup": {"keep_manual": 7}})
+    data = api_dict(res)
+    check(
+        data.get("ok") is True
+        and int(plugin_d.config.get("backup_keep_manual") or 0) == 7
+        and int(plugin_d.cfg.get("backup_keep_manual") or 0) == 7,
+        f"POST config 能写 backup_keep_manual -> {plugin_d.config.get('backup_keep_manual')}",
+    )
+    st = json.loads(await plugin_d._editor_build_status(action="t", ok=True, message="m"))
+    check(
+        int((st.get("autobackup") or {}).get("keep_manual") or 0) == 7,
+        "editor_status 把「手动存档保留份数」回给页面（表单能回显）",
+    )
+    # 还原，别影响后面的断言
+    plugin_d.config["backup_keep_manual"] = 0
+    plugin_d.config["button_defs"] = mod.DEFAULTS["button_defs"]
+    plugin_d._refresh_config()
+
     # --- POST config：白名单之外的键必须被拒（且给出原因）---
     res = await plugin_d.editor_api_config_save({"numbers": {"data_status": "想改我？"}})
     data = api_dict(res)
@@ -3445,6 +3662,111 @@ async def main():
     res = await plugin_d.editor_api_snapshot({"action": "delete", "name": snap_name})
     data = api_dict(res)
     check(data.get("ok") is True, f"snapshot delete 可用 -> {data.get('message')}")
+
+    # --- 删除就是删除：不许顺手再存一份（以前删一次反倒多一份，永远清不干净）---
+    # 这一段会真的删文件，先确认存档目录在沙箱里。历史上这里踩过坑：
+    # `_refresh_config()` 会按 `backup_dir` 重建 `self.backup_store`（默认指向真插件
+    # 目录下的 backups/），光赋值 `backup_store` 拦不住它 —— 测试于是删到了站长的真
+    # 存档上。所以先断言、再按断言结果决定要不要做删除类操作。
+    store_root = os.path.abspath(str(plugin_d.backup_store.root))
+    in_sandbox = store_root.startswith(os.path.abspath(_SANDBOX_ROOT))
+    check(in_sandbox, f"存档目录在沙箱里，才敢做删除类测试（{store_root}）")
+
+    if in_sandbox:
+        await plugin_d.editor_api_snapshot({"action": "create", "note": "待删除的存档"})
+    victim = str(
+        (json.loads(plugin_d.config["editor_status"]).get("snapshots") or [{}])[0].get(
+            "name"
+        )
+        or ""
+    )
+    before_files = {p.name for p in Path(plugin_d.backup_store.root).rglob("*.json")}
+    if in_sandbox:
+        res = await plugin_d.editor_api_snapshot({"action": "delete", "name": victim})
+    else:
+        print("  ⚠️ 跳过快照删除/保留策略测试：存档目录不在沙箱内")
+        res = {"status": "error", "message": "已跳过（不在沙箱内）"}
+    data = api_dict(res)
+    after_files = {p.name for p in Path(plugin_d.backup_store.root).rglob("*.json")}
+    check(
+        data.get("ok") is True and "已删除存档" in str(data.get("message")),
+        f"snapshot delete 直接删除 -> {data.get('message')}",
+    )
+    check(
+        bool(after_files < before_files),
+        f"删除只少不多（{len(before_files)} -> {len(after_files)} 个存档文件），"
+        "不会再顺手生一份",
+    )
+    check(
+        all(
+            Path(str(x.get("name") or "")).stem != Path(victim).stem
+            for x in plugin_d.backup_store.list_snapshots()
+        ),
+        f"被删的存档「{victim}」确实从清单里消失",
+    )
+    check(
+        "删除前" not in str(data.get("message")),
+        "删除的回复不再提「删除前自动存档」",
+    )
+
+    # --- 手动存档保留策略：backup_keep_manual 一设就生效 ---
+    manual_dir = Path(plugin_d.backup_store.root) / "manual"
+
+    def _manual_count() -> int:
+        return len(list(manual_dir.glob("*.json")))
+
+    def _manual_names() -> set:
+        return {
+            Path(str(x.get("name") or "")).stem
+            for x in plugin_d.backup_store.list_snapshots()
+            if x.get("kind") == "manual"
+        }
+
+    if not in_sandbox:
+        print("  ⚠️ 跳过手动存档保留策略测试：存档目录不在沙箱内")
+    else:
+        plugin_d.config["backup_keep_manual"] = 0
+        plugin_d._refresh_config()
+        for i in range(4):
+            await plugin_d._snapshot("manual", note=f"不限量测试{i}")
+        unlimited = _manual_count()
+        check(unlimited >= 4, f"keep=0（默认）时手动存档不裁剪（已有 {unlimited} 份）")
+
+        plugin_d.config["backup_keep_manual"] = 3
+        plugin_d._refresh_config()
+        last_msg = ""
+        for i in range(5):
+            if i == 4:
+                # mtime 精度是秒：把最后一份和前面几份拉开一秒，「最新」才有确定含义
+                await asyncio.sleep(1.1)
+            last_msg = await plugin_d._snapshot("manual", note=f"限量测试{i}")
+        left = _manual_count()
+        check(left == 3, f"keep=3 时手动存档只留最新 3 份（实际 {left} 份）")
+        newest = Path(last_msg.split("（")[0]).stem
+        check(
+            newest in _manual_names(),
+            f"留的是最新的：刚存的「{newest}」还在 -> {sorted(_manual_names())}",
+        )
+
+        plugin_d.config["backup_keep_manual"] = 10
+        plugin_d._refresh_config()
+        await plugin_d._snapshot("manual", note="多留一份")
+        check(
+            _manual_count() == 4,
+            f"keep 比现有份数大时一份都不删（{left} + 1 = {_manual_count()} 份）",
+        )
+
+        plugin_d.config["backup_keep_manual"] = 0
+        plugin_d._refresh_config()
+        check(
+            int(plugin_d.cfg.get("backup_keep_manual") or 0) == 0
+            and _manual_count() == 4,
+            "改回 keep=0 后不再裁剪（已存的 4 份原样保留）",
+        )
+        check(
+            os.path.abspath(str(plugin_d.backup_store.root)) == store_root,
+            "改配置后存档目录没被挪走（backup_dir 生效且稳定）",
+        )
 
     res = await plugin_d.editor_api_snapshot({"action": "refresh"})
     data = api_dict(res)
@@ -3949,11 +4271,23 @@ async def main():
     )
 
     # --- 内容表不该被默认值同步覆盖（与 fish_defs 同规则）---
-    for _key in ("collectible_defs", "variant_defs", "weather_defs", "easter_egg_defs"):
+    for _key in (
+        "collectible_defs",
+        "variant_defs",
+        "weather_defs",
+        "easter_egg_defs",
+        "button_defs",
+    ):
         check(
             _key in mod.DEFAULTS_SYNC_EXCLUDE_KEYS,
             f"{_key} 已排除默认值自动同步（站长编辑不会被升级覆盖）",
         )
+    check(
+        "backup_keep_manual" in mod.DEFAULTS
+        and mod.DEFAULTS["backup_keep_manual"] == 0
+        and mod._synced_default_keys().count("backup_keep_manual") == 0,
+        "手动存档保留份数默认 0（永久保留），且不参与默认值同步",
+    )
 
     # =====================================================================
     print("\n[12] 指令分派")
