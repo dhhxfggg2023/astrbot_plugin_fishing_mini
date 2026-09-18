@@ -201,13 +201,15 @@ DEFAULTS: dict[str, Any] = {
     # 上钩率：空钩基本靠运气，带饵才容易上鱼（"id:概率" 逗号分隔，站长可调）
     # 钓点难度系数：≥1.0 = 这个钓点必出鱼；<1.0 = 上钩率 × 系数（越深越容易空竿）
     "location_hook_factors": (
-        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.94,reed:0.90,sea:0.86,dock:0.82,"
-        "night:0.78,mangrove:0.74,swamp:0.70,cave:0.66,ruins:0.62,abyss:0.58,"
-        "trench:0.54,glacier:0.50,aurora:0.44"
+        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,night"
+        ":0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,trench:0.65"
+        ",glacier:0.62,aurora:0.60"
     ),
     # 前往下一个钓点需要上一个钓点图鉴开到多少比例
     "location_codex_gate": 0.8,
-    "bait_hook_rates": "none:0.30,bread:0.72,worm:0.80,bloodworm:0.86,corn:0.90,shrimp:0.94,livebait:0.96,secret:1.0",
+    # 空竿是否也消耗鱼饵：false = 空竿不扣饵（默认）
+    "consume_bait_on_empty": False,
+    "bait_hook_rates": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0",
     "content_auto_merge": True,     # 旧配置自动合并新版内容（钓点/鱼饵/鱼竿/道具）
     "button_mode": "自动",          # QQ 官方按钮发送形态：自动/markdown/text/关闭
     "data_status": "",              # 插件回写的状态面板（人看）

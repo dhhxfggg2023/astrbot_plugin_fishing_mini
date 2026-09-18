@@ -436,15 +436,20 @@
     "type": "float",
     "default": 0.8
   },
+  "consume_bait_on_empty": {
+    "description": "空竿（没中鱼、也没钩上杂物）是否照样消耗 1 个鱼饵。false = 空竿不扣饵（默认）；true = 每次下竿都扣，不看有没有结果",
+    "type": "bool",
+    "default": false
+  },
   "bait_hook_rates": {
     "description": "各鱼饵的咬钩率（= 这一竿中鱼的概率，空钩极低、带饵才容易上鱼）。格式 id:概率 逗号分隔；也认中文饵名与百分数（面包屑:0.8、worm:80 都行），漏写的饵按 0.3 处理。中鱼后就是鱼，不会再被杂物抢走；没中鱼时才有可能钩上杂物（见 item_drop_chance）。实际中鱼率 = 这里的值 × 钓点难度系数（见 location_hook_factors）",
     "type": "string",
-    "default": "none:0.30,bread:0.72,worm:0.80,bloodworm:0.86,corn:0.90,shrimp:0.94,livebait:0.96,secret:1.0"
+    "default": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0"
   },
   "location_hook_factors": {
     "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图，新手期绝不空竿）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理",
     "type": "string",
-    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.94,reed:0.90,sea:0.86,dock:0.82,night:0.78,mangrove:0.74,swamp:0.70,cave:0.66,ruins:0.62,abyss:0.58,trench:0.54,glacier:0.50,aurora:0.44"
+    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,night:0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,trench:0.65,glacier:0.62,aurora:0.60"
   },
   "rarity_spawn_weights": {
     "description": "鱼种品质的基础出现权重（格式：品质:权重，逗号分隔）。数值越大越常见，改它就能调爆率",

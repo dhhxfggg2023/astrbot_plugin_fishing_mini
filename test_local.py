@@ -2198,6 +2198,109 @@ async def main():
     )
 
     # =====================================================================
+    print("\n[6j] 空竿不扣饵（consume_bait_on_empty）与新饵率矩阵")
+
+    # --- 默认 false：空竿（既没中鱼也没钩上杂物）不扣饵 ---
+    empty_cfg = dict(_CFG)
+    empty_cfg["bait_hook_rates"] = "worm:0.0"
+    empty_cfg["location_hook_factors"] = "novice:0.5"
+    empty_cfg["consume_bait_on_empty"] = False
+    ep = make_plugin(empty_cfg)
+    pe = await ep._load_player("89101")
+    pe["baits"] = {"worm": 3}
+    await ep._save_player(pe)
+    for _ in range(3):
+        await cmd(ep, FakeEvent("89101"), "蚯蚓", "", "")
+    pe = await ep._load_player("89101")
+    check(
+        pe["baits"]["worm"] == 3,
+        f"空竿不扣饵：连抛 3 竿饵数不变 -> {pe['baits']['worm']}",
+    )
+
+    # --- 开关 true：恢复旧规则（每竿都扣） ---
+    legacy_cfg = dict(empty_cfg)
+    legacy_cfg["consume_bait_on_empty"] = True
+    lp = make_plugin(legacy_cfg)
+    pl = await lp._load_player("89102")
+    pl["baits"] = {"worm": 3}
+    await lp._save_player(pl)
+    for _ in range(3):
+        await cmd(lp, FakeEvent("89102"), "蚯蚓", "", "")
+    pl = await lp._load_player("89102")
+    check(
+        pl["baits"]["worm"] == 0,
+        f"开关为 true 时恢复「每竿都扣」-> {pl['baits']['worm']}",
+    )
+
+    # --- 有结果时照常扣 1 个 ---
+    fish_cfg = dict(_CFG)
+    fish_cfg["bait_hook_rates"] = "worm:1.0"
+    fish_cfg["consume_bait_on_empty"] = False
+    fp = make_plugin(fish_cfg)
+    pf = await fp._load_player("89103")
+    pf["baits"] = {"worm": 3}
+    await fp._save_player(pf)
+    await cmd(fp, FakeEvent("89103"), "蚯蚓", "", "")
+    pf = await fp._load_player("89103")
+    check(
+        pf["baits"]["worm"] == 2,
+        f"中鱼那一竿照常扣 1 个饵 -> {pf['baits']['worm']}",
+    )
+
+    # --- 连钓：只按有结果的竿数扣，并在结果里说明 ---
+    mp = make_plugin(empty_cfg)
+    pm = await mp._load_player("89104")
+    pm["baits"] = {"worm": 3}
+    pm["equipped_bait"] = "worm"
+    await mp._save_player(pm)
+    out = await cmd(mp, FakeEvent("89104"), "3", "", "")
+    body = text_of(out)
+    pm = await mp._load_player("89104")
+    check(
+        pm["baits"]["worm"] == 3,
+        f"连钓全空竿时一个饵都不扣 -> {pm['baits']['worm']}",
+    )
+    check(
+        "空竿不耗饵" in body,
+        f"连钓结果里说明实扣饵数 -> {[l for l in body.splitlines() if '空竿不耗' in l][:1]}",
+    )
+
+    # --- 钓费与体力不受该开关影响 ---
+    fee_cfg = dict(empty_cfg)
+    fee_cfg["fish_cost"] = 5
+    fee_cfg["stamina_regen_seconds"] = 45
+    fee_cfg["stamina_max"] = 5
+    fp2 = make_plugin(fee_cfg)
+    pf2 = await fp2._load_player("89105")
+    pf2["baits"] = {"worm": 2}
+    pf2["gold"] = 100
+    pf2["stamina"] = 5
+    await fp2._save_player(pf2)
+    await cmd(fp2, FakeEvent("89105"), "蚯蚓", "", "")
+    pf2 = await fp2._load_player("89105")
+    check(
+        pf2["gold"] == 95 and pf2["stamina"] == 4 and pf2["baits"]["worm"] == 2,
+        f"空竿不扣饵，但钓费与体力照扣 -> 金 {pf2['gold']}／体 {pf2['stamina']}／饵 {pf2['baits']['worm']}",
+    )
+
+    # --- 新默认值的上鱼率矩阵（3000 竿采样，区间断言非恒真） ---
+    mat = make_plugin(load_schema_config())
+    for bait_id, loc_id, lo, hi in (
+        ("bread", "aurora", 0.28, 0.42),
+        ("secret", "aurora", 0.52, 0.68),
+        ("bread", "lake", 0.48, 0.62),
+        ("secret", "lake", 0.90, 1.00),
+        ("none", "aurora", 0.10, 0.22),
+        ("bread", "novice", 1.00, 1.00),
+    ):
+        hit = sum(
+            1 for _ in range(3000) if mat._roll_cast_outcome(bait_id, True, loc_id)[0] == "fish"
+        ) / 3000
+        check(
+            lo <= hit <= hi,
+            f"{bait_id}@{loc_id} 上鱼率 {hit:.3f}（期望 {lo}~{hi}）",
+        )
+
     print("\n[10j] 彩蛋事件 / 里程碑 / 最佳渔获纪录")
     plugin6 = make_plugin()
     ev6 = FakeEvent("89006")

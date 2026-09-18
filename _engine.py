@@ -154,9 +154,6 @@ class EngineMixin:
             # --- 扣费 / 扣饵 / 扣体力（各一次）---
             if total_cost:
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) - total_cost
-            if bait_id != "none":
-                baits = player.setdefault("baits", {})
-                baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - 1)
             if limited:
                 player["stamina"] = max(0, _safe_int(player.get("stamina"), 0, 0) - 1)
 
@@ -168,6 +165,13 @@ class EngineMixin:
             outcome, drop = self._roll_cast_outcome(
                 bait_id, bait_id != "none" or total_cost > 0, cast_loc.get("id")
             )
+            # 扣饵：默认「空竿不扣饵」（consume_bait_on_empty=false），
+            # 只有真的中鱼 / 钩上带了杂物才消耗 1 个；想恢复旧规则就把该配置设为 true。
+            if bait_id != "none" and (
+                bool(cfg.get("consume_bait_on_empty")) or outcome != "nothing"
+            ):
+                baits = player.setdefault("baits", {})
+                baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - 1)
             if outcome != "fish":
                 player["last_fish_time"] = int(now)
                 await self._save_player(player)
@@ -403,11 +407,6 @@ class EngineMixin:
                 player["gold"] = (
                     _safe_int(player.get("gold"), 0, 0) - unit_cost * planned
                 )
-            if bait_id != "none":
-                baits = player.setdefault("baits", {})
-                baits[bait_id] = max(
-                    0, _safe_int(baits.get(bait_id), 0, 0) - planned
-                )
             if limited:
                 player["stamina"] = max(
                     0, _safe_int(player.get("stamina"), 0, 0) - planned
@@ -500,6 +499,16 @@ class EngineMixin:
                 )
 
             # --- 统一结算：成就 / 里程碑 / 存档 / 排行榜 ---
+            # 扣饵：默认只按「有结果」的竿数扣（空竿不耗饵）；
+            # consume_bait_on_empty=true 时恢复「每竿都扣」的旧规则。
+            consumed = (
+                planned
+                if bool(cfg.get("consume_bait_on_empty"))
+                else planned - stats["nothing"]
+            )
+            if bait_id != "none" and consumed > 0:
+                baits = player.setdefault("baits", {})
+                baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - consumed)
             new_ach = self._check_achievements(player)
             milestone = self._milestone_text(player)
             saved = await self._save_player(player)
@@ -513,6 +522,11 @@ class EngineMixin:
             if stats["escaped"]:
                 summary += f"｜跑掉 {stats['escaped']} 条"
             lines.append(summary)
+            if bait_id != "none" and consumed != planned:
+                lines.append(
+                    f"{self._bait_label(bait_id)} 本次 -{consumed}"
+                    f"（空竿不耗饵：本可扣 {planned}）"
+                )
             tail = f"🧮 渔获估值 {_fmt_gold(gained)} 金"
             if limited:
                 tail += (
