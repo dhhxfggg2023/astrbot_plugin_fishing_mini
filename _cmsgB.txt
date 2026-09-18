@@ -1,0 +1,8 @@
+fix: consume_bait_on_empty 补防御性归一化（字符串 false 不再被当成开启）
+
+- _refresh_config 里显式解析字符串：Python 里 bool("false") 是 True（非空字符串为真），
+  所以只包一层 bool() 完全无效，必须按字面解析
+- 支持 1/true/yes/on/y/是/开 → True；其余（含 false/0/no/空串）→ False
+- 新增 7 条回归断言覆盖字符串场景（false / true / 0 / 1 / 是 / 空串 / no）
+- 六项测试全绿（test_local / integration / official_loader / docker_deploy / ci_workflow
+  + node test_editor_ui.js）

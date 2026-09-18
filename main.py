@@ -2013,6 +2013,17 @@ class FishingPlugin(
         cfg["multi_cast_max"] = int(
             _clamp(_safe_int(cfg.get("multi_cast_max"), 20, 1), 1, 100)
         )
+
+        # 防御性归一化：配置面板给的是真 bool，但手改配置文件可能写成字符串。
+        # ⚠️ 不能只用 bool()：Python 里 bool("false") 是 True（非空字符串为真），
+        # 所以字符串必须显式按字面解析。
+        _raw_consume = cfg.get("consume_bait_on_empty")
+        if isinstance(_raw_consume, str):
+            cfg["consume_bait_on_empty"] = _raw_consume.strip().lower() in (
+                "1", "true", "yes", "on", "y", "是", "开",
+            )
+        else:
+            cfg["consume_bait_on_empty"] = bool(_raw_consume)
         cfg["sign_reward"] = max(0, _safe_int(cfg["sign_reward"], 20, 0))
         cfg["sell_discount"] = _clamp(_safe_number(cfg["sell_discount"], 1.0), 0.0, 5.0)
         cfg["enable_group_broadcast"] = bool(cfg["enable_group_broadcast"])

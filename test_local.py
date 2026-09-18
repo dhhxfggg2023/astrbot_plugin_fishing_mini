@@ -2232,6 +2232,21 @@ async def main():
         f"开关为 true 时恢复「每竿都扣」-> {pl['baits']['worm']}",
     )
 
+    # --- 防御性归一化：配置文件被手写成字符串时也要按字面理解 ---
+    # （bool("false") 在 Python 里是 True，所以必须显式解析字符串）
+    for raw, want in (
+        ("false", False), ("true", True), ("0", False), ("1", True),
+        ("是", True), ("", False), ("no", False),
+    ):
+        flag_cfg = dict(_CFG)
+        flag_cfg["consume_bait_on_empty"] = raw
+        fp = make_plugin(flag_cfg)
+        fp._refresh_config()          # 显式走一遍归一化，避免依赖 make_plugin 的实现
+        check(
+            fp.cfg["consume_bait_on_empty"] is want,
+            f"配置写成 {raw!r} 时按字面解析为 {want}",
+        )
+
     # --- 有结果时照常扣 1 个 ---
     fish_cfg = dict(_CFG)
     fish_cfg["bait_hook_rates"] = "worm:1.0"
