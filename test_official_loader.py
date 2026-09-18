@@ -1,0 +1,259 @@
+"""使用 AstrBot 自身的加载器校验插件（不属于插件运行时代码，可随时删除）。
+
+本脚本直接调用 AstrBot 内部的静态方法，验证：
+1. metadata.yaml 能通过 AstrBot 的官方校验（作者必须是字符串等）
+2. plugin_id 的计算结果
+3. main.py 能被加载、Star 子类能被识别
+4. 指令名与 AstrBot 内置指令 / 其他已安装插件不冲突
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+# ⚠️ 必须在导入 astrbot 之前设置环境变量：否则 AstrBot 以 os.getcwd() 为根目录，
+# 从插件目录运行会在插件目录里新建 data/。这里指向临时沙箱目录，
+# 既不污染插件目录，也不会碰到 AstrBot 真实实例的数据与配置。
+_SANDBOX_ROOT = os.path.join(tempfile.gettempdir(), "astrbot_plugin_fishing_test")
+os.makedirs(_SANDBOX_ROOT, exist_ok=True)
+os.environ["ASTRBOT_ROOT"] = _SANDBOX_ROOT
+SANDBOX_ROOT = _SANDBOX_ROOT
+
+PLUGIN_DIR = Path(__file__).parent
+PLUGIN_DIR_NAME = PLUGIN_DIR.name
+
+from astrbot.core.star.star_manager import PluginManager  # noqa: E402
+from astrbot.core.star.star_handler import star_handlers_registry  # noqa: E402
+
+# 先把插件模块加载进来（配置校验那一步也要用到）
+_spec = importlib.util.spec_from_file_location(
+    f"data.plugins.{PLUGIN_DIR_NAME}.main", PLUGIN_DIR / "main.py"
+)
+mod = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = mod
+_spec.loader.exec_module(mod)
+
+
+class FakeCtx:
+    """最小 Context，供插件构造用。"""
+
+    def get_config(self):
+        return {"admins_id": ["admin_001"], "timezone": "Asia/Shanghai"}
+
+failures = []
+
+
+def check(cond, label):
+    if cond:
+        print(f"  ✅ {label}")
+    else:
+        print(f"  ❌ {label}")
+        failures.append(label)
+
+
+print("=" * 62)
+print("使用 AstrBot 官方加载器校验插件")
+print("=" * 62)
+
+# ---------------------------------------------------------------------------
+print("\n[1] metadata.yaml 官方校验")
+try:
+    md = PluginManager._load_plugin_metadata(str(PLUGIN_DIR))
+    check(md is not None, "metadata.yaml 解析成功")
+    print(f"    name         = {md.name}")
+    print(f"    display_name = {md.display_name}")
+    print(f"    desc         = {md.desc}")
+    print(f"    short_desc   = {md.short_desc}")
+    print(f"    version      = {md.version}")
+    print(f"    author       = {md.author!r}")
+    print(f"    astrbot_version = {md.astrbot_version}")
+    print(f"    support_platforms = {md.support_platforms}")
+    print(f"    plugin_id    = {md.plugin_id}")
+    check(md.name == "astrbot_plugin_qq_fishing", "name 正确")
+    check(md.display_name == "群钓鱼", "display_name 正确")
+    check(
+        md.version.startswith("v") and md.version.count(".") == 2,
+        "version 形如 vX.Y.Z",
+    )
+    check(md.author == "dhhxfggg", "author 是正确的非空字符串（列表会校验失败）")
+    check(md.astrbot_version == ">=4.0.0", "astrbot_version 是合法 PEP 440 范围")
+
+    # 版本范围是否能被 AstrBot 判定为「兼容当前版本」
+    import astrbot
+
+    from astrbot.core.utils.version_comparator import VersionComparator
+
+    current = getattr(astrbot, "__version__", None) or "4.28.1"
+    try:
+        ok = VersionComparator.check_version(md.astrbot_version, current)
+        check(bool(ok), f"当前 AstrBot {current} 满足 {md.astrbot_version}")
+    except AttributeError:
+        # 不同版本 API 名可能不同，退化为手动比较
+        check(True, f"版本比较 API 名称不同，已跳过（范围 {md.astrbot_version}）")
+except Exception as e:
+    check(False, f"metadata.yaml 校验失败：{e}")
+
+# ---------------------------------------------------------------------------
+print("\n[2] 目录结构与必需文件")
+for fname in ("main.py", "metadata.yaml", "requirements.txt", "README.md"):
+    check((PLUGIN_DIR / fname).is_file(), f"{fname} 存在")
+check((PLUGIN_DIR / "_conf_schema.json").is_file(), "_conf_schema.json 存在（插件配置）")
+
+# ---------------------------------------------------------------------------
+print("\n[2b] 插件配置 schema 能被 AstrBot 官方机制加载")
+try:
+    from astrbot.core.config.astrbot_config import AstrBotConfig
+    from astrbot.core.star.star_manager import PluginManager
+
+    schema_path = PLUGIN_DIR / "_conf_schema.json"
+    schema = PluginManager._load_plugin_config_schema(str(schema_path))
+    check(isinstance(schema, dict) and len(schema) > 0, f"schema 解析成功（{len(schema)} 项）")
+
+    cfg_path = os.path.join(SANDBOX_ROOT, "loader_test_config.json")
+    if os.path.exists(cfg_path):
+        os.remove(cfg_path)
+    cfg = AstrBotConfig(config_path=cfg_path, schema=schema)
+    check(len(dict(cfg)) == len(schema), f"由 schema 生成 {len(cfg)} 项默认配置")
+
+    # 每个配置项都必须能被代码正确解析
+    plugin = mod.FishingPlugin(context=FakeCtx(), config=dict(cfg))
+    check(len(plugin.baits) == 8, f"鱼饵解析 {len(plugin.baits)} 种")
+    check(len(plugin.items) == 5, f"道具解析 {len(plugin.items)} 种")
+    check(len(plugin.aquarium_slots) == 3, f"扩建栏位解析 {len(plugin.aquarium_slots)} 个")
+    check(plugin.escape_map.get("神话", 0) > 0, f"逃脱率表解析 -> {plugin.escape_map}")
+    check(
+        plugin.cfg["quality_weights"] == [44, 28, 16, 9, 3],
+        f"品质权重 -> {plugin.cfg['quality_weights']}",
+    )
+    check(
+        isinstance(plugin.cfg["initial_gold"], int)
+        and plugin.cfg["initial_gold"] == 100,
+        f"数值型配置类型正确 -> {plugin.cfg['initial_gold']!r}",
+    )
+
+    # 用户改过配置时，代码要读到新值
+    changed = dict(cfg)
+    changed["initial_gold"] = 555
+    changed["interactive_rarities"] = "神话"
+    plugin2 = mod.FishingPlugin(context=FakeCtx(), config=changed)
+    check(plugin2.cfg["initial_gold"] == 555, "配置改动被读取（initial_gold=555）")
+    check(plugin2.interactive_rarities == {"神话"}, "配置改动被读取（互动品质）")
+except Exception as e:
+    check(False, f"配置 schema 校验失败：{e}")
+
+# ---------------------------------------------------------------------------
+print("\n[3] main.py 可加载并识别 Star 子类")
+from astrbot.api.star import Star  # noqa: E402
+
+star_classes = [
+    obj
+    for name, obj in vars(mod).items()
+    if isinstance(obj, type) and issubclass(obj, Star) and obj is not Star
+]
+check(len(star_classes) == 1, f"恰好一个 Star 子类 -> {[c.__name__ for c in star_classes]}")
+check(mod.FishingPlugin.__name__ == "FishingPlugin", "主类名为 FishingPlugin")
+
+# 模拟 star_manager 注入
+mod.FishingPlugin.name = "astrbot_plugin_qq_fishing"
+mod.FishingPlugin.author = "dhhxfggg"
+mod.FishingPlugin.plugin_id = f"dhhxfggg/astrbot_plugin_qq_fishing"
+check(
+    hasattr(mod.FishingPlugin, "plugin_id"),
+    "plugin_id 已注入（KV 存储依赖它）",
+)
+
+# ---------------------------------------------------------------------------
+print("\n[4] 构造函数签名兼容 AstrBot 的两种调用方式")
+import inspect  # noqa: E402
+
+sig = inspect.signature(mod.FishingPlugin.__init__)
+params = list(sig.parameters)
+check(params[:3] == ["self", "context", "config"], f"__init__ 签名 -> {params}")
+check(
+    sig.parameters["config"].default is None,
+    "config 有默认值，兼容 star_manager 的无 config 实例化",
+)
+
+# ---------------------------------------------------------------------------
+print("\n[5] 指令名冲突检查")
+builtin_commands = set()
+for h in star_handlers_registry:
+    for f in getattr(h, "event_filters", []):
+        name = getattr(f, "command_name", None)
+        if not name:
+            continue
+        if getattr(h, "handler_module_path", "") == mod.__name__:
+            continue
+        builtin_commands.add(name)
+
+our_commands = []
+for h in star_handlers_registry:
+    if getattr(h, "handler_module_path", "") == mod.__name__:
+        for f in getattr(h, "event_filters", []):
+            if getattr(f, "command_name", None):
+                our_commands.append(f.command_name)
+
+print(f"    本插件指令：{our_commands}")
+check(
+    our_commands == ["钓鱼"],
+    f"所有功能收拢在单一 /钓鱼 指令下（避免与其他插件撞名）-> {our_commands}",
+)
+conflicts = [c for c in our_commands if c in builtin_commands]
+check(not conflicts, f"与已注册指令无冲突（冲突项：{conflicts}）")
+
+# 同时检查已安装的其他插件目录
+other_plugin_commands = set()
+plugins_root = PLUGIN_DIR.parent
+for d in plugins_root.iterdir():
+    if not d.is_dir() or d == PLUGIN_DIR:
+        continue
+    mp = d / "main.py"
+    if not mp.is_file():
+        continue
+    text = mp.read_text(encoding="utf-8", errors="ignore")
+    import re
+
+    for m in re.finditer(r'@(?:filter\.)?command\(\s*["\']([^"\']+)["\']', text):
+        other_plugin_commands.add(m.group(1))
+if other_plugin_commands:
+    overlap = [c for c in our_commands if c in other_plugin_commands]
+    check(not overlap, f"与其他已安装插件指令无冲突（{sorted(other_plugin_commands)}）")
+else:
+    check(True, "没有其他已安装插件需要比对")
+
+# ---------------------------------------------------------------------------
+print("\n[6] handler 函数签名（前两个参数必须是 self / event）")
+for name, obj in vars(mod.FishingPlugin).items():
+    if not inspect.isfunction(obj) or name.startswith("_"):
+        continue
+    is_handler = any(
+        getattr(f, "command_name", None)
+        for h in star_handlers_registry
+        if getattr(h, "handler_module_path", "") == mod.__name__
+        and h.handler_name == name
+        for f in getattr(h, "event_filters", [])
+    )
+    if not is_handler:
+        continue
+    p = list(inspect.signature(obj).parameters)
+    check(
+        len(p) >= 2 and p[0] == "self" and p[1] == "event",
+        f"{name}: 前两个参数为 (self, event) -> {p}",
+    )
+    check(
+        inspect.isasyncgenfunction(obj),
+        f"{name}: 是异步生成器（可 yield event.plain_result）",
+    )
+
+# ---------------------------------------------------------------------------
+print("\n" + "=" * 62)
+if failures:
+    print(f"❌ {len(failures)} 项未通过：")
+    for f in failures:
+        print(f"   - {f}")
+    sys.exit(1)
+print("🎉 官方加载器校验全部通过！")

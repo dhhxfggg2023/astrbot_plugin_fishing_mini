@@ -1,0 +1,438 @@
+{
+  "initial_gold": {
+    "description": "新玩家初始金币",
+    "type": "int",
+    "default": 100
+  },
+  "fish_cost": {
+    "description": "每次抛竿的固定钓费（默认 0：空钩免费下竿，花钱只在买鱼饵）",
+    "type": "int",
+    "default": 0
+  },
+  "cooldown_seconds": {
+    "description": "钓鱼冷却秒数，0 表示不启用冷却",
+    "type": "int",
+    "default": 45
+  },
+  "sign_reward": {
+    "description": "每日签到奖励金币",
+    "type": "int",
+    "default": 30
+  },
+  "sell_discount": {
+    "description": "卖鱼折扣系数，1.0 = 按估值原价回收",
+    "type": "float",
+    "default": 1.0
+  },
+  "enable_group_broadcast": {
+    "description": "是否在群聊播报传说/神话渔获",
+    "type": "bool",
+    "default": true
+  },
+  "backpack_base": {
+    "description": "初始鱼篓容量（不能无限囤货）",
+    "type": "int",
+    "default": 30
+  },
+  "backpack_upgrades": {
+    "description": "鱼篓扩容阶梯。每项格式：增量|价格",
+    "type": "list",
+    "default": [
+      "15|400",
+      "25|1100",
+      "30|2700"
+    ]
+  },
+  "aquarium_capacity": {
+    "description": "水族馆基础栏位数",
+    "type": "int",
+    "default": 8
+  },
+  "aquarium_bonus": {
+    "description": "水族馆取出/卖出的价值加成系数",
+    "type": "float",
+    "default": 1.2
+  },
+  "aquarium_slots": {
+    "description": "水族馆扩建栏位。每项格式：栏位名|解锁价格",
+    "type": "list",
+    "default": [
+      "精致缸|1600",
+      "生态缸|5400",
+      "深海缸|16000"
+    ]
+  },
+  "interactive_rarities": {
+    "description": "哪些品质需要玩「拉线」互动（逗号分隔）。默认只有最高两档",
+    "type": "string",
+    "default": "传说,神话"
+  },
+  "window_min": {
+    "description": "拉线时间窗口最短秒数（按鱼种难度缩放）",
+    "type": "int",
+    "default": 4
+  },
+  "window_max": {
+    "description": "拉线时间窗口最长秒数（按鱼种难度缩放）",
+    "type": "int",
+    "default": 8
+  },
+  "sweet_spot_width": {
+    "description": "完美拉线区间宽度占窗口的比例",
+    "type": "float",
+    "default": 0.34
+  },
+  "perfect_bonus": {
+    "description": "完美拉线的品质幸运加成",
+    "type": "float",
+    "default": 0.3
+  },
+  "good_bonus": {
+    "description": "良好拉线的品质幸运加成",
+    "type": "float",
+    "default": 0.1
+  },
+  "perfect_escape_factor": {
+    "description": "完美拉线时逃脱率折扣",
+    "type": "float",
+    "default": 0.3
+  },
+  "edge_escape_factor": {
+    "description": "压线时逃脱率倍数",
+    "type": "float",
+    "default": 1.6
+  },
+  "rarity_escape_chance": {
+    "description": "各品质基础逃脱率，格式「品质:概率」逗号分隔",
+    "type": "string",
+    "default": "传说:0.30,神话:0.42"
+  },
+  "feed_max_uses": {
+    "description": "同一条鱼最多投喂次数",
+    "type": "int",
+    "default": 10
+  },
+  "quality_weights": {
+    "description": "五档个体品质的出现权重（普通,优良,稀有,极品,传说）",
+    "type": "list",
+    "default": [
+      44,
+      28,
+      16,
+      9,
+      3
+    ]
+  },
+  "rarity_display_names": {
+    "description": "鱼种品质展示名，按稀有度从低到高（5 档）",
+    "type": "list",
+    "default": [
+      "常见",
+      "少见",
+      "稀有",
+      "传说",
+      "神话"
+    ]
+  },
+  "item_drop_chance": {
+    "description": "每次抛竿钓上「杂物」的概率（漂流瓶/海草/宝箱等）",
+    "type": "float",
+    "default": 0.14
+  },
+  "bottle_note_chance": {
+    "description": "漂流瓶里真的有纸条的概率（否则是空的）",
+    "type": "float",
+    "default": 0.3
+  },
+  "order_count": {
+    "description": "每日订单数量",
+    "type": "int",
+    "default": 3
+  },
+  "order_reward_mult": {
+    "description": "订单奖励相对卖店价的倍数（鼓励做订单而不是直接卖）",
+    "type": "float",
+    "default": 2.2
+  },
+  "order_unlock_level": {
+    "description": "解锁订单所需的等级",
+    "type": "int",
+    "default": 3
+  },
+  "order_refresh_min_hours": {
+    "description": "订单最短刷新间隔（小时）：到点自动换一批新订单",
+    "type": "int",
+    "default": 3
+  },
+  "order_refresh_max_hours": {
+    "description": "订单最长刷新间隔（小时）：在最短与最长之间随机",
+    "type": "int",
+    "default": 6
+  },
+  "rod_defs": {
+    "description": "鱼竿定义。每项格式：id|名称|emoji|价格|价值加成|幸运加成|描述",
+    "type": "list",
+    "default": [
+      "bamboo|竹竿|🎋|0|0.00|0.00|村口杂货铺送的，能用",
+      "carbon|碳素竿|🎣|400|0.08|0.03|轻巧顺手，新手进阶首选",
+      "stream|溪流竿|🪝|1600|0.15|0.05|韧性好，适合溪流与湖泊",
+      "dragon|龙纹竿|🐉|5400|0.28|0.11|竿身刻龙，专治大鱼",
+      "starlight|星辉竿|✨|11000|0.38|0.16|夜里会泛微光，深海也用得上",
+      "mythic|神话竿|🌈|22000|0.50|0.22|传说钓具，据说能引来神话之鱼"
+    ]
+  },
+  "location_defs": {
+    "description": "钓点定义。每项格式：id|名称|emoji|解锁等级|解锁金币|价值倍率|说明",
+    "type": "list",
+    "default": [
+      "novice|新手村|🏡|1|0|1.00|村口小池塘，水浅鱼小，胜在稳定",
+      "bamboo|竹林溪流|🎋|2|200|1.03|溪水从竹林间穿过，水浅但很活",
+      "canal|城中运河|🏙️|3|500|1.12|两岸是水泥堤，水里什么都有",
+      "lake|山间湖泊|🏞️|4|1000|1.10|水清鱼肥，鲶鱼黑鱼都在这儿",
+      "reed|芦苇荡|🌾|6|1500|1.13|密不透风的芦苇，蛙声一片",
+      "sea|近海渔场|🌊|8|3500|1.17|咸淡水交界，海货不少",
+      "dock|废弃码头|⚓|10|5000|1.21|生锈的栈桥下藏着大鱼",
+      "night|月下堤坝|🌉|13|8000|1.25|夜里灯火通明，夜行鱼会靠岸",
+      "mangrove|红树林|🌴|16|14000|1.29|盘根错节的根系间全是小生命",
+      "swamp|迷雾沼泽|🌫️|19|21000|1.34|阴森潮湿，藏着些怪东西",
+      "cave|地下暗河|🕳️|23|33000|1.40|终年不见光，鱼都白了眼",
+      "ruins|沉船遗迹|🚢|27|65000|1.46|锈迹斑斑的船舱成了鱼窝",
+      "abyss|深海海沟|🌑|31|95000|1.53|深不见底，神话鱼的故乡",
+      "trench|无光深渊|🌊|35|145000|1.60|压力大得能把人挤扁的地方",
+      "glacier|极地冰湖|🧊|40|230000|1.68|冰层下别有洞天，只有最老的钓手敢来",
+      "aurora|极光冰渊|❄️|45|450000|1.78|极光下的裂隙，据说通着别处"
+    ]
+  },
+  "transfer_min_level": {
+    "description": "赠送金币所需的等级（老手帮扶新手）",
+    "type": "int",
+    "default": 5
+  },
+  "transfer_tax": {
+    "description": "赠送金币的手续费比例（0.1 = 抽 10%，作为金币回收）",
+    "type": "float",
+    "default": 0.1
+  },
+  "transfer_max_once": {
+    "description": "单次最多赠送多少金币",
+    "type": "int",
+    "default": 1000
+  },
+  "transfer_daily_limit": {
+    "description": "每天最多赠送多少次",
+    "type": "int",
+    "default": 3
+  },
+  "transfer_daily_cap": {
+    "description": "每天最多赠送出多少金币",
+    "type": "int",
+    "default": 3000
+  },
+  "enable_weather": {
+    "description": "启用天气与时段系统（不同天气影响鱼的出现率与拉线难度）",
+    "type": "bool",
+    "default": true
+  },
+  "enable_market": {
+    "description": "启用鱼市行情波动（每天 1~2 种鱼高价回收）",
+    "type": "bool",
+    "default": true
+  },
+  "market_boost_min": {
+    "description": "今日高价的最低加成（1.5 = 卖价 +50%）",
+    "type": "float",
+    "default": 1.5
+  },
+  "market_boost_max": {
+    "description": "今日高价的最高加成",
+    "type": "float",
+    "default": 2.2
+  },
+  "variant_chance": {
+    "description": "钓到变异个体的概率（0.005 = 千分之五）",
+    "type": "float",
+    "default": 0.005
+  },
+  "easter_egg_chance": {
+    "description": "上鱼后追加小惊喜的概率（硬币/珍珠/鱼鳞等，游戏里不显示概率）",
+    "type": "float",
+    "default": 0.05
+  },
+  "story_chance": {
+    "description": "抛竿时出现随机小插曲的概率（水面异动/旧渔网/漂来的木箱等）",
+    "type": "float",
+    "default": 0.06
+  },
+  "codex_bonus_per_rarity": {
+    "description": "集齐某一鱼种品质后获得的永久价值加成（按品质从低到高，5 档）",
+    "type": "list",
+    "default": [
+      0.03,
+      0.05,
+      0.08,
+      0.12,
+      0.2
+    ]
+  },
+  "pond_income_per_hour": {
+    "description": "鱼塘（水族馆）挂机收益：每小时产出占馆藏估值的比例",
+    "type": "float",
+    "default": 0.015
+  },
+  "pond_income_cap_hours": {
+    "description": "鱼塘挂机收益最多累积多少小时（超过不再增加）",
+    "type": "int",
+    "default": 12
+  },
+  "pond_income_cap_coins": {
+    "description": "鱼塘挂机单次领取的金币上限",
+    "type": "int",
+    "default": 3000
+  },
+  "bait_defs": {
+    "description": "鱼饵定义。每项格式：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重倍数(5档逗号分隔)|说明",
+    "type": "list",
+    "default": [
+      "none|空钩|🪝|0|0|0|1,1,1,1,1|什么也不挂，全凭本事（免费）",
+      "bread|面包屑|🍞|1|10|0.06|1,1.1,1.3,1.4,1.5|厨房剩的，便宜大碗",
+      "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|万用饵，两块钱一钩",
+      "bloodworm|红虫|🪰|4|5|0.22|1,1.4,2.0,2.4,3.0|小鱼最爱，上钩快",
+      "corn|玉米粒|🌽|6|5|0.30|1,1.5,2.3,3.0,4.0|素饵之王，草鱼克星",
+      "shrimp|虾饵|🦐|12|3|0.40|1,1.8,2.6,3.6,4.6|肉食鱼最爱，稀有度明显上升",
+      "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|活蹦乱跳，专勾大鱼",
+      "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|祖传配方，闻着就不一样"
+    ]
+  },
+  "item_defs": {
+    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)。效果键：meat/spirit/sheen/quality_up/value_up",
+    "type": "list",
+    "default": [
+      "feed_basic|普通饲料|🌾|20|打基础的口粮|meat=2;spirit=1",
+      "feed_premium|高级饲料|🍖|80|营养均衡，长得快|meat=5;spirit=4;sheen=3",
+      "feed_divine|仙露|💧|300|传说中的养鱼圣品|meat=10;spirit=10;sheen=10;value_up=150",
+      "pill_quality|洗髓丹|🔮|500|激发血脉，更容易出好个体|quality_up=0.30",
+      "coral_deco|珊瑚造景|🪸|260|水族馆装饰，提升馆藏价值|value_up=120"
+    ]
+  },
+  "data_status": {
+    "description": "数据状态（插件回写，只读参考）",
+    "type": "text",
+    "default": "",
+    "hint": "保存或重载后这里会显示：玩家数、存档数量、最近快照、存档目录、上次操作结果。"
+  },
+  "data_action": {
+    "description": "数据操作：选好后点保存即执行（执行完自动复位为「无」）",
+    "type": "string",
+    "default": "无",
+    "options": [
+      "无",
+      "立即存档",
+      "导出全部玩家",
+      "导出单个玩家",
+      "从快照恢复",
+      "恢复单个玩家",
+      "导入上传的存档",
+      "清除单个玩家",
+      "清除全部玩家数据"
+    ],
+    "hint": "「清除」「恢复」属于危险操作，必须同时勾选下面的「我已确认」。"
+  },
+  "data_target": {
+    "description": "目标：玩家 ID（导出/清除单个玩家）、快照文件名（从快照恢复），或「快照名/玩家ID」（恢复单个玩家；快照名留空=最新）",
+    "type": "string",
+    "default": "",
+    "hint": "快照文件名形如 2026-09-17.json 或 2026-09-17_0600.json，可在 backups/ 里看到。"
+  },
+  "data_confirm": {
+    "description": "我已确认：执行危险操作（清除/恢复）时必须勾上",
+    "type": "bool",
+    "default": false
+  },
+  "backup_import_file": {
+    "description": "上传存档文件（导入用）：把存档 JSON 拖到这里",
+    "type": "file",
+    "file_types": [
+      "json"
+    ],
+    "default": [],
+    "hint": "支持两种文件：整份快照（含 players 字段）或单个玩家存档（含 user_id 字段）。上传并保存后，在「数据操作」里选「导入上传的存档」。"
+  },
+  "backup_export_file": {
+    "description": "导出存档文件（下载用）：插件导出后会出现在这里，点文件名下载",
+    "type": "file",
+    "file_types": [
+      "json"
+    ],
+    "default": [],
+    "hint": "由插件写入，不用手动上传。"
+  },
+  "enable_auto_backup": {
+    "description": "开启自动存档（按时存档 + 每日存档）",
+    "type": "bool",
+    "default": true
+  },
+  "backup_daily_hour": {
+    "description": "每日存档时间点（0-23 点）：当天过了这个点就存一份，一天一份且不覆盖",
+    "type": "int",
+    "default": 4
+  },
+  "backup_interval_hours": {
+    "description": "按时存档间隔（小时，0=关闭）：每隔这么久存一份独立快照",
+    "type": "int",
+    "default": 6
+  },
+  "backup_keep_daily": {
+    "description": "每日存档保留天数（0=永久保留）",
+    "type": "int",
+    "default": 30
+  },
+  "backup_keep_interval": {
+    "description": "按时存档保留份数（0=永久保留）",
+    "type": "int",
+    "default": 20
+  },
+  "backup_dir": {
+    "description": "存档目录（留空 = 插件目录下的 backups/）",
+    "type": "string",
+    "default": "",
+    "hint": "默认 <插件目录>/backups/，里面有 README.md 说明每个子目录的用途。"
+  },
+  "button_mode": {
+    "description": "QQ 官方机器人按钮发送形态（排查按钮不显示时用）",
+    "type": "string",
+    "default": "自动",
+    "options": [
+      "自动",
+      "markdown",
+      "text",
+      "关闭"
+    ],
+    "hint": "自动 = 先按官方示例用 markdown+keyboard，失败再试纯文本+keyboard；关闭 = 完全不发按钮（一直用纯文本）。"
+  },
+  "content_auto_merge": {
+    "description": "旧配置自动合并新版内容（新钓点/新鱼饵/新鱼竿/新道具自动补上）",
+    "type": "bool",
+    "default": true,
+    "hint": "只补「配置里没有的」条目，你自己改过的条目一律保留；关掉后必须手动重置配置才会看到新内容。"
+  },
+  "level_xp_base": {
+    "description": "升级曲线：每级基础竿数（升到 L 级 = base×(L-1) + growth×(L-1)²）",
+    "type": "float",
+    "default": 5.0
+  },
+  "level_xp_growth": {
+    "description": "升级曲线：二次增长系数（调大 → 后期每一级要的更多）",
+    "type": "float",
+    "default": 0.6
+  },
+  "location_codex_gate": {
+    "description": "前往下一个钓点需要上一个钓点图鉴开到多少比例（0.8 = 八成鱼种，隐藏生物不算）",
+    "type": "float",
+    "default": 0.8
+  },
+  "bait_hook_rates": {
+    "description": "各鱼饵的上钩率（空钩极低，带饵才容易上鱼；格式 id:概率,逗号分隔）",
+    "type": "string",
+    "default": "none:0.30,bread:0.72,worm:0.80,bloodworm:0.86,corn:0.90,shrimp:0.94,livebait:0.96,secret:1.0"
+  }
+}

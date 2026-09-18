@@ -1,0 +1,41 @@
+# =============================================================================
+# 群钓鱼插件 · 一键部署（AstrBot + 本插件）
+#
+#   1. cp .env.example .env  然后填好机器人凭据
+#   2. docker compose up -d --build
+#   3. 浏览器打开 http://<服务器IP>:6185 进 AstrBot 管理面板
+#
+# 数据（玩家存档、KV 数据库、插件配置）全部在 ./data 里，删容器不会丢。
+# =============================================================================
+services:
+  astrbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: astrbot-fishing:latest
+    container_name: astrbot-fishing
+    restart: unless-stopped
+
+    # .env 里的凭据会变成容器环境变量，再由 entrypoint 注入
+    # data/cmd_config.json（AstrBot 自己不读 .env）
+    env_file:
+      - .env
+
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      # AstrBot 原生支持的变量：只在「首次初始化」时决定面板密码
+      ASTRBOT_DASHBOARD_INITIAL_PASSWORD: ${ASTRBOT_DASHBOARD_INITIAL_PASSWORD:-}
+
+    ports:
+      - "${DASHBOARD_PORT:-6185}:6185"   # AstrBot 管理面板
+      - "${ONEBOT_WS_PORT:-6199}:6199"   # OneBot v11 反向 WS（NapCat / Lagrange 等连这里）
+
+    volumes:
+      # 整个数据目录持久化：data_v4.db（玩家数据）、config/（插件配置）、
+      # plugins/（插件本体，entrypoint 会把镜像里的插件同步进来）、backups/
+      - ./data:/AstrBot/data
+      - /etc/localtime:/etc/localtime:ro
+
+    # 想强制用镜像里的插件覆盖数据卷里的旧版本时打开：
+    # environment:
+    #   FISHING_FORCE_SYNC: "1"
