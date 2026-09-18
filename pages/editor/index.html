@@ -955,11 +955,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
    * 自动改用 /api/ 前缀重试一次，并把成功的那种拼法记住，
    * 后续请求直接复用（只探测一次，不会每次都双发）。
    */
-  // 候选前缀：不猜，穷举。第一个成功的记住，后续请求直接用那一种。
-  // （实测：不同 AstrBot 版本/入口对 endpoint 的拼法不一样，
-  //   直接问「这个路由存不存在」比读源码猜前缀可靠。）
   var API_CANDIDATES = ["", "/api/", "/api/v1/"];
+  // 记住首次探测成功的那一组（前缀 + 是否需要用「纯插件名」），后续请求直接复用。
   var API_PREFIX = null;
+  var API_PLAIN_NAME = false;
 
   function rawBridgeCall(kind, endpoint, a, b) {
     var call;
@@ -969,6 +968,21 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     return Promise.resolve(call);
   }
 
+  /** 把 plugins/<作者>/<插件名>/... 换成 plugins/<插件名>/...（配置接口只认纯插件名）。 */
+  function plainNameVariant(endpoint) {
+    var m = endpoint.match(/^(.*?plugins\/)[^\/]+\/([^\/]+)(\/.*)$/);
+    return m ? m[1] + m[2] + m[3] : endpoint;
+  }
+
+  function shortErr(err) {
+    var d = err && err.response && err.response.data;
+    var msg =
+      (d && (d.message || d.error || d.detail)) ||
+      (err && err.message) ||
+      String(err || "未知错误");
+    return String(msg).slice(0, 60);
+  }
+
   function bridgeRequest(kind, endpoint, a, b) {
     if (!sdk) {
       var off = new Error("离线预览：没有 AstrBot 桥接，不会真正发送");
@@ -976,48 +990,54 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       return Promise.reject(off);
     }
     if (API_PREFIX !== null) {
-      return rawBridgeCall(kind, API_PREFIX + endpoint, a, b);
+      var ep0 = API_PLAIN_NAME ? plainNameVariant(endpoint) : endpoint;
+      return rawBridgeCall(kind, API_PREFIX + ep0, a, b);
     }
     if (endpoint.charAt(0) === "/") {
       API_PREFIX = "";
       return rawBridgeCall(kind, endpoint, a, b);
     }
+
+    // 首次：穷举「前缀 × plugin_id 形式」，第一个成功的记住
+    var combos = [];
+    [false, true].forEach(function (plain) {
+      var ep = plain ? plainNameVariant(endpoint) : endpoint;
+      if (combos.some(function (c) { return c.path.endsWith(ep) && c.prefix === ""; }) && ep === endpoint) return;
+      API_CANDIDATES.forEach(function (pre) {
+        var path = pre + ep;
+        if (!combos.some(function (c) { return c.path === path; })) {
+          combos.push({ prefix: pre, plain: plain, path: path });
+        }
+      });
+    });
+
     var attempts = [];
-    var shortErr = function (err) {
-      var d = err && err.response && err.response.data;
-      var msg =
-        (d && (d.message || d.error || d.detail)) ||
-        (err && err.message) ||
-        String(err || "未知错误");
-      return String(msg).slice(0, 60);
-    };
     var attempt = function (index, firstError) {
-      if (index >= API_CANDIDATES.length) {
-        // 全部失败：把「每个候选路径 + 它各自的错误」拼成一条能直接定位的报错，
-        // 这样在页面上就能看出到底是缺前缀、缺鉴权，还是 plugin_id 形式不对。
+      if (index >= combos.length) {
         var err = firstError || new Error("接口路径全部不可用");
-        var detail = attempts
-          .map(function (item) {
-            return item.endpoint + " → " + item.error;
-          })
-          .join("；");
-        err.message = "试过 " + attempts.length + " 个路径都失败：" + detail;
+        err.message =
+          "试过 " + attempts.length + " 个路径都失败：" +
+          attempts
+            .map(function (item) { return item.endpoint + " → " + item.error; })
+            .join("；");
         err.attempts = attempts;
         return Promise.reject(err);
       }
-      var candidate = API_CANDIDATES[index] + endpoint;
-      return rawBridgeCall(kind, candidate, a, b).then(
+      var combo = combos[index];
+      return rawBridgeCall(kind, combo.path, a, b).then(
         function (res) {
-          API_PREFIX = API_CANDIDATES[index];
+          API_PREFIX = combo.prefix;
+          API_PLAIN_NAME = combo.plain;
           return res;
         },
         function (err) {
-          attempts.push({ endpoint: candidate, error: shortErr(err) });
+          attempts.push({ endpoint: combo.path, error: shortErr(err) });
           return attempt(index + 1, firstError || err);
         },
       );
     };
     return attempt(0, null);
+  }
   }
 
   /** 把各种失败形态整理成「人话 + 能定位的信息」（绝不静默失败）。 */
