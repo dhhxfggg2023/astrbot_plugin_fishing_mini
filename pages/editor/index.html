@@ -955,6 +955,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
    * 自动改用 /api/ 前缀重试一次，并把成功的那种拼法记住，
    * 后续请求直接复用（只探测一次，不会每次都双发）。
    */
+  // 候选前缀：不猜，穷举。第一个成功的记住，后续请求直接用那一种。
+  // （实测：不同 AstrBot 版本/入口对 endpoint 的拼法不一样，
+  //   直接问「这个路由存不存在」比读源码猜前缀可靠。）
+  var API_CANDIDATES = ["", "/api", "/api/v1"];
   var API_PREFIX = null;
 
   function rawBridgeCall(kind, endpoint, a, b) {
@@ -963,11 +967,6 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     else if (kind === "post") call = sdk.apiPost(endpoint, a || {});
     else call = sdk.upload(endpoint, a, b);
     return Promise.resolve(call);
-  }
-
-  function isRouteMissing(err) {
-    var msg = String((err && err.message) || err || "");
-    return /未找到该路由|not\s*found|404/i.test(msg);
   }
 
   function bridgeRequest(kind, endpoint, a, b) {
@@ -983,28 +982,27 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       API_PREFIX = "";
       return rawBridgeCall(kind, endpoint, a, b);
     }
-    try {
-      return rawBridgeCall(kind, endpoint, a, b).then(
+    var attempt = function (index, firstError) {
+      if (index >= API_CANDIDATES.length) {
+        // 全部失败：把第一个错误抛出去（它最能说明问题），并附上试过的路径
+        var err = firstError || new Error("接口路径全部不可用");
+        err.triedEndpoints = API_CANDIDATES.map(function (pre) {
+          return pre + endpoint;
+        });
+        return Promise.reject(err);
+      }
+      var candidate = API_CANDIDATES[index] + endpoint;
+      return rawBridgeCall(kind, candidate, a, b).then(
         function (res) {
-          API_PREFIX = "";                       // 原样拼法可用
+          API_PREFIX = API_CANDIDATES[index];
           return res;
         },
         function (err) {
-          if (!isRouteMissing(err)) throw err;   // 其它错误（401/500）不重试
-          return rawBridgeCall(kind, "/api/" + endpoint, a, b).then(
-            function (res) {
-              API_PREFIX = "/api/";               // 需要完整 API 前缀
-              return res;
-            },
-            function (err2) {
-              throw err2;                        // 两种都不行 → 如实抛错
-            },
-          );
+          return attempt(index + 1, firstError || err);
         },
       );
-    } catch (e) {
-      return Promise.reject(e);
-    }
+    };
+    return attempt(0, null);
   }
 
   /** 把各种失败形态整理成「人话 + 能定位的信息」（绝不静默失败）。 */
