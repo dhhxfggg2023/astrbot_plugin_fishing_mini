@@ -23,6 +23,7 @@ _SANDBOX_BACKUP_DIR = os.path.join(_SANDBOX_ROOT, "plugin_dir", "backups")
 
 import asyncio  # noqa: E402
 import collections  # noqa: E402
+import hashlib  # noqa: E402
 import importlib.util  # noqa: E402
 import json  # noqa: E402
 import sys  # noqa: E402
@@ -4362,6 +4363,625 @@ async def main():
         # 背包是「列满一页」的展示型指令，允许更长
         limit = 56 if args[0] == "背包" else 40
         check(n <= limit, f"/钓鱼 {args[0]} 输出 {n} 行（≤{limit}）")
+
+    # =====================================================================
+    print("\n[14] 命令别名 command_aliases（v1.10.0）")
+
+    # ---- 14.1 内置写法总表：自检 + 与真实分派链的一致性 ----
+    kw = mod.SUBCOMMAND_KEYWORDS
+    check(len(kw) == 26, f"子命令总表 {len(kw)} 行")
+    check(all(name in words for name, words in kw.items()), "每一行都含自己的规范名")
+    _seen: dict[str, int] = {}
+    for _words in kw.values():
+        for _w in _words:
+            _seen[_w] = _seen.get(_w, 0) + 1
+    _dup = [w for w, n in _seen.items() if n > 1]
+    check(not _dup, f"同一个写法只出现在一张行里（重复：{_dup or '无'}）")
+    _flat = {w for words in kw.values() for w in words}
+    check(mod.BUILTIN_COMMAND_WORDS == _flat, f"内置写法集合 {len(_flat)} 个")
+
+    plugin = make_plugin()
+    ev = FakeEvent("99003")
+    _bad = []
+    for _words in kw.values():
+        for _w in _words:
+            _out = await cmd(plugin, ev, _w)
+            if "不认识" in text_of(_out):
+                _bad.append(_w)
+    check(not _bad, f"总表里 {len(_flat)} 个写法都能派到子命令（失败：{_bad or '无'}）")
+
+    # ---- 14.2 默认值 = 现有别名，且默认配置下别名表为空（行为逐字不变）----
+    _schema = json.loads(
+        (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
+    )
+    _text = mod._default_command_aliases_text()
+    check(mod.DEFAULTS["command_aliases"] == _text, "DEFAULTS 的别名默认值由总表现算")
+    check(_schema["command_aliases"]["default"] == _text, "schema 默认值与代码生成的一致")
+    check(
+        _schema["custom_commands"]["default"] == "" == mod.DEFAULTS["custom_commands"],
+        "自定义命令默认值为空（不强加任何新命令）",
+    )
+    _merged, _problems = mod.CALC._build_command_aliases(_text, kw)
+    check(
+        _merged == {} and _problems == [],
+        f"解析默认值 = 零新增别名、零问题（{_merged}｜{_problems[:1]}）",
+    )
+    check(
+        "command_aliases" in mod.DEFAULTS_SYNC_EXCLUDE_KEYS
+        and "custom_commands" in mod.DEFAULTS_SYNC_EXCLUDE_KEYS,
+        "两张命令表不参与默认值同步（升级不覆盖站长写的命令）",
+    )
+    check(
+        "command_aliases" not in mod._synced_default_keys()
+        and "custom_commands" not in mod._synced_default_keys(),
+        "两张命令表不在同步键列表里",
+    )
+    check(
+        len(_text.splitlines()) == len(kw)
+        and all(f"{_name}|" in _text for _name in kw),
+        "默认值逐行覆盖全部 26 个子命令",
+    )
+
+    # ---- 14.3 解析容错：写坏的行只跳过，不崩 ----
+    _m, _p = mod.CALC._build_command_aliases("背包|仓库,行囊", kw)
+    check(_m == {"仓库": "背包", "行囊": "背包"} and not _p, f"正常一行 -> {_m}")
+    _m, _p = mod.CALC._build_command_aliases("背包｜仓库，行囊、包袱", kw)
+    check(
+        _m == {"仓库": "背包", "行囊": "背包", "包袱": "背包"} and not _p,
+        f"全角竖线/逗号/顿号都认 -> {sorted(_m)}",
+    )
+    _m, _p = mod.CALC._build_command_aliases(
+        "# 注释行\n\n背包|仓库\n   \n商店|铺子", kw
+    )
+    check(_m == {"仓库": "背包", "铺子": "商店"} and not _p, f"注释与空行被忽略 -> {_m}")
+    _m, _p = mod.CALC._build_command_aliases("背包|包,bag", kw)
+    check(_m == {} and not _p, "写内置写法 = 静默忽略（本来就有效，不报警）")
+    _m, _p = mod.CALC._build_command_aliases("商店|背包", kw)
+    check(
+        _m == {} and _p and "背包" in _p[0],
+        f"别名抢占别的规范名 -> 跳过并告警：{_p[:1]}",
+    )
+    _m, _p = mod.CALC._build_command_aliases("背包|道具", kw)
+    check(_m == {} and _p and "道具" in _p[0], f"别名抢占别的内置写法 -> 跳过：{_p[:1]}")
+    _m, _p = mod.CALC._build_command_aliases("钱包|钱袋", kw)
+    check(_m == {} and _p and "不存在" in _p[0], f"目标子命令不存在 -> 跳过：{_p[:1]}")
+    _m, _p = mod.CALC._build_command_aliases("背包|仓库\n商店|仓库", kw)
+    check(
+        _m == {"仓库": "背包"} and _p and "先写" in _p[0],
+        f"两行争一个别名 -> 先到先得：{_m}｜{_p[:1]}",
+    )
+    _m, _p = mod.CALC._build_command_aliases("背包|蚯蚓", kw, reserved={"蚯蚓"})
+    check(_m == {} and _p and "鱼饵" in _p[0], f"与鱼饵重名 -> 跳过：{_p[:1]}")
+    for _bad_line in ("背包", "背包|", "|仓库", "背包|1", "背包|两 个", "背包|" + "太长" * 7):
+        _m, _p = mod.CALC._build_command_aliases(_bad_line, kw)
+        if _m or not _p:
+            check(False, f"坏行应被跳过：{_bad_line} -> {_m}")
+    check(True, "坏行（缺竖线/空别名/纯数字/带空格/超长）全部跳过")
+    _m, _p = mod.CALC._build_command_aliases(
+        "背包|" + ",".join(f"别名{i}" for i in range(25)), kw
+    )
+    check(
+        len(_m) == mod.CALC.COMMAND_ALIAS_MAX_PER_ROW and _p,
+        f"一行别名超上限 -> 只留 {mod.CALC.COMMAND_ALIAS_MAX_PER_ROW} 个并告警",
+    )
+    _m, _p = mod.CALC._build_command_aliases("", kw)
+    check(_m == {} and not _p, "留空 = 没有任何新增别名（内置写法照常）")
+
+    # ---- 14.4 别名真的能派到对应子命令 ----
+    cfg = dict(_CFG)
+    cfg["command_aliases"] = _text + "\n背包|仓库,行囊\n档案|小金库"
+    plugin = make_plugin(cfg)
+    check(
+        mod.COMMAND_ALIASES == {"仓库": "背包", "行囊": "背包", "小金库": "档案"},
+        f"运行时别名表 -> {mod.COMMAND_ALIASES}",
+    )
+    _base = text_of(await cmd(plugin, ev, "背包"))
+    _alias = text_of(await cmd(plugin, ev, "仓库"))
+    check(_alias == _base, "别名输出与规范子命令**逐字一致**（/钓鱼 仓库 == /钓鱼 背包）")
+    _alias2 = text_of(await cmd(plugin, ev, "行囊"))
+    check(_alias2 == _base, "/钓鱼 行囊 == /钓鱼 背包")
+    _dir = text_of(await cmd(plugin, ev, "档案"))
+    check(text_of(await cmd(plugin, ev, "小金库")) == _dir, "/钓鱼 小金库 == /钓鱼 档案")
+    check(
+        text_of(await cmd(plugin, ev, "仓库", "2")) == text_of(await cmd(plugin, ev, "背包", "2")),
+        "别名带参数（/钓鱼 仓库 2 == /钓鱼 背包 2）",
+    )
+    check(
+        text_of(await cmd(plugin, ev, "仓库2")) == text_of(await cmd(plugin, ev, "背包", "2")),
+        "别名也认少打空格（/钓鱼 仓库2 自动拆成 仓库 + 2）",
+    )
+    _m, _p = mod.CALC._build_command_aliases(_text + "\n拉|拽线", kw)
+    check(_m == {"拽线": "拉"} and not _p, f"可以给「拉」这类前置分支加别名：{_m}")
+    check(
+        mod.CALC._build_command_aliases("锁定|拉", kw)[0] == {},
+        "但不许把内置写法「拉」抢给别的子命令",
+    )
+    cfg["command_aliases"] = _text + "\n拉|拽线"
+    plugin = make_plugin(cfg)
+    check(
+        "没有鱼咬钩" in text_of(await cmd(plugin, ev, "拽线")),
+        "指到「拉」的新别名照样走拉线分支",
+    )
+    cfg["command_aliases"] = "乱写的配置\n背包|"
+    plugin = make_plugin(cfg)
+    check(
+        mod.COMMAND_ALIASES == {} and "不认识" in text_of(await cmd(plugin, ev, "乱写的配置")),
+        "全是坏行 -> 别名表为空、内置命令不受影响",
+    )
+    check(
+        text_of(await cmd(plugin, ev, "背包")) == _base,
+        "全坏配置下内置命令输出不变",
+    )
+
+    # =====================================================================
+    print("\n[15] 自定义命令 custom_commands（v1.10.0）")
+
+    # ---- 15.1 解析与校验 ----
+    _cmds, _p = mod.CALC._parse_custom_commands(
+        "快捷签到|执行:签到\n领奖|发送:你好\n礼包|执行:签到;背包\n查鱼|执行:查 鲤鱼",
+        kw,
+    )
+    check(
+        _cmds == {
+            "快捷签到": ("执行", "签到"),
+            "领奖": ("发送", "你好"),
+            "礼包": ("执行", "签到;背包"),
+            "查鱼": ("执行", "查 鲤鱼"),
+        } and not _p,
+        f"正常四条 -> {_cmds}",
+    )
+    _cmds, _p = mod.CALC._parse_custom_commands("领奖|send:hi\n领奖2|发送：你好", kw)
+    check(_cmds == {"领奖": ("发送", "hi"), "领奖2": ("发送", "你好")} and not _p,
+          f"英文动作与全角冒号都认 -> {_cmds}")
+    _cmds, _p = mod.CALC._parse_custom_commands("背包|发送:抢内置", kw)
+    check(_cmds == {} and _p and "内置" in _p[0], f"与内置子命令重名 -> 跳过：{_p[:1]}")
+    _cmds, _p = mod.CALC._parse_custom_commands("仓库|发送:x", kw, reserved={"仓库"})
+    check(_cmds == {} and _p and "别名" in _p[0], f"与别名重名 -> 跳过：{_p[:1]}")
+    _cmds, _p = mod.CALC._parse_custom_commands(
+        "甲|执行:乙\n乙|发送:我是乙", kw, reserved={"甲", "乙"}
+    )
+    check(
+        _cmds == {} and len(_p) == 2,
+        f"自定义命令互相调用被禁止（连名字都过不了别名冲突）：{_p}",
+    )
+    _cmds, _p = mod.CALC._parse_custom_commands("甲|执行:乙\n乙|执行:甲", kw)
+    check(_cmds == {} and len(_p) == 2, f"互指的两条都跳过：{_p}")
+    _cmds, _p = mod.CALC._parse_custom_commands("甲|执行:乙", kw)
+    check(_cmds == {} and _p and "不存在" in _p[0], f"执行: 指向不存在的子命令 -> 跳过：{_p[:1]}")
+    _cmds, _p = mod.CALC._parse_custom_commands("甲|执行:签到;乱写的", kw)
+    check(_cmds == {} and _p and "不存在" in _p[0], f"执行: 里有一环写错 -> 整条跳过：{_p[:1]}")
+    _cmds, _p = mod.CALC._parse_custom_commands("甲|执行:查 不存在的鱼", kw)
+    check(
+        _cmds == {"甲": ("执行", "查 不存在的鱼")} and not _p,
+        "执行: 只要子命令本身合法就放行（参数里的名字由运行时兜底）",
+    )
+    for _bad_cmd in ("|发送:x", "没有动作", "甲|乱动作:x", "甲|发送:", "甲 乙|发送:x", "123|发送:x"):
+        _cmds, _p = mod.CALC._parse_custom_commands(_bad_cmd, kw)
+        if _cmds or not _p:
+            check(False, f"坏配置应被跳过：{_bad_cmd} -> {_cmds}")
+    check(True, "坏配置（空名/缺动作/动作不认识/空内容/带空格/纯数字）全部跳过")
+    _long = "长" + "名" * mod.CALC.CUSTOM_COMMAND_NAME_MAX
+    _cmds, _p = mod.CALC._parse_custom_commands(f"{_long}|发送:x", kw)
+    check(_cmds == {} and _p, "命令名超长 -> 跳过")
+    _cmds, _p = mod.CALC._parse_custom_commands(
+        "甲|发送:" + "字" * (mod.CALC.CUSTOM_COMMAND_BODY_MAX + 1), kw
+    )
+    check(_cmds == {} and _p, "内容超长 -> 跳过")
+    _many = "\n".join(f"命令{i}|发送:x" for i in range(mod.CALC.CUSTOM_COMMAND_MAX_ROWS + 3))
+    _cmds, _p = mod.CALC._parse_custom_commands(_many, kw)
+    check(
+        len(_cmds) == mod.CALC.CUSTOM_COMMAND_MAX_ROWS and _p,
+        f"条数上限 {mod.CALC.CUSTOM_COMMAND_MAX_ROWS} 条（多的忽略并告警）",
+    )
+    _cmds, _p = mod.CALC._parse_custom_commands("", kw)
+    check(_cmds == {} and not _p, "留空 = 没有自定义命令（内置命令不受影响）")
+    check(
+        mod.CALC._fill_custom_text("金币={金币} 未知={没这个}", {"金币": 12})
+        == "金币=12 未知={没这个}",
+        "占位符替换：认识的替换、不认识的原样保留",
+    )
+
+    # ---- 15.2 自定义命令真的能跑，且与内置命令等价 ----
+    cfg = dict(_CFG)
+    cfg["custom_commands"] = (
+        "快捷签到|执行:签到\n"
+        "礼包|执行:签到;背包\n"
+        "余额|发送:你现在有 {金币} 金币，等级 {等级}，共钓到 {钓获} 条\n"
+        "查鱼|执行:查 鲤鱼\n"
+    )
+    plugin = make_plugin(cfg)
+    check(
+        set(mod.CUSTOM_COMMANDS) == {"快捷签到", "礼包", "余额", "查鱼"},
+        f"运行时自定义命令表 -> {sorted(mod.CUSTOM_COMMANDS)}",
+    )
+    p = await plugin._load_player(ev.get_sender_id())
+    p["gold"] = 4321
+    await plugin._save_player(p)
+    _sign = text_of(await cmd(plugin, ev, "签到"))
+    check(
+        text_of(await cmd(plugin, ev, "快捷签到")) == _sign,
+        "执行:签到 的输出与 /钓鱼 签到 逐字一致",
+    )
+    _pack = text_of(await cmd(plugin, ev, "礼包"))
+    check(
+        _pack.startswith(_sign) and text_of(await cmd(plugin, ev, "背包")) in _pack,
+        "执行:签到;背包 依次跑两条内置子命令",
+    )
+    _bal = text_of(await cmd(plugin, ev, "余额"))
+    check("4321" in _bal, f"占位符 {{{{金币}}}} 取到玩家真实数据 -> {_bal.splitlines()[0]}")
+    check(
+        text_of(await cmd(plugin, ev, "查鱼")) == text_of(await cmd(plugin, ev, "查", "鲤鱼")),
+        "执行:查 鲤鱼 与 /钓鱼 查 鲤鱼 逐字一致",
+    )
+    check(
+        text_of(await cmd(plugin, ev, "余额")) == _bal,
+        "纯回复型自定义命令可重复执行（没有副作用）",
+    )
+
+    # ---- 15.3 内置永远优先、防递归、坏配置不打扰内置 ----
+    cfg = dict(_CFG)
+    cfg["custom_commands"] = "背包|发送:我要抢背包\n甲|执行:甲\n乙|执行:乱写的\n好命令|发送:ok"
+    plugin = make_plugin(cfg)
+    check(
+        set(mod.CUSTOM_COMMANDS) == {"好命令"},
+        f"抢内置/自指/执行坏子命令的都跳过（剩下 {sorted(mod.CUSTOM_COMMANDS)}）",
+    )
+    check(text_of(await cmd(plugin, ev, "背包")) == _base, "内置「背包」没被自定义命令抢走")
+    check("ok" in text_of(await cmd(plugin, ev, "好命令")), "合法的自定义命令照常工作")
+    cfg["custom_commands"] = "甲|执行:乙\n乙|执行:甲\n循环|执行:循环"
+    plugin = make_plugin(cfg)
+    check(mod.CUSTOM_COMMANDS == {}, "会自我/互相调用的写法一条都不生效（防递归）")
+    check(
+        "不认识" in text_of(await cmd(plugin, ev, "甲")),
+        "被跳过的命令名回到「不认识」提示，行为与未知命令一致",
+    )
+    cfg["command_aliases"] = _text + "\n背包|仓库"
+    cfg["custom_commands"] = "仓库|发送:抢别名"
+    plugin = make_plugin(cfg)
+    check(
+        mod.COMMAND_ALIASES == {"仓库": "背包"} and mod.CUSTOM_COMMANDS == {},
+        "别名与自定义命令重名 -> 别名赢，自定义命令跳过并告警",
+    )
+    check(text_of(await cmd(plugin, ev, "仓库")) == _base, "重名时 /钓鱼 仓库 走别名（内置行为可预期）")
+
+    make_plugin()   # 复位成默认配置，避免影响别的用例
+
+    # =====================================================================
+    print("\n[16] 配置面板瘦身：只留 3 条救生索（v1.10.0）")
+
+    _schema = json.loads(
+        (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
+    )
+    check(
+        len(_schema) == 96,
+        f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标）",
+    )
+    _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
+    check(
+        _visible == ["content_tables_hint", "data_status", "defaults_sync_mode"],
+        f"面板只剩 3 条救生索：{_visible}",
+    )
+    _hidden = [k for k, v in _schema.items() if v.get("invisible")]
+    check(len(_hidden) == 93, f"其余 {len(_hidden)} 项全部 invisible")
+    check(
+        all(k in mod.DEFAULTS for k in _visible),
+        "3 条救生索都在 DEFAULTS 里（不是凭空写的）",
+    )
+    check(
+        mod.DEFAULTS["content_tables_hint"] == "",
+        "路标是纯说明项（默认值为空，没有任何代码读它）",
+    )
+    check(
+        "content_tables_hint" not in mod._synced_default_keys(),
+        "路标不参与默认值同步",
+    )
+    _synced_hidden = [k for k in _hidden if k in mod._synced_default_keys()]
+    check(
+        len(_synced_hidden) > 0 and "fish_defs" not in _synced_hidden,
+        f"「隐藏」与「不参与同步」是两码事：隐藏项里 {len(_synced_hidden)} 项照样参与数值同步，"
+        f"内容表不参与",
+    )
+
+    # invisible 只是「面板不显示」，配置里必须照样有、而且改完存得住
+    from astrbot.core.config.astrbot_config import AstrBotConfig
+
+    _path = os.path.join(_SANDBOX_ROOT, "test_invisible.json")
+    if os.path.exists(_path):
+        os.remove(_path)
+    _cfg2 = AstrBotConfig(config_path=_path, schema=_schema)
+    check(
+        len(dict(_cfg2)) == len(_schema),
+        f"invisible 项照样进默认配置（{len(dict(_cfg2))} 项 = schema {len(_schema)} 项）",
+    )
+    check(
+        _cfg2.get("fish_defs") == _schema["fish_defs"]["default"]
+        and str(_cfg2.get("fish_defs") or "").strip() != "",
+        "隐藏的 fish_defs 默认值原样在配置里（没被 invisible 清空）",
+    )
+    _one_fish = str(mod.DEFAULTS["fish_defs"]).splitlines()[0]
+    _one_rod = [str(mod.DEFAULTS["rod_defs"][0])]   # rod_defs 是字符串数组
+    _cfg2["fish_defs"] = _one_fish
+    _cfg2["rod_defs"] = _one_rod
+    _cfg2.save_config()
+    _cfg3 = AstrBotConfig(config_path=_path, schema=_schema)   # 等于重载一次配置
+    check(
+        _cfg3.get("fish_defs") == _one_fish and _cfg3.get("rod_defs") == _one_rod,
+        "改隐藏项 -> 保存 -> 重新载入，值还在（invisible 不会被丢弃）",
+    )
+    # rod_defs 是「列表型内容表」：插件启动时会用 content_auto_merge 把官方新增条目
+    # 补回去（这是既有功能，不是 invisible 的锅），所以这里关掉它才能证明
+    # 「隐藏项里写的值真的生效」；fish_defs 是文本表，不参与增量合并。
+    _cfg3["content_auto_merge"] = False
+    _plugin3 = make_plugin(dict(_cfg3))
+    check(
+        len(mod.FISH_POOL) == 1
+        and mod.FISH_POOL[0]["id"] == _one_fish.split("|")[0].strip(),
+        f"隐藏项的内容真的生效：鱼池被改成 {len(mod.FISH_POOL)} 条（编辑页面通道照常好用）",
+    )
+    check(
+        len(_plugin3.rods) == 1 and _plugin3.rods[0]["id"] == _one_rod[0].split("|")[0].strip(),
+        f"隐藏的 rod_defs 同样生效（关掉增量合并后鱼竿 {len(_plugin3.rods)} 种）",
+    )
+    _cfg3["content_auto_merge"] = True
+    _plugin3b = make_plugin(dict(_cfg3))
+    check(
+        len(_plugin3b.rods) == 6,
+        f"开着增量合并时官方鱼竿会被补回来（{len(_plugin3b.rods)} 种，站长自写的仍在）",
+    )
+    make_plugin()
+    _fish_default = len(str(mod.DEFAULTS["fish_defs"]).splitlines())
+    check(
+        len(mod.FISH_POOL) == _fish_default and len(mod.RODS) == 6,
+        f"复位后鱼池/鱼竿恢复默认（{len(mod.FISH_POOL)} 条鱼 / {len(mod.RODS)} 种竿）",
+    )
+
+    # =====================================================================
+    print("\n[17] 玩家金币编辑（v1.10.0：实时玩家 + 存档内玩家）")
+
+    def _real_backup_state() -> dict[str, str]:
+        """真插件目录 backups/ 下每个快照文件的「相对路径 -> 内容 sha1」。
+
+        用来证明**测试没有碰站长的真存档**（比只比文件名强：改名不改内容、内容改了
+        文件名也可能不变）。
+
+        ⚠️ 有意跳过 ``index.json``：站长那台**正在运行的实例**每分钟会走一次自动存档
+        循环里的 ``_refresh_data_status()`` → ``rebuild_index()``，索引文件本来就一直在被
+        它重写；把索引算进来只会让这条自检随机失败。快照文件本体（auto/daily/manual/
+        players/exported）才是数据，一个都不许变。
+        """
+        root = PLUGIN_DIR / "backups"
+        state: dict[str, str] = {}
+        if root.is_dir():
+            for dirpath, _dirs, names in os.walk(root):
+                for name in names:
+                    if name == "index.json":
+                        continue
+                    path = Path(dirpath) / name
+                    rel = str(path.relative_to(PLUGIN_DIR))
+                    try:
+                        state[rel] = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
+                    except OSError:
+                        state[rel] = "unreadable"
+        return state
+
+    def _api_payload(res):
+        """editor_api_* 可能回 dict（无 astrbot.api.web）或 JSONResponse。"""
+        if isinstance(res, dict):
+            return res
+        body = getattr(res, "body", None)
+        if body:
+            return json.loads(body.decode("utf-8"))
+        return {}
+
+    real_before = _real_backup_state()
+    plugin = make_plugin()
+    check(
+        str(plugin.backup_store.root).startswith(_SANDBOX_ROOT),
+        f"存档仓库钉在沙箱里：{plugin.backup_store.root}",
+    )
+
+    # ---- 准备两个玩家（用全新的 uid，避免和别的用例互相影响）----
+    created: dict[str, dict] = {}
+    for uid, gold, name in (("77001", 3000, "沙箱甲"), ("77002", 800, "沙箱乙")):
+        p = await plugin._load_player(uid)
+        p["gold"] = gold
+        p["last_name"] = name
+        p["total_caught"] = 40
+        await plugin._save_player(p)
+        created[uid] = p
+    kv_key_77001 = plugin._kv_key("77001")
+    raw_77001_before = await plugin.get_kv_data(kv_key_77001, None)
+    ids_before = len(await plugin._player_ids())
+
+    # ---- 列表：只读，不许产生副作用 ----
+    rows, total = await plugin._editor_player_rows()
+    by_id = {r["user_id"]: r for r in rows}
+    check(
+        by_id.get("77001", {}).get("gold") == 3000 and by_id.get("77002", {}).get("gold") == 800,
+        "列表里能看到刚写的两个玩家与金币",
+    )
+    check(
+        by_id.get("77001", {}).get("name") == "沙箱甲"
+        and by_id.get("77001", {}).get("caught") == 40
+        and by_id.get("77001", {}).get("level") == mod._player_level(created["77001"]),
+        "行里带昵称 / 钓获 / 等级",
+    )
+    check(
+        [r["gold"] for r in rows] == sorted([r["gold"] for r in rows], reverse=True),
+        "列表按金币从高到低",
+    )
+    check(
+        await plugin.get_kv_data(kv_key_77001, None) == raw_77001_before
+        and len(await plugin._player_ids()) == ids_before,
+        "读列表不会改玩家数据（也没凭空造出新玩家）",
+    )
+    payload = _api_payload(await plugin.editor_api_players({"action": "list"}))
+    check(
+        payload.get("status") == "ok" and payload.get("count") == len(rows)
+        and payload.get("gold_max") == mod.EDITOR_BRIDGE.PLAYER_GOLD_MAX,
+        f"players 接口回列表 + 金币上限（{payload.get('count')} 行 / 上限 {payload.get('gold_max')}）",
+    )
+    rows_q, _t = await plugin._editor_player_rows("沙箱乙")
+    check(
+        [r["user_id"] for r in rows_q] == ["77002"],
+        f"按昵称搜索能定位到玩家（{len(rows_q)} 行）",
+    )
+    rows_q2, _t2 = await plugin._editor_player_rows("77001")
+    check([r["user_id"] for r in rows_q2] == ["77001"], "按 ID 搜索能定位到玩家")
+
+    # ---- 校验与二次确认：任何一条不过都不许改数据 ----
+    ok, msg = await plugin._editor_set_player_gold({"user_id": "77001", "gold": 9999})
+    check(not ok and "确认" in msg, f"没带二次确认 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_player_gold(
+        {"user_id": "77001", "gold": -1, "confirm": True}
+    )
+    check(not ok and "负" in msg, f"负数 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_player_gold(
+        {"user_id": "77001", "gold": "abc", "confirm": True}
+    )
+    check(not ok and "不是数字" in msg, f"非数字 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_player_gold(
+        {"user_id": "77001", "gold": mod.EDITOR_BRIDGE.PLAYER_GOLD_MAX + 1, "confirm": True}
+    )
+    check(not ok and "最多" in msg, f"超过上限 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_player_gold(
+        {"user_id": "99999999", "gold": 10, "confirm": True}
+    )
+    check(not ok and "找不到玩家" in msg, f"不存在的玩家 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_player_gold({"user_id": "77001", "confirm": True})
+    check(not ok, "没写金币 -> 拒绝")
+    check(
+        (await plugin._load_player("77001"))["gold"] == 3000,
+        "上面这些被拒的请求一个都没改到数据（金币还是 3000）",
+    )
+    gold, why = mod.EDITOR_BRIDGE._coerce_gold(True)
+    check(gold is None and why, f"金币解析：布尔被拒绝（{why}）")
+    gold, why = mod.EDITOR_BRIDGE._coerce_gold("1e3")
+    check(gold == 1000 and not why, "金币解析：1e3 -> 1000（宽容，但要能算出来）")
+    gold, why = mod.EDITOR_BRIDGE._coerce_gold(-0.5)
+    check(gold is None and why, f"金币解析：负数被拒绝（{why}，不允许被 int() 截成 0）")
+    gold, why = mod.EDITOR_BRIDGE._coerce_gold(" 2500 ")
+    check(gold == 2500 and not why, "金币解析：带空格的数字串也能认")
+    gold, why = mod.EDITOR_BRIDGE._coerce_gold(1500.9)
+    check(gold == 1500 and not why, "金币解析：小数向下取整（1500.9 -> 1500）")
+    gold, why = mod.EDITOR_BRIDGE._coerce_gold("nan")
+    check(gold is None and why, f"金币解析：nan 被拒绝（{why}）")
+
+    # ---- 正常改金币：自动存档 + 落盘 ----
+    snaps_before = len(plugin.backup_store.list_snapshots())
+    ok, msg = await plugin._editor_set_player_gold(
+        {"user_id": "77001", "gold": 4321, "confirm": True}
+    )
+    check(ok, f"改金币成功：{msg}")
+    check(
+        (await plugin._load_player("77001"))["gold"] == 4321,
+        "金币真的写进玩家数据了",
+    )
+    snaps = plugin.backup_store.list_snapshots()
+    check(
+        len(snaps) == snaps_before + 1 and snaps[0]["kind"] == "auto"
+        and "改金币前自动存档" in str(snaps[0]["note"]),
+        f"改前自动存了一份 auto 档（{snaps[0]['name']}：{snaps[0]['note']}）",
+    )
+    check(
+        str(plugin.backup_store.path_of("auto")).startswith(_SANDBOX_ROOT),
+        "自动存档落在沙箱的 auto/ 里（不碰真存档）",
+    )
+    check(
+        "页面改金币" in str(plugin.cfg.get("data_status") or plugin.config.get("data_status") or ""),
+        f"面板的 data_status 也留下了记录：{plugin.cfg.get('data_status')}",
+    )
+    payload = _api_payload(await plugin.editor_api_players({"action": "list", "query": "77001"}))
+    check(
+        payload["players"][0]["gold"] == 4321,
+        "改完再读列表，金币已是新值",
+    )
+
+    # ---- 改「存档里的玩家」：当场不动实时数据，恢复后才生效 ----
+    ok, msg = await plugin._editor_set_snapshot_gold(
+        {"name": snaps[0]["name"], "user_id": "77001", "gold": 7777}
+    )
+    check(not ok and "确认" in msg, f"改存档没带二次确认 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_snapshot_gold(
+        {"name": "不存在的存档.json", "user_id": "77001", "gold": 7777, "confirm": True}
+    )
+    check(not ok and "找不到存档" in msg, f"存档名写错 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_snapshot_gold(
+        {"name": snaps[0]["name"], "user_id": "88888", "gold": 7777, "confirm": True}
+    )
+    check(not ok and "没有玩家" in msg, f"存档里没这个玩家 -> 拒绝：{msg}")
+    ok, msg = await plugin._editor_set_snapshot_gold(
+        {"name": "../../evil.json", "user_id": "77001", "gold": 7777, "confirm": True}
+    )
+    check(not ok, f"路径穿越写法 -> 拒绝：{msg}")
+
+    snap_name = snaps[0]["name"]
+    ok, msg = await plugin._editor_set_snapshot_gold(
+        {"name": snap_name, "user_id": "77001", "gold": 7777, "confirm": True}
+    )
+    check(ok and "恢复" in msg, f"改存档里的金币成功：{msg}")
+    check(
+        (await plugin._load_player("77001"))["gold"] == 4321,
+        "改存档**不会**动在线玩家（实时金币还是 4321）",
+    )
+    snap_data = plugin.backup_store.load_snapshot(snap_name)
+    check(
+        snap_data["players"]["77001"]["data"]["gold"] == 7777,
+        "存档文件里那个玩家的金币已经变成 7777",
+    )
+    check(
+        snap_data.get("count") == snaps[0]["count"],
+        "存档的玩家数没变（只改了一个字段）",
+    )
+    snap_rows = _api_payload(
+        await plugin.editor_api_players({"action": "snapshot_list", "name": snap_name})
+    )
+    snap_row_77001 = [
+        r for r in snap_rows.get("players", []) if r["user_id"] == "77001"
+    ]
+    check(
+        snap_rows.get("status") == "ok" and snap_row_77001
+        and snap_row_77001[0]["gold"] == 7777,
+        f"存档内玩家列表读出来是改后的值（{len(snap_rows.get('players', []))} 名玩家）",
+    )
+    check(
+        snap_rows.get("snapshot", {}).get("name") == snap_name,
+        "响应里带上存档名（页面显示用）",
+    )
+    # 恢复这份存档 -> 修改才生效（端到端）
+    restore_msg = await plugin._restore_snapshot(snap_name)
+    check("恢复" in restore_msg, f"恢复存档：{restore_msg}")
+    check(
+        (await plugin._load_player("77001"))["gold"] == 7777,
+        "恢复之后在线玩家的金币 = 存档里改过的值（整条链路通了）",
+    )
+
+    # ---- 编辑器状态里要带上页面需要的元信息 ----
+    status = json.loads(await plugin._editor_build_status(action="test", ok=True, message="x"))
+    check(
+        len(status.get("subcommands") or []) == len(mod.SUBCOMMAND_KEYWORDS),
+        f"editor_status 带上 {len(status.get('subcommands') or [])} 个规范子命令（命令页校验用）",
+    )
+    check(
+        status.get("custom_actions") == ["发送", "执行"]
+        and status.get("gold_max") == mod.EDITOR_BRIDGE.PLAYER_GOLD_MAX,
+        "editor_status 带上自定义命令动作与金币上限",
+    )
+    check(
+        set(mod.EDITOR_BRIDGE.CONTENT_TABLES) >= {"command_aliases", "custom_commands"},
+        "命令别名 / 自定义命令进了 save_content 白名单（否则保存会被整批拒绝）",
+    )
+    check(
+        await plugin.editor_api_players({"action": "乱写的动作"}) is not None,
+        "不认识的玩家动作有错误响应（不抛异常）",
+    )
+
+    real_after = _real_backup_state()
+    check(
+        real_before == real_after,
+        f"⚠️ 数据隔离自检：真插件 backups/ 里 {len(real_before)} 个快照文件的内容前后逐字节一致"
+        f"（index.json 除外：站长那台实例每分钟会重写它）",
+    )
 
     # =====================================================================
     print("\n" + "=" * 62)

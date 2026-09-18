@@ -390,6 +390,40 @@ class BackupStore:
         except Exception:  # pragma: no cover - 兜底：坏快照不该拖垮调用方
             return False
 
+    def rewrite_snapshot(self, name: str, payload: dict[str, Any]) -> bool:
+        """把改好的快照**原地重写**回去（原子替换，只动这一份文件）。
+
+        用途：编辑器页面的「改存档里某个玩家的金币」——改完要等「恢复」才生效，
+        所以不能碰实时数据。写盘用「临时文件 + ``os.replace``」，中途断电/出错
+        也不会留下半截 JSON 把存档写坏。
+
+        安全边界：目标文件必须真的在存档根目录里（挡住 ``..`` 之类的越界写法）。
+
+        Args:
+            name: 快照名（文件名 / ``kind/文件名`` / ``latest``）。
+            payload: 完整快照内容（一般是 ``load_snapshot`` 读出来的那份改过之后）。
+
+        Returns:
+            bool: 写成功 ``True``；找不到、越界、写盘失败 ``False``。
+        """
+        try:
+            path = self.find_snapshot(name)
+            if path is None or not path.is_file():
+                return False
+            root = self.root.resolve()
+            target = path.resolve()
+            if target != root and root not in target.parents:
+                return False
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
+            )
+            os.replace(tmp, path)
+            self.rebuild_index()
+            return True
+        except Exception:  # pragma: no cover - 兜底：坏存档不该拖垮调用方
+            return False
+
     def delete_snapshot(self, name: str) -> bool:
         """删除一份快照（**幂等**：不存在就返回 ``False``，不抛异常）。
 

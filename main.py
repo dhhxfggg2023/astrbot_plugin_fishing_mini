@@ -124,6 +124,92 @@ class _MissingMixin:
 
 
 # =============================================================================
+# 一·零、子命令写法总表（命令别名 / 自定义命令的校验依据）
+# =============================================================================
+#
+# 这张表是「玩家能打出来的子命令写法」的**唯一清单**，用途有三：
+#   1. 生成 command_aliases 的默认值（站长照着它加别名）
+#   2. 校验配置：别名不许抢占内置写法、`执行:` 只能指向内置子命令
+#   3. README 里那份「当前可用子命令清单」就是它
+#
+# ⚠️ 真正干活的分派逻辑仍在 fishing() 里（PULL_WORDS / 帮助 / CAST_WORDS /
+#    钓点 / elif 分派链），这张表只是它的**镜像**：
+#    * 行的顺序 = 实际匹配优先级
+#    * 同一个写法只写在**第一张**认它的行里（例如 `fish` 属于「下竿」，
+#      所以「查」那行没有它 —— 这就是真实行为，不是漏写）
+#    * test_local.py 会逐个写法实跑一遍，确认不会回「不认识」，以此卡住两者一致
+SUBCOMMAND_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # ---- 分派之前就处理掉的写法（先匹配先生效）----
+    "拉": ("拉", "拉线", "收", "收线", "提", "提竿", "拽", "pull", "p"),
+    "帮助": ("帮助", "help", "?", "？", "菜单", "指令"),
+    "下竿": (
+        "下竿", "钓", "钓鱼", "抛竿", "甩竿", "下钩", "抛", "钓鱼吧",
+        "cast", "fish", "fishing",
+    ),
+    "去": ("去", "前往", "go"),
+    # ---- 子命令分派链（顺序与 fishing() 里的 elif 完全一致）----
+    "背包": ("背包", "包", "bag", "鱼篓"),
+    "卖": (
+        "卖", "卖鱼", "sell", "卖垃圾", "卖光光", "卖光", "清空", "全卖",
+        "空背包", "sellall", "一键卖出",
+    ),
+    "图鉴": ("图鉴", "收集", "collection"),
+    "水族馆": ("水族馆", "馆", "aquarium", "缸"),
+    "扩建背包": ("扩建背包", "扩容", "背包扩容", "鱼篓扩容"),
+    "锁定": ("锁定", "锁", "lock"),
+    "解锁": ("解锁", "解", "unlock"),
+    "今日": ("今日", "天气", "行情", "today", "weather", "market"),
+    "排行": ("排行", "排行榜", "rank", "top", "榜"),
+    "商店": ("商店", "鱼饵", "道具", "shop", "买"),
+    "用": ("用", "使用", "道具用", "use"),
+    "查": ("查", "查询", "鱼", "鱼查", "资料", "info", "lookup"),
+    "事件": ("事件", "插曲", "选择", "event"),
+    "换饵": ("换饵", "换鱼饵", "装备饵", "上饵", "bait", "equip_bait"),
+    "体力": ("体力", "体力值", "活力", "stamina"),
+    "档案": ("档案", "profile", "me"),
+    "金币": ("金币", "gold"),
+    "签到": ("签到", "sign"),
+    "订单": ("订单", "任务", "order", "orders"),
+    "钓点": ("钓点", "地点", "地图", "map", "location"),
+    "鱼竿": ("鱼竿", "竿", "rod"),
+    "杂物": ("杂物", "漂流瓶", "收集品", "collect"),
+}
+
+#: 全部内置写法（含规范名本身）：自定义命令不许与它们重名（内置永远优先）
+BUILTIN_COMMAND_WORDS: frozenset[str] = frozenset(
+    word for words in SUBCOMMAND_KEYWORDS.values() for word in words
+)
+
+#: 运行时的「别名 → 规范子命令」表：**只装站长新加的别名**，
+#: 内置写法一个都不装（分派链自己认），所以默认配置下它是空的、行为零变化。
+COMMAND_ALIASES: dict[str, str] = {}
+#: 运行时的自定义命令表：``命令名(小写) -> (动作, 内容)``
+CUSTOM_COMMANDS: dict[str, tuple[str, str]] = {}
+
+
+def _default_command_aliases_text() -> str:
+    """生成 ``command_aliases`` 的默认值：把现有的内置别名整表写出来。
+
+    站长照着它加行最省事。表里每一行都是「本来就已经能用」的写法，
+    所以默认值**不改变任何行为**（解析后新增别名表仍然是空的）。
+    """
+    owner: dict[str, str] = {}
+    for canonical, words in SUBCOMMAND_KEYWORDS.items():
+        owner.setdefault(canonical, canonical)
+        for word in words:
+            owner.setdefault(word, canonical)
+    lines: list[str] = []
+    for canonical, words in SUBCOMMAND_KEYWORDS.items():
+        aliases = [
+            word for word in words
+            if word != canonical and owner.get(word) == canonical
+        ]
+        if aliases:
+            lines.append(f"{canonical}|{','.join(aliases)}")
+    return "\n".join(lines)
+
+
+# =============================================================================
 # 一、内置默认值
 # =============================================================================
 #
@@ -131,6 +217,9 @@ class _MissingMixin:
 # 所以想改数值请优先去 WebUI 插件配置页改，而不是改这里的常量。
 
 DEFAULTS: dict[str, Any] = {
+    # 配置面板里的「路标」：面板只留这一条 + data_status + defaults_sync_mode 可见，
+    # 其余内容/数值都在「数据编辑器」页面里改（见 _conf_schema.json 的 invisible）
+    "content_tables_hint": "",
     # 默认值指纹（插件回写，只读参考）：代码里的数值一变，这个指纹就变
     "config_fingerprint": "",
     # 数值同步档位：auto = 同步数值与内容 / all = 连开关一起重置 / off = 不同步
@@ -278,6 +367,11 @@ DEFAULTS: dict[str, Any] = {
     # 物价总开关：全局倍率 + 单条覆盖（鱼名或 id 均可）
     "fish_value_mult": 1.0,
     "fish_value_overrides": "",
+    # 命令别名：`规范子命令|别名,别名`，一行一个。默认值 = 现有的内置别名整表，
+    # 解析后「新增别名表」是空的，所以默认配置下的行为与升级前逐字一致。
+    "command_aliases": _default_command_aliases_text(),
+    # 自定义命令：`命令名|发送:文本` 或 `命令名|执行:子命令;子命令 参数`
+    "custom_commands": "",
 }
 
 # -----------------------------------------------------------------------------
@@ -289,7 +383,14 @@ DEFAULTS: dict[str, Any] = {
 DEFAULTS_SYNC_EXCLUDE_PREFIXES: tuple[str, ...] = ("data_", "backup_", "editor_")
 #: 这些键同上（开关类与管理项，跟着指纹一起变但没有意义）
 DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
-    {"button_mode", "content_auto_merge", "defaults_sync_mode", "config_fingerprint"}
+    {
+        "button_mode",
+        "content_auto_merge",
+        "defaults_sync_mode",
+        "config_fingerprint",
+        # 面板路标：纯说明文字，同步它没有任何意义
+        "content_tables_hint",
+    }
 )
 #: 内容表（鱼池/钓点/鱼竿/鱼饵/道具/水族馆栏位…）**不参与默认值同步**：
 #: 站长自己编辑过的内容不能被升级覆盖；官方新增内容由 content_auto_merge 增量补。
@@ -307,6 +408,9 @@ DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
         "item_defs",
         "aquarium_slots",
         "backpack_upgrades",
+        # 命令别名 / 自定义命令也是「站长自己写的内容」，同样不许被升级覆盖
+        "command_aliases",
+        "custom_commands",
     }
 )
 
@@ -648,6 +752,74 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
                 rows[scene] = list(items)
     BUTTONS.clear()
     BUTTONS.update(rows)
+
+
+def _command_reserved_words(cfg: dict[str, Any]) -> set[str]:
+    """会被「更靠前的分支」先接走的词（小写）：鱼饵的 id 与名字。
+
+    ``/钓鱼 蚯蚓`` 会直接拿去下竿（见 ``_find_bait``），所以别名/自定义命令
+    不能叫这个名字，否则玩家永远打不到它——配置阶段就跳过并告警。
+    """
+    reserved: set[str] = set()
+    try:
+        for bait_id, bait in CALC._parse_bait_defs(_cfg_str(cfg, "bait_defs")).items():
+            reserved.add(str(bait_id).strip().lower())
+            name = str((bait or {}).get("name") or "").strip().lower()
+            if name:
+                reserved.add(name)
+    except Exception as e:  # pragma: no cover - 解析器本身有兜底，这里只防意外
+        logger.debug(f"读取鱼饵表用于命令名校验失败（已忽略）：{e}")
+    return reserved
+
+
+def _apply_command_config(cfg: dict[str, Any]) -> None:
+    """用配置接管命令别名与自定义命令（两张表都只能「加」，不能改内置行为）。
+
+    规则（详见 ``_calc._build_command_aliases`` / ``_calc._parse_custom_commands``）：
+
+    * 别名：内置写法永远保留，配置只能追加新别名；冲突/写坏的行跳过并告警一次
+    * 自定义命令：只在「内置子命令都不认识」时匹配；``执行:`` 只能指向内置子命令，
+      因此自定义命令之间无法互相调用（防递归）
+    * 留空 = 不生效（别名表为空、自定义命令为空），内置命令完全不受影响
+    """
+    reserved = _command_reserved_words(cfg)
+
+    aliases, alias_problems = CALC._build_command_aliases(
+        _cfg_str(cfg, "command_aliases"),
+        SUBCOMMAND_KEYWORDS,
+        reserved=reserved,
+        warn=lambda msg: _tunable_warn("command_aliases", msg),
+    )
+    COMMAND_ALIASES.clear()
+    COMMAND_ALIASES.update(aliases)
+    if alias_problems:
+        logger.info(f"[配置] command_aliases 跳过了 {len(alias_problems)} 处：{alias_problems[:3]}")
+
+    custom, custom_problems = CALC._parse_custom_commands(
+        _cfg_str(cfg, "custom_commands"),
+        SUBCOMMAND_KEYWORDS,
+        reserved=reserved | set(aliases),
+        warn=lambda msg: _tunable_warn("custom_commands", msg),
+    )
+    CUSTOM_COMMANDS.clear()
+    CUSTOM_COMMANDS.update(custom)
+    if custom_problems:
+        logger.info(f"[配置] custom_commands 跳过了 {len(custom_problems)} 条：{custom_problems[:3]}")
+
+    # 新别名也要享受「少打空格」容错：/钓鱼 仓库3 -> /钓鱼 仓库 3
+    if not _BUILTIN_SUBCOMMAND_WORDS:
+        _BUILTIN_SUBCOMMAND_WORDS.update(SUBCOMMAND_WORDS)
+    SUBCOMMAND_WORDS.clear()
+    SUBCOMMAND_WORDS.update(_BUILTIN_SUBCOMMAND_WORDS)
+    SUBCOMMAND_WORDS.update(COMMAND_ALIASES)
+    if custom:
+        logger.info(
+            "[配置] 自定义命令 %d 条、新增别名 %d 个已生效", len(custom), len(aliases)
+        )
+
+
+#: 内置的「少打空格」写法快照（首次应用配置时拍下，避免把新别名误当内置）
+_BUILTIN_SUBCOMMAND_WORDS: set[str] = set()
 
 
 def _load_fish_defs_default() -> str:
@@ -1846,6 +2018,7 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
     _apply_fish_defs(cfg)
     _apply_content_tables(cfg)
     _apply_button_defs(cfg)
+    _apply_command_config(cfg)
 
 
 
@@ -2016,6 +2189,8 @@ class FishingPlugin(
         self._recent_events: dict[str, tuple[str, float]] = {}
         self._button_warned = False
         self._button_ok_logged = False
+        #: 正在执行自定义命令的「执行:」：期间不再匹配自定义命令（防递归）
+        self._custom_running = False
         self._tz = self._load_timezone()
 
     # -------------------------------------------------------------------------
@@ -3358,6 +3533,10 @@ class FishingPlugin(
             a2, a3, a4, a5, a6 = glued, a2 or "", a3 or "", a4 or "", a5 or ""
         rest = [a2 or "", a3 or "", a4 or "", a5 or "", a6 or ""]
         key = a1.lower()
+        # ---- 命令别名归一化（配置 command_aliases，见 _apply_command_config）----
+        # 表里**只有站长新加的别名**：内置写法原样流下去走老分派链，
+        # 所以默认配置下这一行是恒等变换，升级前后行为逐字一致。
+        key = COMMAND_ALIASES.get(key, key)
         # after_sub：子命令之后的「全部」参数（a2~a6），给「卖 / 水族馆 / 锁定」这类
         after_sub = " ".join(x for x in rest if x.strip())
         # after_first：再往后一个参数（a3~a6），给「用 / 商店 / 订单」这类
@@ -3486,6 +3665,14 @@ class FishingPlugin(
             handler = self._cmd_collectibles(event, user_id)
 
         if handler is None:
+            # ---- 自定义命令（配置 custom_commands）----
+            # 放在最后：内置子命令永远优先，自定义命令只在「都不认识」时才认。
+            # _custom_running 是防递归保险：执行: 的目标已被限定为内置子命令，
+            # 这里再兜一层，任何情况下都不会出现「命令套命令」。
+            if key in CUSTOM_COMMANDS and not self._custom_running:
+                async for result in self._run_custom_command(event, user_id, key):
+                    yield result
+                return
             yield event.plain_result(
                 f"🤔 不认识「{a1}」这个用法\n"
                 f"　发 /钓鱼 帮助 1 看全部指令（共 7 页）\n"
@@ -3498,6 +3685,64 @@ class FishingPlugin(
                 result = self._with_at(event, result)
                 first = False
             yield result
+
+    # -------------------------------------------------------------------------
+    # 自定义命令（配置 custom_commands）
+    # -------------------------------------------------------------------------
+
+    def _custom_text_values(
+        self, player: dict[str, Any], event: AstrMessageEvent
+    ) -> dict[str, str]:
+        """自定义命令文本里 ``{占位符}`` 的取值表（都取自玩家当前数据）。"""
+        location = LOCATION_BY_ID.get(str(player.get("current_location") or "")) or {}
+        name = str(player.get("last_name") or "")
+        if not name:
+            try:
+                name = str(event.get_sender_name() or "")
+            except Exception:
+                name = ""
+        return {
+            "金币": _safe_int(player.get("gold"), 0, 0),
+            "等级": _player_level(player),
+            "钓获": _safe_int(player.get("total_caught"), 0, 0),
+            "卖出": _safe_int(player.get("total_sold"), 0, 0),
+            "背包": len(player.get("inventory") or []),
+            "图鉴": len(player.get("collection") or {}),
+            "杂物": len(player.get("collectibles") or {}),
+            "昵称": name,
+            "钓点": str(location.get("name") or "未知"),
+        }
+
+    async def _run_custom_command(
+        self, event: AstrMessageEvent, user_id: str, name: str
+    ):
+        """执行一条自定义命令（只在 fishing 分派末尾、内置都不认识时调用）。
+
+        * ``发送:`` → 直接回复一段文本，替换 ``{金币}`` 之类占位符
+        * ``执行:`` → 依次把每条子命令**当成一次正常输入**再走一遍分派（一层）
+
+        目标在配置解析阶段就已被限定为内置子命令，所以这里不会再命中
+        自定义命令；``_custom_running`` 再兜一层，彻底杜绝递归。
+        """
+        action, body = CUSTOM_COMMANDS.get(name, ("", ""))
+        if action == "发送":
+            player = await self._load_player(user_id)
+            text = CALC._fill_custom_text(body, self._custom_text_values(player, event))
+            yield self._with_at(event, event.plain_result(text))
+            return
+        if action != "执行":
+            return
+        self._custom_running = True
+        try:
+            for piece in CALC._split_command_pieces(body):
+                tokens = self._tokens(piece)
+                if not tokens:
+                    continue
+                async for result in self.fishing(event, *tokens[:6]):
+                    yield result
+        finally:
+            self._custom_running = False
+
     async def _sync_defaults(self) -> None:
         """把代码里的新默认数值同步进插件配置。
 

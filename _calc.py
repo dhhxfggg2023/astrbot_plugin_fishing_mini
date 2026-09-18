@@ -1785,3 +1785,255 @@ def _parse_button_defs(
     if bad and warn:
         warn(f"button_defs 有 {bad} 行不合法已跳过（首条：{first_bad[:40]}）")
     return rows
+
+
+# -----------------------------------------------------------------------------
+# 命令别名（command_aliases）与自定义命令（custom_commands）
+#   别名：  规范子命令|别名1,别名2
+#   自定义：命令名|发送:文本   或   命令名|执行:子命令;子命令 参数
+#
+# 设计红线（避免站长配出「死命令」）：
+#   * 别名只**增加**，绝不覆盖内置写法——内置分派链一行都不用改，默认配置下
+#     运行时别名表是**空**的，因此升级后行为逐字不变（等价性测试卡死这一点）
+#   * 自定义命令只在「内置子命令都不认识」时才会被匹配，且 `执行:` 的目标
+#     必须是内置子命令 —— 于是自定义命令之间天然无法互相调用（防递归）
+# -----------------------------------------------------------------------------
+#: 自定义命令支持的动作（只做两种：够用、可控、不易配错）
+CUSTOM_COMMAND_ACTIONS: tuple[str, ...] = ("发送", "执行")
+#: 自定义命令条数上限（防止把配置写爆）
+CUSTOM_COMMAND_MAX_ROWS = 50
+#: 自定义命令「名字」「内容」长度上限
+CUSTOM_COMMAND_NAME_MAX = 16
+CUSTOM_COMMAND_BODY_MAX = 200
+#: 单个子命令最多挂几个别名、单个别名最长几个字
+COMMAND_ALIAS_MAX_PER_ROW = 20
+COMMAND_ALIAS_MAX_LEN = 12
+
+
+def _alias_words(value: Any) -> list[str]:
+    """把「别名1,别名2」切成列表（半角逗号、全角逗号、顿号都认）。"""
+    text = str(value or "")
+    for sep in ("，", "、"):
+        text = text.replace(sep, ",")
+    return [x.strip() for x in text.split(",") if x.strip()]
+
+
+def _alias_word_problem(word: str) -> str | None:
+    """别名/命令名「长得不像话」的检查；没问题返回 None。"""
+    if not word:
+        return "写了个空的别名"
+    if any(ch.isspace() for ch in word):
+        return f"「{word}」里有空格（一个别名只能是连续的一段文字）"
+    if word.isdigit():
+        return f"「{word}」是纯数字（会和 /钓鱼 连钓写法冲突）"
+    if len(word) > COMMAND_ALIAS_MAX_LEN:
+        return f"「{word}」太长（上限 {COMMAND_ALIAS_MAX_LEN} 字）"
+    return None
+
+
+def _command_owners(
+    keywords: dict[str, tuple[str, ...]] | list[str] | tuple[str, ...] | set[str],
+) -> tuple[dict[str, str], set[str]]:
+    """由关键词表算出 (写法 → 规范子命令, 全部内置写法)。
+
+    ``keywords`` 既可以是 ``{规范名: (写法...)}``，也可以是平铺的写法集合
+    （自定义命令表的 ``执行:`` 只用得着后者）。
+    """
+    owner: dict[str, str] = {}
+    flat: set[str] = set()
+    items = keywords.items() if isinstance(keywords, dict) else ((w, (w,)) for w in keywords)
+    for canonical, words in items:
+        canonical = str(canonical)
+        flat.add(canonical)
+        owner.setdefault(canonical, canonical)
+        for word in words or ():
+            word = str(word)
+            flat.add(word)
+            owner.setdefault(word, canonical)
+    return owner, flat
+
+
+def _build_command_aliases(
+    raw: Any,
+    keywords: dict[str, tuple[str, ...]],
+    *,
+    reserved: Any = None,
+    warn: Any = None,
+) -> tuple[dict[str, str], list[str]]:
+    """解析 ``command_aliases``，返回 ``(运行时别名表, 问题列表)``。
+
+    运行时别名表是 ``别名 -> 规范子命令``，只会装**新增**的别名：
+
+    * 行内写的、本来就是内置写法的词 → 静默忽略（分派链自己认，本来就有效）
+    * 与**别的**子命令的内置写法撞名 → 跳过 + 记问题（不许把「背包」映射到别处）
+    * 目标子命令不存在 / 行格式不对 / 别名不合规 → 跳过 + 记问题
+    * 两条配置行争同一个别名 → 先到先得，后到的记问题
+    * 与鱼饵同名的别名 → 跳过 + 记问题（下竿时会先被当成鱼饵接走）
+
+    参数 ``reserved`` 是「会被更靠前的分支接走」的词（小写），例如鱼饵名。
+    """
+    owner, flat = _command_owners(keywords)
+    reserved_set = {str(x).strip().lower() for x in (reserved or ()) if str(x).strip()}
+    merged: dict[str, str] = {}
+    problems: list[str] = []
+    for line in _defs_lines(raw):
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            problems.append(f"行格式不对（应为「规范子命令|别名,别名」）：{line[:40]}")
+            continue
+        canonical, alias_text = parts
+        if canonical not in owner:
+            problems.append(f"目标子命令不存在：{canonical}（该行已跳过）")
+            continue
+        words = _alias_words(alias_text)
+        if not words:
+            problems.append(f"「{canonical}」这一行没写别名（该行已跳过）")
+            continue
+        if len(words) > COMMAND_ALIAS_MAX_PER_ROW:
+            problems.append(
+                f"「{canonical}」一行写了 {len(words)} 个别名，"
+                f"只保留前 {COMMAND_ALIAS_MAX_PER_ROW} 个"
+            )
+            words = words[:COMMAND_ALIAS_MAX_PER_ROW]
+        for word in words:
+            low = word.lower()
+            if low == canonical.lower():
+                continue
+            bad = _alias_word_problem(word)
+            if bad:
+                problems.append(bad)
+                continue
+            home = owner.get(low) or owner.get(word)
+            if home is not None:
+                if home != canonical:
+                    problems.append(
+                        f"别名「{word}」已经是「{home}」的内置写法，"
+                        f"不能再给「{canonical}」（已跳过）"
+                    )
+                continue
+            if low in reserved_set:
+                problems.append(f"别名「{word}」和鱼饵/道具重名，下竿时会被先接走（已跳过）")
+                continue
+            taken = merged.get(low)
+            if taken is not None:
+                if taken != canonical:
+                    problems.append(
+                        f"别名「{word}」被「{taken}」和「{canonical}」同时占用，"
+                        f"只认先写的「{taken}」（已跳过）"
+                    )
+                continue
+            merged[low] = canonical
+    if problems and warn:
+        warn(f"有 {len(problems)} 处已跳过（首条：{problems[0]}）")
+    return merged, problems
+
+
+def _split_command_pieces(body: Any) -> list[str]:
+    """把 ``执行:`` 的内容切成一条条子命令（半角/全角分号、换行都算分隔）。"""
+    text = str(body or "").replace("；", ";").replace("\r", "\n").replace("\n", ";")
+    return [x.strip() for x in text.split(";") if x.strip()]
+
+
+def _parse_custom_commands(
+    raw: Any,
+    keywords: dict[str, tuple[str, ...]] | set[str] | tuple[str, ...] | list[str],
+    *,
+    reserved: Any = None,
+    warn: Any = None,
+) -> tuple[dict[str, tuple[str, str]], list[str]]:
+    """解析 ``custom_commands``，返回 ``(自定义命令表, 问题列表)``。
+
+    表是 ``命令名(小写) -> (动作, 内容)``；动作只认 ``发送`` / ``执行``：
+
+    * ``发送:文本`` —— 直接回复，支持 ``{金币}`` 之类占位符（原样存着，发的时候再替换）
+    * ``执行:子命令 参数;子命令`` —— 依次走一遍**内置**子命令分派
+
+    校验不过的行一律跳过并记问题：
+
+    * 命令名与内置子命令/别名/其它自定义命令/鱼饵重名（内置永远优先）
+    * 名字带空格或斜杠、纯数字、超长；内容超长
+    * ``执行:`` 指向不存在的子命令 → 因为只认内置写法，所以自定义命令之间
+      不可能互相调用（防递归），也不会出现「命令套命令」的死循环
+    * 最多 ``CUSTOM_COMMAND_MAX_ROWS`` 条
+    """
+    owner, flat = _command_owners(keywords)
+    reserved_set = {str(x).strip().lower() for x in (reserved or ()) if str(x).strip()}
+    out: dict[str, tuple[str, str]] = {}
+    problems: list[str] = []
+    lines = _defs_lines(raw)
+    if len(lines) > CUSTOM_COMMAND_MAX_ROWS:
+        problems.append(
+            f"最多 {CUSTOM_COMMAND_MAX_ROWS} 条，后面的 {len(lines) - CUSTOM_COMMAND_MAX_ROWS} 条已忽略"
+        )
+        lines = lines[:CUSTOM_COMMAND_MAX_ROWS]
+    for line in lines:
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            problems.append(f"行格式不对（应为「命令名|动作:内容」）：{line[:40]}")
+            continue
+        name, spec = parts
+        low = name.lower()
+        if "/" in name or any(ch.isspace() for ch in name):
+            problems.append(f"命令名「{name}」不能有空格或斜杠")
+            continue
+        if name.isdigit():
+            problems.append(f"命令名「{name}」不能是纯数字（会和连钓写法冲突）")
+            continue
+        if len(name) > CUSTOM_COMMAND_NAME_MAX:
+            problems.append(f"命令名「{name}」太长（上限 {CUSTOM_COMMAND_NAME_MAX} 字）")
+            continue
+        if low in flat or name in flat:
+            problems.append(f"命令名「{name}」和内置子命令/写法重名（内置优先，已跳过）")
+            continue
+        if low in reserved_set:
+            problems.append(f"命令名「{name}」和已有的别名/鱼饵重名（已跳过）")
+            continue
+        if low in out:
+            problems.append(f"命令名「{name}」写了两次，只认第一条")
+            continue
+        head, _, content = spec.replace("：", ":").partition(":")
+        action = head.strip().lower()
+        content = content.strip()
+        if action in ("send", "发送"):
+            action = "发送"
+        elif action in ("run", "执行"):
+            action = "执行"
+        else:
+            problems.append(f"「{name}」的动作「{head.strip()[:12]}」不认识（只支持 发送: / 执行:）")
+            continue
+        if not content:
+            problems.append(f"「{name}」的 {action}: 后面是空的")
+            continue
+        if len(content) > CUSTOM_COMMAND_BODY_MAX:
+            problems.append(
+                f"「{name}」的内容太长（{len(content)} 字，上限 {CUSTOM_COMMAND_BODY_MAX}）"
+            )
+            continue
+        if action == "执行":
+            pieces = _split_command_pieces(content)
+            missing = [
+                piece for piece in pieces
+                if (piece.split() or [""])[0].lower() not in
+                {w.lower() for w in flat}
+            ]
+            if not pieces or missing:
+                problems.append(
+                    f"「{name}」里的子命令不存在：{(missing or ['(空)'])[0][:20]}"
+                    f"（执行: 只能写内置子命令）"
+                )
+                continue
+        out[low] = (action, content)
+    if problems and warn:
+        warn(f"有 {len(problems)} 条已跳过（首条：{problems[0]}）")
+    return out, problems
+
+
+def _fill_custom_text(template: Any, values: dict[str, Any] | None = None) -> str:
+    """替换自定义命令文本里的 ``{占位符}``。
+
+    不认识的占位符**原样保留**（不用 ``str.format``，避免文案里出现别的花括号就报错）。
+    """
+    text = str(template or "")
+    for key, value in (values or {}).items():
+        text = text.replace("{" + str(key) + "}", str(value))
+    return text

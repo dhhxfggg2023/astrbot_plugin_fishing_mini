@@ -19,6 +19,8 @@ AstrBot 的插件页面（``pages/<目录名>/index.html``）拿到的是很窄�
   ``request``；登录态由 Dashboard 的 ``require_plugin_scope`` 校验。
 * 三种路由：GET ``config``（读）、POST ``config``（写内容表/数值/自动备份）、
   POST ``snapshot``（存档新建/恢复/删除/改名）。
+* v1.10.0 起多了第四个：GET/POST ``players``（实时玩家列表 / 某份存档里的玩家 /
+  改金币 ``set_gold`` / ``snapshot_gold``）。
 
 ⚠️ 历史：早先试过「页面上传文件 + 插件轮询」，在真实环境下被
 ``403 /api/files：Insufficient API key scope`` 挡掉（插件页面的 API key 没有
@@ -26,9 +28,10 @@ AstrBot 的插件页面（``pages/<目录名>/index.html``）拿到的是很窄�
 
 ============================== 安全边界 ==============================
 
-* 写操作只认白名单：``save_content`` 只收 9 张内容表；``save_numbers`` 只收
-  ``DEFAULTS`` 里的数值类键（筛掉 ``*_defs / *_slots / *_upgrades`` 与
-  ``data_* / backup_* / editor_*``）并逐个类型校验，非法就整批拒绝。
+* 写操作只认白名单：``save_content`` 只收 ``CONTENT_TABLES`` 里的内容表；
+  ``save_numbers`` 只收 ``DEFAULTS`` 里的数值类键（筛掉 ``*_defs / *_slots / *_upgrades`` 与
+  ``data_* / backup_* / editor_*``）并逐个类型校验，非法就整批拒绝；
+  ``players`` 只允许改 **gold** 一个字段（范围校验 + ``confirm=true`` + 改前自动存档）。
 * 未知 action、坏 JSON、非对象请求体 → 返回结构化错误，绝不 500。
 
 ⚠️ 维护约定：本模块的方法**不要**对共享的模块级变量做重新赋值
@@ -53,6 +56,18 @@ from typing import Any
 #: 页面调用的「相对插件」endpoint（路由注册时会加上 /<插件名> 前缀）
 ENDPOINT_CONFIG = "config"
 ENDPOINT_SNAPSHOT = "snapshot"
+ENDPOINT_PLAYERS = "players"
+
+#: 玩家金币的合法范围（防止手滑写出天文数字把经济系统写崩）
+PLAYER_GOLD_MAX = 1_000_000_000
+#: 一次最多回给页面多少行玩家（列表按金币从高到低；搜索时也受这个上限保护）
+PLAYER_LIST_LIMIT = 500
+#: 不带搜索词时最多扫描索引里最近多少个玩家（索引最多 5000）
+PLAYER_SCAN_LIMIT = 2000
+#: 玩家页支持的动作（页面侧必须与这里一致）
+PLAYER_ACTIONS: tuple[str, ...] = (
+    "list", "snapshot_list", "set_gold", "snapshot_gold"
+)
 
 #: 内容表白名单：键 -> 期望的配置值类型
 CONTENT_TABLES: dict[str, type] = {
@@ -65,6 +80,8 @@ CONTENT_TABLES: dict[str, type] = {
     "weather_defs": str,
     "easter_egg_defs": str,
     "button_defs": str,   # 场景|文案|点击后发送|样式（回复里的按钮）
+    "command_aliases": str,   # 规范子命令|别名,别名（命令别名）
+    "custom_commands": str,   # 命令名|动作:内容（自定义命令）
 }
 
 
@@ -113,6 +130,54 @@ def _defaults_map() -> dict[str, Any]:
     """``DEFAULTS``（由 main 注入）；拿不到就返回空表，功能降级但不报错。"""
     value = globals().get("DEFAULTS")
     return value if isinstance(value, dict) else {}
+
+
+def _custom_actions() -> list[str]:
+    """自定义命令支持的动作（来自 _calc；拿不到就给写死的两种）。"""
+    calc = globals().get("CALC")
+    actions = getattr(calc, "CUSTOM_COMMAND_ACTIONS", None)
+    return [str(x) for x in actions] if actions else ["发送", "执行"]
+
+
+def _player_level_of(player: dict[str, Any]) -> int:
+    """玩家等级（用 main 注入的 ``_player_level``；拿不到就退回 1）。"""
+    func = globals().get("_player_level")
+    if callable(func):
+        try:
+            return int(func(player))
+        except Exception:
+            return 1
+    return 1
+
+
+def _player_int(value: Any, default: int = 0) -> int:
+    """宽容取整（玩家数据里的字段可能是 str / float / None）。"""
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _coerce_gold(value: Any) -> tuple[int | None, str]:
+    """把页面传来的金币解析成合法整数，返回 ``(金币, 错误说明)``。
+
+    ⚠️ 先按浮点判负再取整：``int(-0.5)`` 会变成 ``0``，不先判的话
+    「-0.5」会被悄悄当成 0 接受（历史坑，测试里专门卡了一条）。
+    """
+    if isinstance(value, bool) or value is None:
+        return None, "金币要写数字"
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None, f"金币「{value}」不是数字"
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / ±inf
+        return None, f"金币「{value}」不是有效数字"
+    if number < 0:
+        return None, "金币不能是负数"
+    gold = int(number)
+    if gold > PLAYER_GOLD_MAX:
+        return None, f"金币最多 {PLAYER_GOLD_MAX}（防止手滑写出天文数字）"
+    return gold, ""
 
 
 def _log_warning(text: str) -> None:
@@ -287,6 +352,18 @@ class EditorApiMixin:
                 ["POST"],
                 "群钓鱼存档：新建 / 恢复 / 删除 / 改名",
             ),
+            (
+                "/{plugin}/" + ENDPOINT_PLAYERS,
+                self.editor_api_players,
+                ["GET"],
+                "读取群钓鱼的实时玩家列表（金币 / 等级 / 钓获）",
+            ),
+            (
+                "/{plugin}/" + ENDPOINT_PLAYERS,
+                self.editor_api_players,
+                ["POST"],
+                "改玩家金币（实时玩家，或某份存档里的玩家）",
+            ),
         ]
 
     # ------------------------------------------------------------ GET config
@@ -396,6 +473,263 @@ class EditorApiMixin:
         ok, message = await self._editor_run_action(remote, body)
         await self._editor_write_status(action=remote, ok=ok, message=message)
         return self._editor_api_ok(message, ok=ok)
+
+    # ---------------------------------------------------------- players 玩家页
+    def _player_row(self, user_id: str, raw: Any) -> dict[str, Any]:
+        """把一份玩家存储内容整理成页面要的一行（只读，绝不改数据）。"""
+        player, _enveloped = (None, False)
+        module = globals().get("BACKUP_MODULE")
+        try:
+            if module is not None:
+                player, _enveloped = module.unwrap_player(raw)
+            elif isinstance(raw, dict):
+                player = raw
+        except Exception:
+            player = raw if isinstance(raw, dict) else None
+        if not isinstance(player, dict):
+            return {}
+        meta: dict[str, Any] = {}
+        try:
+            if module is not None:
+                meta = module.envelope_meta(raw) or {}
+        except Exception:
+            meta = {}
+        return {
+            "user_id": str(user_id),
+            "name": str(player.get("last_name") or ""),
+            "gold": _player_int(player.get("gold"), 0),
+            "level": _player_level_of(player),
+            "caught": _player_int(player.get("total_caught"), 0),
+            "sold": _player_int(player.get("total_sold"), 0),
+            "fish": len(player.get("inventory") or []),
+            "aquarium": len(player.get("aquarium") or []),
+            "saved_text": str(meta.get("saved_text") or ""),
+        }
+
+    async def _editor_player_rows(self, query: str = "") -> tuple[list[dict[str, Any]], int]:
+        """读出玩家列表（可按 uid / 昵称搜索），返回 ``(行, 索引总数)``。
+
+        只读：走 ``get_kv_data`` 原始读取 + 信封拆包，**不调用** ``_load_player``
+        （那条路会顺手迁移并回写玩家数据，列个表不该产生副作用）。
+        """
+        ids = [str(x) for x in await self._player_ids()]
+        total = len(ids)
+        wanted = str(query or "").strip().lower()
+        if wanted:
+            scanned = ids
+        else:
+            scanned = ids[-PLAYER_SCAN_LIMIT:]
+        rows: list[dict[str, Any]] = []
+        for uid in scanned:
+            try:
+                raw = await self.get_kv_data(self._kv_key(uid), None)
+            except Exception:
+                continue
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            row = self._player_row(uid, raw)
+            if not row:
+                continue
+            if wanted and wanted not in row["user_id"].lower() and wanted not in row["name"].lower():
+                continue
+            rows.append(row)
+        rows.sort(key=lambda item: (-int(item.get("gold") or 0), str(item.get("user_id"))))
+        return rows[:PLAYER_LIST_LIMIT], total
+
+    async def _editor_player_payload(self, query: str = "") -> dict[str, Any]:
+        """玩家列表的响应体（附带保存上限等元信息，页面直接渲染）。"""
+        rows, total = await self._editor_player_rows(query)
+        return {
+            "status": "ok",
+            "ok": True,
+            "transport": "plugin-api",
+            "players": rows,
+            "count": len(rows),
+            "total": total,
+            "limit": PLAYER_LIST_LIMIT,
+            "scan_limit": PLAYER_SCAN_LIMIT,
+            "gold_max": PLAYER_GOLD_MAX,
+            "query": str(query or ""),
+            "editor_status": getattr(self, "_editor_status_text", "") or "",
+        }
+
+    async def _editor_snapshot_player_payload(self, name: str) -> dict[str, Any]:
+        """读出「某份存档里」的玩家列表（只读；不改存档、不动实时数据）。"""
+        store = getattr(self, "backup_store", None)
+        wanted = str(name or "").strip()
+        if store is None:
+            return {"status": "error", "ok": False, "players": [],
+                    "message": "存档模块不可用（_backup.py 是否缺失？）"}
+        snap = store.load_snapshot(wanted) if wanted else None
+        if not snap:
+            return {"status": "error", "ok": False, "players": [],
+                    "message": f"找不到存档「{wanted or '最新'}」（先刷新存档列表）"}
+        players = snap.get("players")
+        rows = [
+            row
+            for row in (
+                self._player_row(str(uid), raw)
+                for uid, raw in (players.items() if isinstance(players, dict) else [])
+            )
+            if row
+        ]
+        rows.sort(key=lambda item: (-int(item.get("gold") or 0), str(item.get("user_id"))))
+        path_text = str(snap.get("path") or wanted)
+        return {
+            "status": "ok",
+            "ok": True,
+            "transport": "plugin-api",
+            "players": rows[:PLAYER_LIST_LIMIT],
+            "count": len(rows),
+            "total": len(rows),
+            "limit": PLAYER_LIST_LIMIT,
+            "gold_max": PLAYER_GOLD_MAX,
+            "snapshot": {
+                "name": os.path.basename(path_text),
+                "note": str(snap.get("note") or ""),
+                "created_text": str(snap.get("created_text") or ""),
+                "kind": str(snap.get("kind") or ""),
+            },
+            "editor_status": getattr(self, "_editor_status_text", "") or "",
+        }
+
+    async def editor_api_players(self, body: dict[str, Any] | None = None):
+        """GET/POST players：实时玩家列表；POST 还能改金币。
+
+        * GET（或 POST ``{"action": "list", "query": "..."}``）→ 实时玩家列表
+        * POST ``{"action": "snapshot_list", "name": "..."}`` → 某份存档里的玩家
+        * POST ``{"action": "set_gold", "user_id", "gold", "confirm": true}``
+          → 改**实时**玩家金币（改前自动存一份 auto 档）
+        * POST ``{"action": "snapshot_gold", "name", "user_id", "gold", "confirm": true}``
+          → 改**某份存档里**的玩家金币（改完要「恢复」这份存档才生效）
+        """
+        if body is None:
+            reader = getattr(self, "_editor_request_json", None)
+            if callable(reader):
+                body, _err = await reader()
+        if not isinstance(body, dict):
+            body = {}
+        action = str(body.get("action") or "list").strip().lower()
+        if action in ("", "list", "refresh"):
+            return await self._editor_player_payload(str(body.get("query") or ""))
+        if action == "snapshot_list":
+            return await self._editor_snapshot_player_payload(str(body.get("name") or ""))
+        if action not in PLAYER_ACTIONS:
+            return self._editor_api_error(
+                "不认识的玩家动作「" + action + "」（可用："
+                + "、".join(PLAYER_ACTIONS) + "）"
+            )
+        # set_gold / snapshot_gold：复用 config 通道的动作分发（校验与提示都在一起）
+        ok, message = await self._editor_run_action(action, body)
+        await self._editor_write_status(action=action, ok=ok, message=message)
+        if not ok:
+            return self._editor_api_error(message)
+        return self._editor_api_ok(message, ok=True)
+
+    async def _editor_set_player_gold(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """改实时玩家的金币（改前自动存一份 auto 档；范围校验 + 二次确认）。"""
+        user_id = str(payload.get("user_id") or payload.get("uid") or "").strip()
+        if not user_id:
+            return False, "set_gold 需要 user_id（改哪个玩家）"
+        if payload.get("confirm") is not True:
+            return False, "改金币会动真实玩家数据：请在页面上再确认一次（confirm=true）"
+        gold, why = _coerce_gold(payload.get("gold"))
+        if why:
+            return False, why
+        known = {str(x) for x in await self._player_ids()}
+        if user_id not in known:
+            return False, f"找不到玩家 {user_id}（让他先在群里发一条消息再改）"
+
+        # 改数据前先自动存档：用 auto/（跟着 backup_interval_hours 轮转，
+        # 不会像 manual/ 那样越攒越多——历史上 manual 攒到 55 份就是这么来的）
+        message = ""
+        snapshotter = getattr(self, "_snapshot", None)
+        if callable(snapshotter):
+            try:
+                message = await snapshotter(
+                    "auto", note=f"改金币前自动存档（{user_id} → {gold}）"
+                )
+            except Exception as e:
+                return False, f"改金币前的自动存档失败，已放弃本次修改：{e}"
+
+        lock_for = getattr(self, "_lock_for", None)
+        lock = lock_for(user_id) if callable(lock_for) else None
+        if lock is None:  # pragma: no cover - 正常插件一定有锁
+            class _NoLock:
+                async def __aenter__(self):
+                    return None
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            lock = _NoLock()
+        old = 0
+        async with lock:
+            player = await self._load_player(user_id)
+            old = _player_int(player.get("gold"), 0)
+            player["gold"] = gold
+            saved = await self._save_player(player)
+        if not saved:
+            return False, f"玩家 {user_id} 的数据没写成功（看插件日志）"
+        detail = f"已把玩家 {user_id} 的金币 {old} → {gold}"
+        if message:
+            detail += f"（改前已自动存档：{message}）"
+        setter = getattr(self, "_set_status", None)
+        if callable(setter):
+            try:
+                setter(f"页面改金币：{user_id} {old} → {gold}")
+            except Exception:  # pragma: no cover
+                pass
+        return True, detail
+
+    async def _editor_set_snapshot_gold(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """改**某份存档里**某个玩家的金币（改完要「恢复」这份存档才生效）。"""
+        store = getattr(self, "backup_store", None)
+        if store is None:
+            return False, "存档模块不可用（_backup.py 是否缺失？）"
+        if payload.get("confirm") is not True:
+            return False, "改存档内容需要再确认一次（confirm=true）"
+        name = str(payload.get("name") or "").strip()
+        user_id = str(payload.get("user_id") or payload.get("uid") or "").strip()
+        if not name or not user_id:
+            return False, "snapshot_gold 需要 name（哪份存档）和 user_id（哪个玩家）"
+        gold, why = _coerce_gold(payload.get("gold"))
+        if why:
+            return False, why
+
+        snap = store.load_snapshot(name)
+        if not snap:
+            return False, f"找不到存档「{name}」（刷新一下存档列表）"
+        players = snap.get("players")
+        if not isinstance(players, dict) or user_id not in players:
+            return False, f"存档「{snap.get('path', name)}」里没有玩家 {user_id}"
+        module = globals().get("BACKUP_MODULE")
+        raw = players[user_id]
+        data: Any = raw
+        enveloped = False
+        if module is not None:
+            data, enveloped = module.unwrap_player(raw)
+        if not isinstance(data, dict):
+            return False, f"存档里玩家 {user_id} 的数据坏了，没有改动"
+        old = _player_int(data.get("gold"), 0)
+        data["gold"] = gold
+        if module is not None and enveloped:
+            meta = module.envelope_meta(raw) or {}
+            players[user_id] = module.wrap_player(
+                user_id, data, int(meta.get("data_version") or 0) or 1
+            )
+        else:
+            players[user_id] = data
+        snap.pop("path", None)
+        if not store.rewrite_snapshot(name, snap):
+            return False, f"存档「{name}」写入失败（文件可能被占用）"
+        return True, (
+            f"存档「{name}」里玩家 {user_id} 的金币 {old} → {gold}；"
+            f"这份存档**恢复之后**才会生效（当前在线玩家数据没动）"
+        )
 
     # ---------------------------------------------------------------- 小工具
     async def _editor_request_json(self) -> tuple[dict[str, Any], str]:
@@ -511,6 +845,9 @@ class EditorBridgeMixin(EditorApiMixin):
             "snapshot_rename": self._editor_snapshot_rename,
             "save_autobackup": self._editor_save_autobackup,
             "refresh": self._editor_refresh,
+            # 玩家页：改实时玩家金币 / 改某份存档里的玩家金币
+            "set_gold": self._editor_set_player_gold,
+            "snapshot_gold": self._editor_set_snapshot_gold,
         }
         handler = handlers.get(str(action or "").strip())
         if handler is None:
@@ -762,6 +1099,10 @@ class EditorBridgeMixin(EditorApiMixin):
             "next_auto_backup": next_auto,
             "autobackup": autobackup,
             "numbers_editable": number_whitelist(),
+            # 命令页要用：页面据此校验「规范子命令」，不用在 JS 里再抄一份
+            "subcommands": list(globals().get("SUBCOMMAND_KEYWORDS") or ()),
+            "custom_actions": _custom_actions(),
+            "gold_max": PLAYER_GOLD_MAX,
             "transport": "plugin-api",
         }
         try:

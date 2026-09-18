@@ -1289,6 +1289,41 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         return [cell(r.scene), cell(r.label), cell(r.data),
                 cell(r.style)].join(SEP);
       }
+    },
+    aliases: {
+      configKey: "command_aliases",
+      configType: "text",
+      keyField: "canonical",
+      /* 规范子命令|别名1,别名2 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length !== 2 || !p[0] || !p[1]) return null;
+        return { canonical: p[0], aliases: p[1] };
+      },
+      serialize: function (r) {
+        return [cell(r.canonical), cell(r.aliases)].join(SEP);
+      }
+    },
+    custom: {
+      configKey: "custom_commands",
+      configType: "text",
+      keyField: "name",
+      /* 命令名|动作:内容 */
+      parse: function (line) {
+        var p = splitLine(line);
+        if (p.length !== 2 || !p[0] || !p[1]) return null;
+        var spec = String(p[1]);
+        var at = spec.indexOf(":");
+        if (at < 0) at = spec.indexOf("：");
+        if (at < 0) return null;
+        var action = spec.slice(0, at).trim();
+        var body = spec.slice(at + 1).trim();
+        if (!action || !body) return null;
+        return { name: p[0], action: action, body: body };
+      },
+      serialize: function (r) {
+        return [cell(r.name), cell(r.action) + ":" + cell(r.body)].join(SEP);
+      }
     }
   };
 
@@ -1835,8 +1870,30 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { key: "item_drop_chance",      label: "杂物概率",     value: 0.14, unit: "概率", desc: "没中鱼时钩上带物件的概率" },
         { key: "level_xp_ratio",        label: "等级曲线底数", value: 1.08, unit: "倍",   desc: "指数曲线底数，越大后期越难升级" },
         { key: "hook_rate_fallback",    label: "上钩率兜底",   value: 0.30, unit: "概率", desc: "鱼饵配置写错时的兜底咬钩率" }
+      ],
+      aliases: [
+        { canonical: "背包", aliases: "包,bag,鱼篓" },
+        { canonical: "卖",   aliases: "卖鱼,sell,卖光光" },
+        { canonical: "档案", aliases: "profile,me" }
+      ],
+      custom: [
+        { name: "快捷签到", action: "执行", body: "签到" },
+        { name: "领奖",     action: "发送", body: "今天也要加油！你现在有 {金币} 金币" }
       ]
     },
+    /* 页面认识哪些「规范子命令」（在线时以插件回写的 editor_status.subcommands 为准） */
+    subcommands: [
+      "拉", "帮助", "下竿", "去", "背包", "卖", "图鉴", "水族馆", "扩建背包", "锁定",
+      "解锁", "今日", "排行", "商店", "用", "查", "事件", "换饵", "体力", "档案",
+      "金币", "签到", "订单", "钓点", "鱼竿", "杂物"
+    ],
+    /* 离线预览用的玩家列表（在线时由插件接口返回真实数据） */
+    players: [
+      { user_id: "10001", name: "钓鱼佬",   gold: 12800, level: 6,  caught: 214, sold: 180, fish: 12, aquarium: 3, saved_text: "2026-09-18 18:20:11" },
+      { user_id: "10002", name: "小钓手",   gold: 3200,  level: 3,  caught: 88,  sold: 70,  fish: 5,  aquarium: 1, saved_text: "2026-09-18 17:02:40" },
+      { user_id: "10003", name: "夜钓王",   gold: 960,   level: 2,  caught: 31,  sold: 22,  fish: 2,  aquarium: 0, saved_text: "2026-09-17 23:41:09" },
+      { user_id: "10004", name: "刚入坑",   gold: 100,   level: 1,  caught: 3,   sold: 0,   fish: 1,  aquarium: 0, saved_text: "2026-09-17 12:00:00" }
+    ],
     autoBackup: { enable: true, dailyHour: 4, intervalHours: 6, keepDaily: 30, keepInterval: 20 },
     snapshots: [
       { id: "s1", kind: "manual", note: "改物价前的存档",     time: "2026-09-18 18:20", players: 35, size: "131 KB" },
@@ -2091,6 +2148,48 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       title: "存档管理",
       kind: "snapshots",
       hint: "新建 / 恢复 / 删除 / 重命名 玩家存档"
+    },
+    {
+      id: "players",
+      label: "👤 玩家",
+      title: "玩家金币",
+      kind: "players",
+      hint: "查看在线玩家，或改某份存档里的玩家金币"
+    },
+    {
+      id: "aliases",
+      label: "⌨️ 命令",
+      title: "命令别名",
+      hint: "给子命令加别名：一行一个「规范子命令|别名,别名」。内置写法永远有效，这里只能增加",
+      keyField: "canonical",
+      navGroup: "commands",
+      sortOptions: [["default", "默认顺序"], ["name", "按子命令"]],
+      columns: [
+        { key: "canonical", label: "规范子命令", type: "text", w: "130px", mono: true },
+        { key: "aliases",   label: "别名（逗号分隔）", type: "text" }
+      ],
+      makeRow: function () {
+        return { canonical: "背包", aliases: "仓库,行囊" };
+      },
+      notice: "别名只做「增加」：内置写法（背包 / 包 / bag / 鱼篓…）永远有效，你写的别名和内置写法撞名时会被插件跳过并在日志里提示。改完点右上角「保存并生效」。"
+    },
+    {
+      id: "custom",
+      label: "⌨️ 命令",
+      title: "自定义命令",
+      hint: "一行一条「命令名|动作:内容」：发送=直接回一段话（支持 {金币} {等级} {钓获} 等占位符），执行=依次跑内置子命令",
+      keyField: "name",
+      navGroup: "commands",
+      sortOptions: [["default", "默认顺序"], ["name", "按命令名"]],
+      columns: [
+        { key: "name",   label: "命令名",   type: "text", w: "150px", mono: true },
+        { key: "action", label: "动作",     type: "text", w: "96px",  mono: true, hint: "发送 / 执行" },
+        { key: "body",   label: "内容",     type: "text" }
+      ],
+      makeRow: function () {
+        return { name: "新命令", action: "发送", body: "你好呀" };
+      },
+      notice: "命令名不能和内置子命令、别名、其它自定义命令、鱼饵重名（内置永远优先）；「执行」的目标必须是真的子命令，所以自定义命令之间无法互相调用（防递归）。最多 50 条，不合规的行插件会跳过并在日志里提示。"
     }
   ];
 
@@ -2121,7 +2220,21 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     loadError: "",         // 读取插件配置失败时的原因（页面顶部显示，不白屏）
     loadNotes: [],         // 解析时的小提示（比如某张表有几行没认出来）
     players: undefined,    // 玩家数（来自 editor_status）
-    nextAutoBackup: ""     // 下次自动存档时间（来自 editor_status）
+    nextAutoBackup: "",    // 下次自动存档时间（来自 editor_status）
+    /* ---- 玩家页（改金币）---- */
+    playersMode: "live",        // live = 实时玩家 / snapshot = 某份存档里的玩家
+    playersList: [],            // 实时玩家列表
+    playersTotal: 0,            // 索引里的玩家总数（列表只回一部分）
+    playersQuery: "",           // 搜索词（ID 或昵称）
+    playersError: "",           // 读取玩家列表失败的原因
+    playersLoading: false,
+    playersGoldMax: 1000000000, // 金币上限（插件回写，防止手滑写出天文数字）
+    playersScanLimit: 2000,
+    snapshotPick: "",           // 当前选中的存档名
+    snapshotPlayers: [],        // 该存档里的玩家
+    snapshotPlayersError: "",
+    goldEdit: null,             // { user_id, value } 正在改的金币
+    goldConfirm: null           // { user_id, value, mode } 二次确认中
   };
 
   /* ===========================================================================
@@ -2232,7 +2345,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   function dirtyTotal() {
     var n = 0;
     TABS.forEach(function (t) {
-      if (t.kind === "snapshots") return;
+      if (t.kind) return;   // 存档页 / 玩家页不是「表格类」标签，不参与未保存统计
       n += diffTab(t.id).count;
     });
     return n;
@@ -2285,6 +2398,39 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         }
         if (col.key === "style" && !isButtonStyle(raw)) {
           errs[col.key] = "写 default / primary，或 0-255 的数字";
+        }
+      }
+
+      /* 命令别名：目标必须是插件认识的规范子命令（写错会被插件跳过） */
+      if (tab.id === "aliases") {
+        var ali = String(v === undefined || v === null ? "" : v).trim();
+        if (col.key === "canonical" && canonicalCommands().indexOf(ali) < 0) {
+          errs[col.key] = "只能是：" + canonicalCommands().join(" / ");
+        }
+        if (col.key === "aliases" && !ali) {
+          errs[col.key] = "至少要写一个别名，例如 仓库,行囊";
+        }
+        if (col.key === "aliases" && /[|\r\n]/.test(ali)) {
+          errs[col.key] = "别名里不能出现竖线（它是字段分隔符）";
+        }
+      }
+
+      /* 自定义命令：名字不能撞内置写法；动作只认 发送 / 执行 */
+      if (tab.id === "custom") {
+        var cus = String(v === undefined || v === null ? "" : v).trim();
+        if (col.key === "name") {
+          if (!cus) errs[col.key] = "命令名不能为空";
+          else if (canonicalCommands().indexOf(cus) >= 0) {
+            errs[col.key] = "和内置子命令重名（内置永远优先，这条不会生效）";
+          } else if (/\s|\//.test(cus)) {
+            errs[col.key] = "命令名不能有空格或斜杠";
+          }
+        }
+        if (col.key === "action" && ["发送", "执行", "send", "run"].indexOf(cus.toLowerCase()) < 0) {
+          errs[col.key] = "只能写 发送 或 执行";
+        }
+        if (col.key === "body" && !cus) {
+          errs[col.key] = "内容不能为空";
         }
       }
     });
@@ -2352,12 +2498,42 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
      =========================================================================== */
   function renderTabs() {
     var nav = document.getElementById("tabs");
-    var html = TABS.map(function (t) {
-      var d = t.kind === "snapshots" ? { count: 0 } : diffTab(t.id);
-      var n = t.kind === "snapshots" ? (state.snapshots || []).length : d.total;
-      return '<button class="tab' + (state.tab === t.id ? " is-active" : "") + (d.count ? " has-dirty" : "") +
-        '" role="tab" data-act="tab" data-tab="' + t.id + '" title="' + esc(t.title) + '">' +
-        "<span>" + esc(t.label) + "</span>" +
+    /* 同一个 navGroup（例：命令别名 / 自定义命令）合并成一个入口按钮：
+       点它进第一张表，两张表在标签页内部用「小切换条」来回切。 */
+    var groups = [];
+    var byGroup = {};
+    TABS.forEach(function (t) {
+      var gid = t.navGroup || t.id;
+      if (!byGroup[gid]) {
+        byGroup[gid] = { id: gid, tabs: [], label: t.label, title: t.title };
+        groups.push(byGroup[gid]);
+      }
+      byGroup[gid].tabs.push(t);
+    });
+
+    var html = groups.map(function (g) {
+      var d = { count: 0 };
+      var n = 0;
+      if (g.tabs.length > 1) {
+        // 命令组：两张表合成一个入口，计数与未保存数都累加
+        g.tabs.forEach(function (t) {
+          var dd = diffTab(t.id);
+          d.count += dd.count;
+          n += dd.total;
+        });
+        g.label = g.tabs[0].label;                 // 「⌨️ 命令」
+        g.title = g.tabs.map(function (t) { return t.title; }).join(" / ");
+      } else {
+        var t0 = g.tabs[0];
+        if (t0.kind === "snapshots") { n = (state.snapshots || []).length; }
+        else if (t0.kind === "players") { n = (state.playersList || []).length; }
+        else { d = diffTab(t0.id); n = d.total; }
+      }
+      var activeId = g.tabs.length > 1 ? g.tabs[0].id : g.tabs[0].id;
+      var isActive = g.tabs.some(function (t) { return state.tab === t.id; });
+      return '<button class="tab' + (isActive ? " is-active" : "") + (d.count ? " has-dirty" : "") +
+        '" role="tab" data-act="tab" data-tab="' + esc(activeId) + '" title="' + esc(g.title) + '">' +
+        "<span>" + esc(g.label) + "</span>" +
         '<span class="tab-count">' + n + "</span>" +
         '<span class="tab-dirty" title="这个标签有 ' + d.count + ' 处未保存的修改"></span>' +
         "</button>";
@@ -2656,6 +2832,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     } else {
       actions =
         '<button class="btn btn-sm" data-act="snap:restore" data-index="' + i + '" title="把这批玩家数据恢复到这份存档">↩ 恢复</button>' +
+        '<button class="btn btn-sm" data-act="snap:players" data-index="' + i + '" title="查看/修改这份存档里的玩家金币（恢复后生效）">👤 改金币</button>' +
         '<button class="btn btn-sm" data-act="snap:download" data-index="' + i + '" title="下载这份存档的信息（名字/时间/玩家数），不是玩家数据本体">⬇ 下载信息</button>' +
         '<span class="spacer"></span>' +
         '<button class="btn btn-sm btn-danger" data-act="snap:delete" data-index="' + i + '" title="删除这份存档（删前会自动存一份）">🗑 删除</button>';
@@ -2677,6 +2854,250 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   }
 
   /* ===========================================================================
+     10b. 渲染：玩家页（改金币）
+     =========================================================================== */
+
+  /** 页面认识的「规范子命令」：在线以插件回写的清单为准，离线用演示清单。 */
+  function canonicalCommands() {
+    var list = (lastStatus && lastStatus.subcommands) || DEMO.subcommands || [];
+    return list.map(function (x) { return String(x); });
+  }
+
+  function normalizePlayerRow(r) {
+    return {
+      user_id: text(r && r.user_id),
+      name: text(r && r.name),
+      gold: num(r && r.gold, 0),
+      level: num(r && r.level, 1),
+      caught: num(r && r.caught, 0),
+      sold: num(r && r.sold, 0),
+      fish: num(r && r.fish, 0),
+      aquarium: num(r && r.aquarium, 0),
+      saved_text: text(r && r.saved_text)
+    };
+  }
+
+  /** 拉实时玩家列表；失败时把原因写进 state.playersError（页面会显示）。 */
+  async function fetchPlayers(showToast) {
+    if (!ENV.online) {
+      state.playersList = (DEMO.players || []).map(normalizePlayerRow);
+      state.playersTotal = state.playersList.length;
+      state.playersError = "";
+      return true;
+    }
+    state.playersLoading = true;
+    try {
+      var res = await bridgeRequest("post", "players", {
+        action: "list", query: state.playersQuery || ""
+      });
+      state.playersList = ((res && res.players) || []).map(normalizePlayerRow);
+      state.playersTotal = num(res && res.total, state.playersList.length);
+      state.playersGoldMax = num(res && res.gold_max, state.playersGoldMax);
+      state.playersScanLimit = num(res && res.scan_limit, state.playersScanLimit);
+      state.playersError = "";
+      if (showToast) toast("info", "已刷新玩家列表", "共 " + state.playersList.length + " 行");
+      return true;
+    } catch (e) {
+      state.playersError = describeError(e, "players");
+      state.playersList = [];
+      if (showToast) toast("err", "读取玩家列表失败", state.playersError);
+      return false;
+    } finally {
+      state.playersLoading = false;
+    }
+  }
+
+  /** 拉某份存档里的玩家列表（改存档内金币用）。 */
+  async function fetchSnapshotPlayers(name, showToast) {
+    var wanted = text(name || state.snapshotPick);
+    state.snapshotPick = wanted;
+    if (!wanted) {
+      state.snapshotPlayers = [];
+      state.snapshotPlayersError = "先选一份存档";
+      return false;
+    }
+    if (!ENV.online) {
+      // 离线演示：拿当前演示玩家假装是存档里的玩家
+      state.snapshotPlayers = (DEMO.players || []).map(normalizePlayerRow);
+      state.snapshotPlayersError = "";
+      return true;
+    }
+    try {
+      var res = await bridgeRequest("post", "players", { action: "snapshot_list", name: wanted });
+      if (res && res.status === "error") {
+        state.snapshotPlayers = [];
+        state.snapshotPlayersError = text(res.message, "读不出这份存档");
+      } else {
+        state.snapshotPlayers = ((res && res.players) || []).map(normalizePlayerRow);
+        state.snapshotPlayersError = "";
+        state.playersGoldMax = num(res && res.gold_max, state.playersGoldMax);
+      }
+      if (showToast) toast("info", "已载入存档内玩家", wanted + " · " + state.snapshotPlayers.length + " 名");
+      return !state.snapshotPlayersError;
+    } catch (e) {
+      state.snapshotPlayers = [];
+      state.snapshotPlayersError = describeError(e, "players");
+      if (showToast) toast("err", "读取存档内玩家失败", state.snapshotPlayersError);
+      return false;
+    }
+  }
+
+  /** 玩家接口（相对路径 players）：列表 / 存档内列表 / 改金币。 */
+  async function playersCommand(body) {
+    if (!ENV.online) {
+      return { accepted: false, message: "离线预览：不会真正执行玩家操作" };
+    }
+    try {
+      var res = await bridgeRequest("post", "players", body || {});
+      if (res && typeof res === "object" && typeof res.editor_status === "string") {
+        try {
+          var fresh = parseEditorStatus({ editor_status: res.editor_status });
+          if (fresh) { pendingStatus = fresh; lastStatus = fresh; }
+        } catch (e) { /* 状态解析失败不影响结果 */ }
+      }
+      var message = (res && typeof res === "object" && res.message)
+        ? String(res.message)
+        : "已执行玩家操作";
+      var okFlag = !(res && typeof res === "object" && res.ok === false);
+      return { accepted: okFlag, message: message, detail: res };
+    } catch (e) {
+      return { accepted: false, message: describeError(e, "players") };
+    }
+  }
+
+  /** 改金币（实时玩家 / 存档内玩家）。confirm 由调用方在二次确认后传 true。 */
+  async function savePlayerGold(mode, userId, gold, snapshotName) {
+    if (!ENV.online) {
+      return { ok: false, message: "离线预览：不会真正改玩家数据" };
+    }
+    var body = mode === "snapshot"
+      ? { action: "snapshot_gold", name: text(snapshotName || state.snapshotPick),
+          user_id: text(userId), gold: num(gold, 0), confirm: true }
+      : { action: "set_gold", user_id: text(userId), gold: num(gold, 0), confirm: true };
+    var res = await playersCommand(body);
+    return { ok: !!res.accepted, message: res.message, detail: res.detail };
+  }
+
+  function playerRowsNow() {
+    return state.playersMode === "snapshot" ? (state.snapshotPlayers || []) : (state.playersList || []);
+  }
+
+  function renderPlayersTab(tab) {
+    var html = "";
+    var live = state.playersMode !== "snapshot";
+    var rows = playerRowsNow();
+
+    html += '<section class="card">';
+    html += '<div class="card-head"><h2>👤 ' + esc(tab.title) + "</h2>" +
+      '<span class="hint">' + esc(tab.hint) + "</span></div>";
+
+    html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
+      "这里只改<b>金币</b>，其它数据一律只读。改<b>实时玩家</b>前插件会自动存一份档（auto/，按「按时存档保留份数」轮转）；" +
+      "改<b>存档里</b>的玩家不会动在线数据，要等「恢复」那份存档之后才生效。金币范围 0 ~ " +
+      esc(fmtNum(state.playersGoldMax)) + "。" +
+      "</div></div>";
+
+    html += '<div class="toolbar">';
+    html += '<button class="btn btn-sm' + (live ? " btn-primary" : "") + '" data-act="p:mode" data-mode="live">🟢 实时玩家</button>';
+    html += '<button class="btn btn-sm' + (!live ? " btn-primary" : "") + '" data-act="p:mode" data-mode="snapshot">💾 存档内玩家</button>';
+    html += '<span class="divider"></span>';
+    if (live) {
+      html += '<label class="field search"><span class="field-icon">🔍</span>' +
+        '<input type="search" id="playerSearch" placeholder="搜索玩家 ID 或昵称（回车）" value="' + esc(state.playersQuery) + '" /></label>';
+      html += '<span class="stat-chip">共 <b>' + esc(fmtNum(state.playersTotal)) + "</b> 名玩家" +
+        (state.playersQuery ? "（筛出 <b>" + rows.length + "</b>）" : "") + "</span>";
+    } else {
+      html += '<label class="field"><span class="field-icon">📄</span><select data-act="p:snapPick">';
+      var snaps = state.snapshots || [];
+      html += '<option value="">（选一份存档）</option>';
+      snaps.forEach(function (s) {
+        html += '<option value="' + esc(s.name) + '"' + (state.snapshotPick === s.name ? " selected" : "") + ">" +
+          esc((s.note ? s.note + " · " : "") + s.name) + "</option>";
+      });
+      html += "</select></label>";
+      html += '<span class="stat-chip">共 <b>' + rows.length + "</b> 名玩家</span>";
+    }
+    html += '<span class="spacer" style="margin-left:auto"></span>';
+    html += '<button class="btn btn-sm" data-act="p:reload">↻ 刷新</button>';
+    html += "</div>";
+
+    if (state.playersError) {
+      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(state.playersError) + "</div></div>";
+    }
+    if (!live && state.snapshotPlayersError) {
+      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(state.snapshotPlayersError) + "</div></div>";
+    }
+    if (state.playersLoading) {
+      html += '<div class="empty"><span class="empty-icon">⏳</span><div class="empty-title">正在读取玩家列表…</div></div>';
+    } else if (!rows.length) {
+      html += '<div class="empty"><span class="empty-icon">👥</span><div class="empty-title">' +
+        (live ? "还没有玩家数据" : "还没选存档或这份存档里没有玩家") + "</div>" +
+        '<div class="empty-sub">' + (live
+          ? "有玩家在群里发过 /钓鱼 之后这里就会出现"
+          : "先在上面选一份存档；没有存档就去「💾 存档」页新建一份") + "</div></div>";
+    } else {
+      html += '<div class="table-wrap"><table class="grid" style="min-width:1000px">';
+      html += "<thead><tr>" +
+        '<th style="width:130px">玩家 ID</th><th style="width:130px">昵称</th>' +
+        '<th class="num" style="width:190px">金币（可改）</th>' +
+        '<th class="num" style="width:70px">等级</th><th class="num" style="width:80px">钓获</th>' +
+        '<th class="num" style="width:80px">卖出</th><th class="num" style="width:80px">鱼篓</th>' +
+        '<th class="num" style="width:80px">水族馆</th>' +
+        (live ? '<th style="width:170px">最近保存</th>' : "") +
+        '<th style="width:150px"></th></tr></thead><tbody>';
+      rows.forEach(function (r) { html += renderPlayerRow(r, live); });
+      html += "</tbody></table></div>";
+    }
+
+    html += '<div class="table-foot">';
+    html += '<span class="hint faint">' +
+      (live
+        ? "列表按金币从高到低，最多显示 " + esc(String(state.playersList.length)) + " 行；搜索能翻出更早的玩家"
+        : "改动写在存档文件里，恢复这份存档后生效（实时数据不受影响）") +
+      "</span>";
+    html += "</div>";
+    html += "</section>";
+    return html;
+  }
+
+  function renderPlayerRow(r, live) {
+    var uid = r.user_id;
+    var editing = state.goldEdit && state.goldEdit.user_id === uid;
+    var confirming = state.goldConfirm && state.goldConfirm.user_id === uid;
+    var goldCell;
+    if (editing) {
+      goldCell = '<input class="cell-input mono" style="width:110px;display:inline-block" type="number" min="0" ' +
+        'step="1" data-act="p:goldInput" value="' + esc(state.goldEdit.value) + '" />';
+    } else {
+      goldCell = "<b>" + esc(fmtNum(r.gold)) + "</b>";
+    }
+    var actions;
+    if (confirming) {
+      actions = '<div class="confirm-strip"><span class="q">改成 ' + esc(fmtNum(state.goldConfirm.value)) + "？</span>" +
+        '<button class="btn btn-sm btn-primary" data-act="p:goldYes" data-uid="' + esc(uid) + '">确认修改</button>' +
+        '<button class="btn btn-sm" data-act="p:goldCancel">取消</button></div>';
+    } else if (editing) {
+      actions = '<button class="btn btn-sm btn-primary" data-act="p:goldApply" data-uid="' + esc(uid) + '">下一步</button>' +
+        '<button class="btn btn-sm" data-act="p:goldCancel">取消</button>';
+    } else {
+      actions = '<button class="btn btn-sm" data-act="p:gold" data-uid="' + esc(uid) + '" ' +
+        (confirming ? "disabled" : "") + ">✏️ 改金币</button>";
+    }
+    return "<tr>" +
+      '<td class="mono">' + esc(uid) + "</td>" +
+      "<td>" + (r.name ? esc(r.name) : '<span class="placeholder">未记录</span>') + "</td>" +
+      '<td class="num">' + goldCell + "</td>" +
+      '<td class="num">' + esc(r.level) + "</td>" +
+      '<td class="num">' + esc(fmtNum(r.caught)) + "</td>" +
+      '<td class="num">' + esc(fmtNum(r.sold)) + "</td>" +
+      '<td class="num">' + esc(r.fish) + "</td>" +
+      '<td class="num">' + esc(r.aquarium) + "</td>" +
+      (live ? "<td class=\"faint mono\">" + esc(r.saved_text || "—") + "</td>" : "") +
+      "<td>" + actions + "</td>" +
+      "</tr>";
+  }
+
+  /* ===========================================================================
      11. 渲染：总入口 + 状态栏
      =========================================================================== */
   function render() {
@@ -2691,11 +3112,33 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         '<div class="empty-sub">离线预览会直接使用演示数据</div></div></section>';
     } else if (tab.kind === "snapshots") {
       panel.innerHTML = banner + renderSnapshotsTab(tab);
+    } else if (tab.kind === "players") {
+      panel.innerHTML = banner + renderPlayersTab(tab);
+    } else if (tab.navGroup) {
+      // 「⌨️ 命令」这一组里有两张表：上面一条小切换条，下面渲染当前这张
+      panel.innerHTML = banner + renderSubTabs(tab.navGroup, tab.id) + renderTableTab(tab);
     } else {
       panel.innerHTML = banner + renderTableTab(tab);
     }
 
     renderStatusBar();
+  }
+
+  /** 同组标签页之间的小切换条（命令别名 / 自定义命令）。 */
+  function renderSubTabs(group, activeId) {
+    var items = TABS.filter(function (t) { return t.navGroup === group; });
+    if (items.length < 2) return "";
+    var html = '<div class="toolbar" style="border-radius:12px 12px 0 0">';
+    items.forEach(function (t) {
+      var d = diffTab(t.id);
+      html += '<button class="btn btn-sm' + (t.id === activeId ? " btn-primary" : "") +
+        '" data-act="tab" data-tab="' + esc(t.id) + '">' + esc(t.title) +
+        (d.count ? "（" + d.count + " 处未保存）" : "") + "</button>";
+    });
+    html += '<span class="spacer" style="margin-left:auto"></span>' +
+      '<span class="hint faint">两张表都在这一页：改完记得点右上角「保存并生效」</span>';
+    html += "</div>";
+    return html;
   }
 
   /** 顶部提示条：读取失败 / 有行没解析出来都要说清楚，不静默。 */
@@ -2727,7 +3170,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     document.getElementById("savedInfo").textContent = state.savedAt ? "上次保存 " + state.savedAt : "尚未保存";
 
     var tab = TAB_BY_ID[state.tab];
-    var cnt = tab.kind === "snapshots" ? (state.snapshots || []).length : (state.data[tab.id] || []).length;
+    var cnt;
+    if (tab.kind === "snapshots") cnt = (state.snapshots || []).length;
+    else if (tab.kind === "players") cnt = playerRowsNow().length;
+    else cnt = (state.data[tab.id] || []).length;
     document.getElementById("tabInfo").textContent = tab.title + " · " + cnt + " 条";
 
     var badge = document.getElementById("connBadge");
@@ -2925,7 +3371,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   function buildPayload() {
     var payload = {};
     TABS.forEach(function (t) {
-      if (t.kind === "snapshots") return;
+      if (t.kind) return;   // 存档页 / 玩家页的数据不走「内容表」载荷
       payload[t.id] = state.data[t.id] || [];
     });
     payload.autoBackup = state.autoBackup;
@@ -2934,7 +3380,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
   function markSaved() {
     TABS.forEach(function (t) {
-      if (t.kind === "snapshots") return;
+      if (t.kind) return;
       var map = {};
       (state.data[t.id] || []).forEach(function (row) {
         var k = rowKey(t, row);
@@ -2990,7 +3436,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         var obj = JSON.parse(String(reader.result));
         var n = 0;
         TABS.forEach(function (t) {
-          if (t.kind === "snapshots") return;
+          if (t.kind) return;
           if (Array.isArray(obj[t.id])) { state.data[t.id] = obj[t.id]; n++; }
         });
         if (obj.autoBackup) { state.autoBackup = obj.autoBackup; state.autoBackupDirty = true; }
@@ -3027,11 +3473,16 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       cfg = deepClone(DEMO.config);
     }
     TABS.forEach(function (t) {
-      if (t.kind === "snapshots") return;
+      if (t.kind) return;
       state.data[t.id] = deepClone(cfg[t.id] || []);
     });
     if (cfg.autoBackup) state.autoBackup = deepClone(cfg.autoBackup);
     state.loadNotes = (cfg._notes || []).slice();
+    /* 玩家页：清掉上一轮的编辑/确认态，并拉一次列表（离线用演示数据） */
+    state.goldEdit = null;
+    state.goldConfirm = null;
+    state.playersError = "";
+    await fetchPlayers(false);
 
     var snaps = null;
     try {
@@ -3188,6 +3639,94 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       case "snap:delete": state.pendingConfirm = { scope: "card", index: index, action: "delete" }; render(); break;
       case "snap:delYes": snapshotAction("delete", index); break;
       case "snap:download": snapshotAction("download", index); break;
+      case "snap:players": {
+        // 存档卡片上的快捷入口：切到玩家页的「存档内玩家」模式并选中这份存档
+        var target = (state.snapshots || [])[index];
+        state.playersMode = "snapshot";
+        state.snapshotPick = target ? text(target.name) : "";
+        state.goldEdit = null;
+        state.goldConfirm = null;
+        state.tab = "players";
+        try { history.replaceState(null, "", "#players"); } catch (e) { /* 忽略 */ }
+        render();
+        fetchSnapshotPlayers(state.snapshotPick, true);
+        break;
+      }
+
+      /* ---- 玩家页（改金币）---- */
+      case "p:mode": {
+        var mode = el.getAttribute("data-mode") === "snapshot" ? "snapshot" : "live";
+        state.playersMode = mode;
+        state.goldEdit = null;
+        state.goldConfirm = null;
+        render();
+        if (mode === "snapshot" && state.snapshotPick) fetchSnapshotPlayers(state.snapshotPick, false);
+        break;
+      }
+      case "p:reload":
+        if (state.playersMode === "snapshot") fetchSnapshotPlayers(state.snapshotPick, true).then(function () { render(); });
+        else fetchPlayers(true).then(function () { render(); });
+        break;
+      case "p:gold": {
+        var row = playerRowsNow().filter(function (r) { return r.user_id === el.getAttribute("data-uid"); })[0];
+        if (!row) break;
+        state.goldConfirm = null;
+        state.goldEdit = { user_id: row.user_id, value: row.gold };
+        render();
+        break;
+      }
+      case "p:goldInput": break;   // 输入框自身
+      case "p:goldApply": {
+        var uid = el.getAttribute("data-uid");
+        var input = document.querySelector('[data-act="p:goldInput"]');
+        var raw = input ? String(input.value).trim() : "";
+        var value = Number(raw);
+        if (raw === "" || !isFinite(value) || value < 0 || Math.floor(value) !== value) {
+          toast("err", "金币要填 0 或正整数", raw || "（空）");
+          break;
+        }
+        if (value > state.playersGoldMax) {
+          toast("err", "超出金币上限", "最多 " + fmtNum(state.playersGoldMax));
+          break;
+        }
+        var before = playerRowsNow().filter(function (r) { return r.user_id === uid; })[0];
+        state.goldEdit = null;
+        state.goldConfirm = {
+          user_id: uid, value: value, mode: state.playersMode,
+          oldValue: before ? before.gold : 0
+        };
+        render();
+        break;
+      }
+      case "p:goldCancel":
+        state.goldEdit = null;
+        state.goldConfirm = null;
+        render();
+        break;
+      case "p:goldYes": {
+        var conf = state.goldConfirm;
+        if (!conf) break;
+        var who = conf.user_id;
+        var val = conf.value;
+        var oldVal = conf.oldValue;
+        var snapName = state.snapshotPick;
+        var mode2 = conf.mode;
+        state.goldConfirm = null;
+        render();
+        savePlayerGold(mode2, who, val, snapName).then(function (res) {
+          if (res && res.ok) {
+            toast("ok", mode2 === "snapshot" ? "已改存档里的金币" : "已改玩家金币",
+              who + "：" + fmtNum(oldVal) + " → " + fmtNum(val) +
+              (mode2 === "snapshot" ? "（恢复这份存档后生效）" : ""));
+            if (mode2 === "snapshot") fetchSnapshotPlayers(snapName, false).then(function () { render(); });
+            else fetchPlayers(false).then(function () { render(); });
+          } else {
+            toast("err", "修改没成功", (res && res.message) || "未知原因");
+            render();
+          }
+        });
+        break;
+      }
     }
   });
 
@@ -3223,6 +3762,14 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       return;
     }
     if (act === "batchField") { state.batchField = el.value; return; }
+    if (act === "p:goldInput") {
+      if (state.goldEdit) state.goldEdit.value = el.value;
+      return;
+    }
+    if (act === "p:snapPick") {   // 顺手支持 input（select 一般走 change）
+      state.snapshotPick = el.value;
+      return;
+    }
     if (act && act.indexOf("auto:") === 0) {
       var field = act.split(":")[1];
       state.autoBackup[field] = el.type === "checkbox" ? el.checked : Number(el.value);
@@ -3238,6 +3785,13 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (!act) return;
     if (act === "filter") { state.filter = el.value; state.selected = []; render(); }
     else if (act === "sort") { state.sort = el.value; render(); }
+    else if (act === "p:snapPick") {
+      state.snapshotPick = el.value;
+      state.goldEdit = null;
+      state.goldConfirm = null;
+      render();
+      if (el.value) fetchSnapshotPlayers(el.value, false).then(function () { render(); });
+    }
     else if (act === "auto:enable") {
       state.autoBackup.enable = el.checked;
       state.autoBackupDirty = true;
@@ -3247,6 +3801,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
   // 搜索框（用 input 事件，但它是动态渲染的，单独委托）
   document.addEventListener("input", function (ev) {
+    if (ev.target && ev.target.id === "playerSearch") {
+      // 玩家页：回车才去后端查（避免每敲一个字都发一次请求）
+      return;
+    }
     if (ev.target && ev.target.id === "searchBox") {
       state.query = ev.target.value;
       var panel = document.getElementById("panel");
@@ -3271,6 +3829,18 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   // 行内编辑键盘：Enter 提交、Esc 取消、Tab 跳下一个单元格
   document.addEventListener("keydown", function (ev) {
     var el = ev.target;
+    if (el && el.id === "playerSearch" && ev.key === "Enter") {
+      // 玩家页搜索：回车才发请求
+      ev.preventDefault();
+      state.playersQuery = String(el.value || "").trim();
+      var keep = el.value;
+      fetchPlayers(true).then(function () {
+        render();
+        var box = document.getElementById("playerSearch");
+        if (box) { box.value = keep; box.focus(); }
+      });
+      return;
+    }
     if (el && el.classList && el.classList.contains("cell-input")) {
       if (ev.key === "Enter") { ev.preventDefault(); commitEdit(); return; }
       if (ev.key === "Escape") { ev.preventDefault(); cancelEdit(); return; }

@@ -121,7 +121,11 @@ const hookNames = [
   "sleep", "waitForStatus", "renderBanner", "downloadSnapshot",
   "refreshSnapshots",
   // 回复按钮（button_defs）表
-  "rowKey", "isButtonStyle", "BUTTON_SCENES"
+  "rowKey", "isButtonStyle", "BUTTON_SCENES",
+  // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
+  "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
+  "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
+  "renderPlayerRow"
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -157,7 +161,8 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 12, "标签页数量 = 12", Object.keys(T.TAB_BY_ID).join(","));
+  check(Object.keys(T.TAB_BY_ID).length === 15, "标签页数量 = 15（12 + 玩家 + 命令别名 + 自定义命令）",
+    Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个", (T.state.data.locations || []).length);
   check((T.state.snapshots || []).length === 4, "演示存档 4 份", (T.state.snapshots || []).length);
@@ -206,7 +211,12 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 12, "12 个标签都有条目数徽标");
+  check(tabsHtml.split("tab-count").length - 1 === 14,
+    "14 个标签入口都有条目数徽标（12 原有 + 玩家 + 命令组）",
+    tabsHtml.split("tab-count").length - 1);
+  check(tabsHtml.split("⌨️ 命令").length - 1 === 1 && /\u2328\ufe0f 命令/.test(tabsHtml),
+    "「命令」只占一个入口按钮（两张表在页内切换）");
+  check(tabsHtml.indexOf('data-tab="players"') > 0, "标签栏里有「👤 玩家」入口");
   check(T.state.autoBackupDirty !== true, "自动备份表单未被标记为已改");
 
   console.log("\n[1d] 空状态（表空 / 筛选无结果 都别只剩表头）");
@@ -276,6 +286,20 @@ function runAssertions() {
         check(out.indexOf("自动备份") >= 0 && out.indexOf("snap-card") >= 0,
           "存档页渲染出表单与卡片", out.length + " 字符");
         check(out.indexOf("kind-daily") >= 0 && out.indexOf("kind-manual") >= 0, "存档类型徽标齐全");
+        check(out.indexOf("snap:players") >= 0 && out.indexOf("👤 改金币") >= 0,
+          "存档卡片上有「改金币」入口（跳到玩家页的存档模式）");
+      } else if (t.kind === "players") {
+        const out = T.renderPlayersTab(t);
+        check(out.indexOf("<table") >= 0 && out.indexOf("金币（可改）") >= 0,
+          "玩家页渲染出可改金币的表格", out.length + " 字符");
+        check(out.indexOf("p:mode") >= 0 && out.indexOf("存档内玩家") >= 0 && out.indexOf("实时玩家") >= 0,
+          "玩家页有「实时 / 存档内」两种模式");
+      } else if (t.navGroup) {
+        const out = T.renderTableTab(t);
+        check(out.length > 400 && out.indexOf("<table") >= 0, "「" + t.label + "」渲染出表格", out.length + " 字符");
+        const sub = T.renderSubTabs(t.navGroup, t.id);
+        check(sub.indexOf("命令别名") >= 0 && sub.indexOf("自定义命令") >= 0,
+          "命令页里两张表的切换条都在");
       } else {
         const out = T.renderTableTab(t);
         check(out.length > 400 && out.indexOf("<table") >= 0, "「" + t.label + "」渲染出表格", out.length + " 字符");
@@ -322,10 +346,12 @@ function runAssertions() {
 
   console.log("\n[8] 保存载荷与存档动作");
   const payload = T.buildPayload();
-  check(["fish", "locations", "baits", "rods", "items", "collectibles", "variants", "weather", "numbers", "buttons"]
-    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 10 张表");
+  check(["fish", "locations", "baits", "rods", "items", "collectibles", "variants", "weather",
+    "numbers", "buttons", "aliases", "custom"]
+    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 12 张表");
   check(!!payload.autoBackup && payload.autoBackup.dailyHour === 4, "载荷带上自动备份设置");
-  check(Object.keys(payload).length === 12, "载荷字段数 = 12（10 表 + numbers + autoBackup）", Object.keys(payload).length);
+  check(Object.keys(payload).length === 14, "载荷字段数 = 14（12 表 + numbers + autoBackup）", Object.keys(payload).length);
+  check(payload.players === undefined, "玩家页的数据不进「内容表」载荷（走独立接口）");
 
   const snapWithNote = T.renderSnapCard({ kind: "manual", note: "改物价前", time: "2026-09-18 18:20", players: 35, size: "131 KB" }, 0);
   check(snapWithNote.indexOf("改物价前") >= 0, "存档卡片显示备注名");
@@ -372,10 +398,10 @@ function runAssertions() {
 /* =============================================================================
    [12] 数据通道的纯函数：行格式、状态解析、白名单过滤
    ============================================================================= */
-function channelHelpers() {
+async function channelHelpers() {
   console.log("\n[12] 数据通道：配置 <-> 表格 的转换");
-  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,buttons",
-    "10 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
+  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,buttons,aliases,custom",
+    "12 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
   check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
     "fish_defs 是文本表（多行），其余是字符串数组");
   check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
@@ -455,10 +481,64 @@ function channelHelpers() {
   check(T.cell("a|b\nc｜d").indexOf("|") < 0 && T.cell("a|b\nc｜d").indexOf("\n") < 0,
     "cell() 把竖线/换行洗掉", JSON.stringify(T.cell("a|b\nc｜d")));
 
+  /* ---- v1.10.0：命令别名 / 自定义命令 两张表 ---- */
+  const aliasDef = T.TABLE_DEFS.aliases;
+  const customDef = T.TABLE_DEFS.custom;
+  check(aliasDef.configKey === "command_aliases" && aliasDef.configType === "text",
+    "别名表写回 command_aliases（多行文本）");
+  check(customDef.configKey === "custom_commands" && customDef.configType === "text",
+    "自定义命令表写回 custom_commands（多行文本）");
+  const aliasRow = aliasDef.parse("背包|包,bag,鱼篓");
+  check(aliasRow.canonical === "背包" && aliasRow.aliases === "包,bag,鱼篓",
+    "别名行解析正确", JSON.stringify(aliasRow));
+  check(aliasDef.serialize(aliasRow) === "背包|包,bag,鱼篓", "别名行往返不漂", aliasDef.serialize(aliasRow));
+  check(aliasDef.parse("背包") === null && aliasDef.parse("背包|") === null,
+    "缺竖线/缺别名的行解析成 null（保存时不会悄悄改写）");
+  const customRow = customDef.parse("领奖|发送:今天也要加油！");
+  check(customRow.name === "领奖" && customRow.action === "发送" && customRow.body === "今天也要加油！",
+    "自定义命令行解析正确", JSON.stringify(customRow));
+  check(customDef.serialize(customRow) === "领奖|发送:今天也要加油！",
+    "自定义命令往返不漂", customDef.serialize(customRow));
+  check(customDef.parse("领奖|发送：全角冒号").action === "发送",
+    "全角冒号也认（站长用中文输入法写配置是常态）");
+  check(customDef.parse("没有动作") === null && customDef.parse("甲|发送:") === null,
+    "缺动作/空内容的行解析成 null");
+  check(T.canonicalCommands().length === 26 && T.canonicalCommands().indexOf("背包") >= 0,
+    "页面知道 26 个规范子命令（离线用演示清单，在线以插件回写的为准）",
+    T.canonicalCommands().length);
+  // 校验：目标子命令、动作、重名都要在页面上就标红
+  const vAlias = function (row) { return Object.keys(T.validateRow(T.TAB_BY_ID.aliases, row)); };
+  check(vAlias({ canonical: "背包", aliases: "仓库,行囊" }).length === 0, "合法别名行校验通过");
+  check(vAlias({ canonical: "不存在的命令", aliases: "x" })[0] === "canonical", "规范子命令写错会被标红");
+  check(vAlias({ canonical: "背包", aliases: "" })[0] === "aliases", "一个别名都不写会被标红");
+  const vCustom = function (row) { return Object.keys(T.validateRow(T.TAB_BY_ID.custom, row)); };
+  check(vCustom({ name: "快捷签到", action: "执行", body: "签到" }).length === 0, "合法自定义命令行校验通过");
+  check(vCustom({ name: "背包", action: "发送", body: "抢内置" })[0] === "name",
+    "自定义命令名撞内置子命令会被标红（内置永远优先）");
+  check(vCustom({ name: "甲", action: "乱写", body: "x" })[0] === "action", "动作写错会被标红");
+  check(vCustom({ name: "甲", action: "发送", body: "" })[0] === "body", "内容为空会被标红");
+  check((T.state.data.aliases || []).length === 3 && (T.state.data.custom || []).length === 2,
+    "离线演示也带别名/自定义命令样例（首屏就能看到长什么样）");
+
+  /* ---- v1.10.0：玩家页（金币）---- */
+  check((T.state.playersList || []).length === 4, "离线演示 4 名玩家", (T.state.playersList || []).length);
+  check(T.playerRowsNow().length === 4 && T.state.playersMode === "live", "玩家页默认看「实时玩家」");
+  const playerHtml = T.renderPlayersTab(T.TAB_BY_ID.players);
+  check(playerHtml.indexOf("10001") > 0 && playerHtml.indexOf("12,800") > 0,
+    "玩家表渲染出真实金币（千分位格式化）");
+  check(playerHtml.indexOf("p:gold") > 0, "每行都有「改金币」按钮");
+  T.state.goldConfirm = { user_id: "10001", value: 5000, mode: "live", oldValue: 12800 };
+  check(T.renderPlayersTab(T.TAB_BY_ID.players).indexOf("确认修改") > 0,
+    "二次确认条出现（改金币不是一键生效）");
+  T.state.goldConfirm = null;
+  const offlineGold = await T.savePlayerGold("live", "10001", 5000);
+  check(offlineGold.ok === false && /离线预览/.test(offlineGold.message),
+    "离线模式下改金币被拦下（不会假装成功）", offlineGold.message);
+
   // 序列化
   const serialized = T.serializeContentTables();
-  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,button_defs",
-    "序列化输出 10 张配置表", Object.keys(serialized).join(","));
+  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,button_defs,command_aliases,custom_commands",
+    "序列化输出 12 张配置表", Object.keys(serialized).join(","));
   check(typeof serialized.fish_defs === "string"
     && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
     "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",
@@ -581,6 +661,25 @@ function makeFakeSdk() {
       capture("post", endpoint, JSON.stringify(payload));
       // 写操作是同步的：响应里直接带回最新状态（页面不必再轮询）
       const fresh = JSON.parse(FAKE_CONFIG_AFTER().editor_status);
+      // 玩家接口（v1.10.0）：list / snapshot_list 回列表，set_gold / snapshot_gold 回结果
+      if (String(endpoint) === "players") {
+        const action = String(payload.action || "list");
+        const base = {
+          status: "ok", ok: true, transport: "plugin-api",
+          editor_status: JSON.stringify(fresh)
+        };
+        if (action === "list" || action === "snapshot_list") {
+          const rows = action === "list" ? FAKE_PLAYERS : FAKE_PLAYERS.slice(0, 1);
+          return Promise.resolve(Object.assign({}, base, {
+            players: rows, count: rows.length, total: 12, limit: 500,
+            scan_limit: 2000, gold_max: 1000000000,
+            query: String(payload.query || "")
+          }));
+        }
+        return Promise.resolve(Object.assign({}, base, {
+          message: "已把玩家 " + payload.user_id + " 的金币改成 " + payload.gold
+        }));
+      }
       let message = "已执行 " + payload.action;
       if (payload.action === "rename") {
         message = "已把「" + payload.name + "」的备注改成「" + payload.note + "」";
@@ -625,6 +724,13 @@ const FAKE_STATUS = {
       size: "130 KB", mtime: 90 }
   ]
 };
+
+const FAKE_PLAYERS = [
+  { user_id: "10001", name: "钓鱼佬", gold: 12800, level: 6, caught: 214, sold: 180,
+    fish: 12, aquarium: 3, saved_text: "2026-09-18 18:20:11" },
+  { user_id: "10002", name: "小钓手", gold: 3200, level: 3, caught: 88, sold: 70,
+    fish: 5, aquarium: 1, saved_text: "2026-09-18 17:02:40" }
+];
 
 const FAKE_CONFIG = {
   fish_defs: "carp|鲤鱼|常见|120|novice:1.0|村口常客\ncrucian|鲫鱼|常见|90|novice:1.2|巴掌大",
@@ -783,6 +889,47 @@ async function channelRoundTrip() {
   const unknown = await F.runSnapshotAction("nuke", {});
   check(unknown.ok === false && /不认识/.test(unknown.message),
     "未知存档动作被页面自己拦下", unknown.message);
+
+  // ---- 玩家接口（v1.10.0）：list / snapshot_list / set_gold / snapshot_gold ----
+  captured.calls = [];
+  const okPlayers = await F.fetchPlayers(false);
+  const listCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const listEnv = JSON.parse(listCall.body);
+  check(okPlayers === true && listCall.endpoint === "players",
+    "玩家列表走相对路径 players（插件注册的第三个路由）", listCall.endpoint);
+  check(listEnv.action === "list" && listEnv.query === "",
+    "列表指令带 action=list + 搜索词", JSON.stringify(listEnv));
+  check(F.state.playersList.length === 2 && F.state.playersList[0].gold === 12800
+    && F.state.playersList[0].level === 6,
+    "玩家行被规范化（金币/等级/钓获都拿到了）", JSON.stringify(F.state.playersList[0]));
+
+  captured.calls = [];
+  await F.fetchSnapshotPlayers("2026-09-18_1820.json", false);
+  const snapEnv = JSON.parse(captured.calls.filter(function (c) { return c.kind === "post"; })[0].body);
+  check(snapEnv.action === "snapshot_list" && snapEnv.name === "2026-09-18_1820.json",
+    "存档内玩家走 snapshot_list + 快照名", JSON.stringify(snapEnv));
+  check(F.state.snapshotPlayers.length === 1, "存档内玩家列表渲染出来了", F.state.snapshotPlayers.length);
+
+  captured.calls = [];
+  const liveRes = await F.savePlayerGold("live", "10001", 5000);
+  const liveCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const liveEnv = JSON.parse(liveCall.body);
+  check(liveCall.endpoint === "players",
+    "改金币 POST 到 players（不走 config，也不会被 snapshot_ 前缀误判到存档接口）", liveCall.endpoint);
+  check(liveEnv.action === "set_gold" && liveEnv.user_id === "10001" && liveEnv.gold === 5000,
+    "改实时玩家金币的指令正确", JSON.stringify(liveEnv));
+  check(liveEnv.confirm === true,
+    "请求里带 confirm=true（页面上的二次确认走完才会发这条）");
+  check(liveRes.ok === true && /10001/.test(liveRes.message), "改金币结果取插件返回的真实结果", liveRes.message);
+
+  captured.calls = [];
+  await F.savePlayerGold("snapshot", "10001", 6600, "2026-09-18_1820.json");
+  const snapGoldCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const snapGoldEnv = JSON.parse(snapGoldCall.body);
+  check(snapGoldCall.endpoint === "players"
+    && snapGoldEnv.action === "snapshot_gold" && snapGoldEnv.name === "2026-09-18_1820.json"
+    && snapGoldEnv.user_id === "10001" && snapGoldEnv.gold === 6600 && snapGoldEnv.confirm === true,
+    "改存档内金币的指令正确（带快照名 + 玩家 + 金币 + confirm）", JSON.stringify(snapGoldEnv));
   if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
   return Promise.resolve();
 }
