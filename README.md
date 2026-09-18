@@ -200,7 +200,30 @@ OneBot 的 access token 都属于 AstrBot 主程序，存在 `data/cmd_config.js
 > 脚本逻辑（注入/不覆盖/备份/容错/compose 语法）由 `test_docker_deploy.py` 离线断言，
 > 官方镜像事实（基础镜像、`WORKDIR /AstrBot`、`CMD ["python","main.py"]`、无 ENTRYPOINT、6185 端口）
 > 来自 AstrBot 仓库的 Dockerfile，但请你在有 Docker 的机器上先跑一次 `docker compose up -d --build`。
+> 来自 AstrBot 仓库的 Dockerfile；镜像由 **GitHub Actions 在真 Docker 环境里构建并冒烟测试**
+> （见下节），你也可以自己 `docker compose up -d --build`。
 > 如果你更习惯原生方式，也可以在 WebUI 里直接配机器人，然后把插件目录丢进 `data/plugins/`。
+
+### 用 CI 构建好的镜像（免本地 Docker）
+
+推送到 `main`（或手动触发 workflow）后，GitHub Actions 会自动构建镜像并推到 GHCR：
+
+```bash
+docker pull ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing:latest
+
+docker run -d --name astrbot \
+  -p 6185:6185 -p 6199:6199 \
+  -v "$PWD/data:/AstrBot/data" \
+  --env-file .env -e TZ=Asia/Shanghai \
+  ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing:latest
+```
+
+- ⚠️ 首次使用前，到
+  [package 设置](https://github.com/users/dhhxfggg2023/packages/container/astrbot_plugin_qq_fishing/settings)
+  把可见性改成 **Public** —— GHCR 的包默认是 private，别人匿名 `docker pull` 会 404。
+- 每次构建都会在**真容器里跑冒烟测试**：插件文件齐全、`_conf_schema.json` 是合法 JSON、
+  容器内 `py_compile` 通过、入口脚本能把插件同步进 `data/plugins/`
+  （并确认 `docker/`、`Dockerfile` 这些开发文件没被带进运行目录）。
 
 ### 数据与迁移
 
