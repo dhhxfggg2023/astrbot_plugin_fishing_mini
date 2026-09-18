@@ -3215,436 +3215,258 @@ async def main():
     )
 
     # =====================================================================
-    print("\n[10q] 数据编辑器通道（上传固定文件 + 轮询消费）")
+    print("\n[10q] 数据编辑器通道（插件注册的 Web API：config / snapshot）")
 
-    # 指令文件落在 <ASTRBOT_ROOT>/data/attachments/<固定名>
-    attachments = os.path.join(_SANDBOX_ROOT, "data", "attachments")
-    os.makedirs(attachments, exist_ok=True)
-    bridge_file = os.path.join(attachments, mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME)
-    bridge_rel = "/".join(("data", "attachments", mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME))
-    check(
-        plugin_d._editor_bridge_path().replace("\\", "/").endswith(bridge_rel),
-        f"通道文件路径落点 = <AstrBotRoot>/{bridge_rel}（与页面约定一致）",
-    )
-    check(
-        mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME == "fishing_editor_bridge.json",
-        f"固定文件名 = {mod.EDITOR_BRIDGE.BRIDGE_FILE_NAME}",
-    )
-    check(
-        mod.EDITOR_BRIDGE.POLL_INTERVAL == 1.5,
-        f"轮询间隔 = {mod.EDITOR_BRIDGE.POLL_INTERVAL} 秒",
-    )
+    BRIDGE = mod.EDITOR_BRIDGE
 
-    def write_bridge(payload, raw=None):
-        """写一条指令到通道文件（raw 不为 None 时直接写原文，用来造坏 JSON）。"""
-        with open(bridge_file, "w", encoding="utf-8") as fp:
-            fp.write(raw if raw is not None else json.dumps(payload, ensure_ascii=False))
 
-    def read_status():
-        return json.loads(plugin_d.config["editor_status"])
+    def api_dict(res):
+        """把 handler 的返回统一成 dict（可能是 JSONResponse，也可能是裸 dict）。"""
+        body = getattr(res, "body", None)
+        if isinstance(body, (bytes, bytearray)):
+            try:
+                return json.loads(body.decode("utf-8"))
+            except Exception:
+                return {}
+        return res if isinstance(res, dict) else {}
 
-    # --- 白名单：未知 action 被拒，而且照样记 nonce（不会每 1.5 秒重试） ---
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-bad-action", "action": "drop_all_tables", "payload": {}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(status["ok"] is False, "未知 action 被拒绝（ok=false）")
+
     check(
-        "不认识的动作" in status["last_result"] and "drop_all_tables" in status["last_result"],
-        f"拒绝原因写清是哪个动作 -> {status['last_result']}",
+        BRIDGE.ENDPOINT_CONFIG == "config" and BRIDGE.ENDPOINT_SNAPSHOT == "snapshot",
+        f"页面侧的相对 endpoint = {BRIDGE.ENDPOINT_CONFIG} / {BRIDGE.ENDPOINT_SNAPSHOT}",
     )
     check(
-        plugin_d._editor_last_nonce == "n-bad-action",
-        "被拒的动作也记了 nonce（同一条不会反复执行）",
-    )
-    before = plugin_d.config["editor_status"]
-    await plugin_d._editor_poll_once()
-    check(
-        plugin_d.config["editor_status"] == before,
-        "同 nonce 再轮询一次：直接跳过（状态没被改写）",
+        not hasattr(BRIDGE, "BRIDGE_FILE_NAME")
+        and not hasattr(BRIDGE, "POLL_INTERVAL")
+        and not hasattr(BRIDGE, "MAX_BRIDGE_BYTES"),
+        "旧的「上传固定文件 + 轮询」常量已彻底移除",
     )
 
-    # --- 坏 JSON：消费掉 + 回写错误，不卡死 ---
-    plugin_d._editor_last_nonce = ""
-    write_bridge(None, raw='{"nonce": "n-broken", "action": "save_content", "payload": {')
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(status["ok"] is False, "坏 JSON 被拒绝（ok=false）")
-    check("不是合法 JSON" in status["last_result"], f"坏 JSON 有中文提示 -> {status['last_result']}")
-    check(plugin_d._editor_last_nonce == "n-broken", "坏 JSON 也能抠出 nonce 并记录")
-    # 完全看不出 nonce 的垃圾内容：跳过即可，绝不能抛异常
-    plugin_d._editor_last_nonce = ""
-    write_bridge(None, raw="<<<这不是 JSON>>>")
+    # --- 路由注册：必须带插件名前缀（Dashboard 转发到 extensions/<插件名>/<endpoint>）---
+    registered: list[tuple] = []
+
+
+    class _FakeContext:
+        def __init__(self):
+            self.registered_web_apis: list[tuple] = []
+
+        def register_web_api(self, route, view_handler, methods, desc):
+            registered.append((route, tuple(methods), desc, getattr(view_handler, "__name__", "?")))
+            self.registered_web_apis.append((route, view_handler, list(methods), desc))
+
+
+    plugin_d.context = _FakeContext()
+    plugin_d.start_editor_bridge()
+    routes = {(item[0], item[1]) for item in registered}
+    names = plugin_d._editor_plugin_names()
+    check(len(names) >= 2, f"候选插件名（路由前缀要跟它一致）：{names}")
+    check(
+        (f"/{names[0]}/config", ("GET",)) in routes
+        and (f"/{names[0]}/config", ("POST",)) in routes
+        and (f"/{names[0]}/snapshot", ("POST",)) in routes,
+        "注册了 config(GET/POST) 与 snapshot(POST)",
+    )
+    check(
+        all(any(item[0].startswith("/" + n + "/") for n in names) for item in registered),
+        f"所有路由都带插件名前缀（候选：{names} —— 少了它 Dashboard 会报「未找到该路由」）",
+    )
+
+    # 用 AstrBot 自己的匹配器跑一遍：页面请求 <插件名>/config 时到底能不能命中
+    # （用户之前卡的就是这里 —— 插件没注册路由时 Dashboard 会回「未找到该路由」）
     try:
-        await plugin_d._editor_poll_once()
-        check(True, "连 nonce 都没有的垃圾内容：轮询不抛异常（静默跳过）")
-    except Exception as e:
-        check(False, f"垃圾内容让轮询抛异常了：{e}")
-    # 文件不存在也照常跳过
-    os.remove(bridge_file)
-    try:
-        await plugin_d._editor_poll_once()
-        check(True, "通道文件不存在时静默跳过（目录没建好也不会报错）")
-    except Exception as e:
-        check(False, f"文件缺失时轮询抛异常：{e}")
+        from astrbot.dashboard.api.plugins import _match_registered_web_api
 
-    # --- save_content：只接受内容表白名单 ---
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {
-            "nonce": "n-content-reject",
-            "action": "save_content",
-            "payload": {
-                "tables": {
-                    "fish_defs": "x|测试鱼|常见|10|新手村:1.0|测试",
-                    "editor_status": "黑客",
-                }
-            },
-        }
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(status["ok"] is False, "save_content 混进 editor_status -> 整批拒绝")
+        entries = [(item[0], item[3], list(item[1]), item[2]) for item in registered]
+        hit_get = _match_registered_web_api(entries, f"{names[0]}/config", "GET")
+        hit_post = _match_registered_web_api(entries, f"{names[0]}/config", "POST")
+        hit_snap = _match_registered_web_api(entries, f"{names[0]}/snapshot", "POST")
+        check(
+            bool(hit_get) and bool(hit_post) and bool(hit_snap),
+            "AstrBot 的路由匹配器能命中 config(GET/POST) 与 snapshot(POST)",
+        )
+        check(
+            _match_registered_web_api(entries, f"{names[0]}/nope", "GET") is None,
+            "没注册的路径匹配不到（页面会看到「未找到该路由」）",
+        )
+        # 页面侧传的是相对路径，Dashboard 拼成 extensions/<插件名>/<endpoint>
+        check(
+            bool(_match_registered_web_api(entries, "config", "GET")) is False,
+            "只传 config（不带插件名）匹配不到 —— 所以路由必须带前缀",
+        )
+    except ImportError:  # pragma: no cover - 脱离 AstrBot 环境时跳过
+        print("    ⚠ 本机没有 astrbot.dashboard，跳过路由匹配器核对")
     check(
-        "editor_status" in status["last_result"] and "内容表" in status["last_result"],
-        f"拒绝原因点名了违规键 -> {status['last_result']}",
-    )
-    check(
-        plugin_d.config.get("editor_status") != "黑客",
-        "违规键确实没被写进配置（editor_status 没被覆盖成「黑客」）",
+        all(item[2] for item in registered),
+        "每条路由都带描述（WebUI 里能看懂）",
     )
 
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {
-            "nonce": "n-content-ok",
-            "action": "save_content",
-            "payload": {"tables": {"fish_defs": "bridge_fish|通道鱼|常见|42|新手村:1.0|测试用"}},
-        }
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(status["ok"] is True, f"合法内容表被写入 -> {status['last_result']}")
+    # --- 反注册：停用/重载插件时不该留下别人的路由 ---
+    passed_through = plugin_d.context.registered_web_apis
+    await plugin_d.stop_editor_bridge()
     check(
-        plugin_d.config["fish_defs"] == "bridge_fish|通道鱼|常见|42|新手村:1.0|测试用",
-        "fish_defs（文本表）落进配置",
+        plugin_d.context.registered_web_apis == [],
+        f"stop_editor_bridge 摘掉了自己注册的路由（剩 {len(plugin_d.context.registered_web_apis)} 条）",
     )
-    check("bridge_fish" in mod.FISH_BY_ID, "改完立刻重建缓存：新鱼已经在鱼池里")
-    plugin_d.config["fish_defs"] = ""
-
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {
-            "nonce": "n-content-list",
-            "action": "save_content",
-            "payload": {"tables": {"rod_defs": ["bridge_rod|通道竿|🎣|0|0|0|1|测试竿"]}},
-        }
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    # 关掉「自动合并新版默认内容」，否则 _refresh_config 会往这张表里补官方竿，
-    # 断言就变成在看合并逻辑而不是在看通道
-    plugin_d.config["content_auto_merge"] = False
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {
-            "nonce": "n-content-list2",
-            "action": "save_content",
-            "payload": {"tables": {"rod_defs": ["bridge_rod|通道竿|🎣|0|0|0|1|测试竿"]}},
-        }
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
+    plugin_d.context.registered_web_apis = passed_through + [("/other_plugin/x", lambda: None, ["GET"], "别人的")]
+    plugin_d.start_editor_bridge()
+    await plugin_d.stop_editor_bridge()
     check(
-        status["ok"] is True
-        and list(plugin_d.config["rod_defs"]) == ["bridge_rod|通道竿|🎣|0|0|0|1|测试竿"],
-        f"rod_defs（字符串数组表）落进配置 -> {list(plugin_d.config['rod_defs'])}",
-    )
-    plugin_d.config["content_auto_merge"] = True
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {"nonce": "n-content-badtype", "action": "save_content",
-         "payload": {"tables": {"rod_defs": "不是数组"}}}
-    )
-    await plugin_d._editor_poll_once()
-    check(
-        read_status()["ok"] is False,
-        "rod_defs 传字符串被拒（类型不符）",
-    )
-    plugin_d.config["rod_defs"] = list(mod.DEFAULTS["rod_defs"])
-    plugin_d._refresh_config()
-
-    # --- save_numbers：只接受数值类键 + 类型校验 ---
-    check(
-        "editor_status" not in mod.EDITOR_BRIDGE.number_whitelist()
-        and "data_status" not in mod.EDITOR_BRIDGE.number_whitelist(),
-        "数值白名单里没有 editor_status / data_status",
-    )
-    check(
-        "backup_daily_hour" not in mod.EDITOR_BRIDGE.number_whitelist()
-        and "location_defs" not in mod.EDITOR_BRIDGE.number_whitelist(),
-        "数值白名单里没有 backup_* / *_defs",
-    )
-    check(
-        {"stamina_max", "fish_value_mult", "level_xp_ratio"} <= set(mod.EDITOR_BRIDGE.number_whitelist()),
-        "数值白名单包含核心数值键",
+        [item[0] for item in plugin_d.context.registered_web_apis] == ["/other_plugin/x"],
+        "只摘自己的路由，不动别的插件",
     )
 
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {"nonce": "n-num-ok", "action": "save_numbers",
-         "payload": {"stamina_max": 33, "fish_value_mult": 1.5, "enable_market": False}}
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
+    # --- GET config：整份配置 + 状态 ---
+    payload = plugin_d._editor_config_payload()
     check(
-        status["ok"] is True
-        and plugin_d.config["stamina_max"] == 33
-        and abs(float(plugin_d.config["fish_value_mult"]) - 1.5) < 1e-9
-        and plugin_d.config["enable_market"] is False,
-        f"int / float / bool 三类数值都写进去了 -> {status['last_result']}",
+        payload.get("status") == "ok" and payload.get("transport") == "plugin-api",
+        f"GET 返回结构：status={payload.get('status')} transport={payload.get('transport')}",
     )
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-num-badkey", "action": "save_numbers", "payload": {"drop_table": 1}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
     check(
-        status["ok"] is False and "drop_table" in status["last_result"],
-        f"白名单外的数值键被拒 -> {status['last_result']}",
+        "fish_defs" in payload and "rod_defs" in payload and "location_defs" in payload,
+        "内容表都在（页面按配置键取值）",
     )
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-num-badtype", "action": "save_numbers", "payload": {"stamina_max": "很多"}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
     check(
-        status["ok"] is False and "整数" in status["last_result"],
-        f"类型不符被拒且说明原因 -> {status['last_result']}",
+        isinstance(payload.get("editor_status"), str),
+        "editor_status 以 JSON 字符串带出来（页面解析存档清单与数值白名单）",
     )
-    check(plugin_d.config["stamina_max"] == 33, "被拒之后旧值没被改坏")
-
-    # --- save_autobackup ---
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {"nonce": "n-auto", "action": "save_autobackup",
-         "payload": {"enable": False, "daily_hour": 7, "interval_hours": 12,
-                     "keep_daily": 10, "keep_keep_interval": 5}}
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
+    ok_get = api_dict(await plugin_d.editor_api_config())
     check(
-        status["ok"] is True
-        and plugin_d.config["enable_auto_backup"] is False
-        and plugin_d.config["backup_daily_hour"] == 7
-        and plugin_d.config["backup_interval_hours"] == 12
-        and plugin_d.config["backup_keep_daily"] == 10,
-        f"自动备份设置写回成功 -> {status['last_result']}",
-    )
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-auto-range", "action": "save_autobackup", "payload": {"daily_hour": 99}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(
-        status["ok"] is False and "0~23" in status["last_result"],
-        f"越界的时间点被拒 -> {status['last_result']}",
-    )
-    # 键名写错（keep_keep_interval 是按任务书原文传的）也不会误伤别的字段
-    plugin_d.config["enable_auto_backup"] = True
-    plugin_d.config["backup_daily_hour"] = 4
-    plugin_d.config["backup_interval_hours"] = 6
-    plugin_d.config["backup_keep_daily"] = 30
-
-    # --- 存档四件套：create / restore / delete / rename ---
-    store = plugin_d.backup_store
-    p_snap = mod._default_player("89777")
-    p_snap["gold"] = 777
-    await plugin_d._save_player(p_snap)
-
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-snap-create", "action": "snapshot_create", "payload": {"note": "页面手动存档"}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    created = [s for s in status["snapshots"] if s["note"] == "页面手动存档"]
-    check(status["ok"] is True and len(created) == 1, f"snapshot_create 建出快照 -> {status['last_result']}")
-    snap_name = created[0]["name"] if created else ""
-    check(bool(snap_name), f"新快照有文件名 -> {snap_name}")
-    snap_path = store.find_snapshot(snap_name)
-    check(snap_path is not None and os.path.isfile(snap_path), "快照文件真的落盘了")
-
-    # 改一个玩家的金币，再用快照恢复回来
-    p_snap = await plugin_d._load_player("89777")
-    p_snap["gold"] = 1
-    await plugin_d._save_player(p_snap)
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {"nonce": "n-snap-restore", "action": "snapshot_restore",
-         "payload": {"name": snap_name, "player": "89777"}}
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    gold_back = (await plugin_d._load_player("89777"))["gold"]
-    check(status["ok"] is True and gold_back == 777, f"snapshot_restore 单玩家恢复 -> gold={gold_back}")
-    check(
-        any(s["note"] == "恢复前自动存档" for s in status["snapshots"]),
-        "恢复前自动存了一份（恢复错了还能倒回来）",
+        bool(ok_get) and ok_get.get("status") == "ok",
+        f"editor_api_config() 返回可解析的响应（{type(ok_get).__name__}）",
     )
 
-    # rename：只改 JSON 里的 note，文件名不变
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {"nonce": "n-snap-rename", "action": "snapshot_rename",
-         "payload": {"name": snap_name, "note": "改过名字的存档"}}
+    # --- POST config：内容表 / 数值 / 自动备份 ---
+    res = await plugin_d.editor_api_config_save(
+        {"tables": {"fish_defs": "carp|鲤鱼|常见|120|novice:1.0|测试用\n"}}
     )
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    renamed = [s for s in status["snapshots"] if s["name"] == snap_name]
+    data = api_dict(res)
     check(
-        status["ok"] is True and renamed and renamed[0]["note"] == "改过名字的存档",
-        f"snapshot_rename 改了备注 -> {(renamed or [{}])[0].get('note')}",
+        data.get("ok") is True,
+        f"POST config 写内容表成功 -> {data.get('message')}",
     )
     check(
-        store.find_snapshot(snap_name) is not None,
-        "改名没有重命名文件（「最新快照 = 按 mtime 排序」的语义保住了）",
+        str(plugin_d.config.get("fish_defs", "")).startswith("carp|鲤鱼"),
+        "内容表真的写进了插件配置",
     )
     check(
-        store.rename_snapshot("不存在的快照.json", "x") is False,
-        "rename_snapshot 对不存在的快照幂等返回 False（不抛异常）",
-    )
-    plugin_d._editor_last_nonce = ""
-    write_bridge(
-        {"nonce": "n-snap-restore-404", "action": "snapshot_restore",
-         "payload": {"name": "根本没有这份.json"}}
-    )
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(
-        status["ok"] is False and "找不到" in status["last_result"],
-        f"恢复不存在的快照：失败 + 中文说明（不抛异常）-> {status['last_result']}",
+        isinstance(data.get("editor_status"), str) and data["editor_status"],
+        "响应里直接带回最新 editor_status（页面不必再轮询）",
     )
 
-    # delete：删掉 + 幂等
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-snap-delete", "action": "snapshot_delete", "payload": {"name": snap_name}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(status["ok"] is True, f"snapshot_delete 删掉了 -> {status['last_result']}")
-    check(store.find_snapshot(snap_name) is None, "被删的快照真的没了")
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-snap-delete2", "action": "snapshot_delete", "payload": {"name": snap_name}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
+    res = await plugin_d.editor_api_config_save({"numbers": {"stamina_max": 33}})
+    data = api_dict(res)
     check(
-        status["ok"] is False and "找不到" in status["last_result"],
-        f"重复删除：幂等返回失败+中文说明（不抛异常）-> {status['last_result']}",
-    )
-    check(store.delete_snapshot(snap_name) is False, "delete_snapshot 直接调用也幂等返回 False")
-
-    # --- refresh / editor_status 结构 ---
-    plugin_d._editor_last_nonce = ""
-    write_bridge({"nonce": "n-refresh", "action": "refresh", "payload": {}})
-    await plugin_d._editor_poll_once()
-    status = read_status()
-    check(status["ok"] is True, "refresh 只刷状态不报错")
-    check(
-        "editor_status" not in mod._synced_default_keys()
-        and "data_status" not in mod._synced_default_keys(),
-        "editor_status / data_status 不参与「默认值同步」（否则启动就被清空）",
-    )
-    for field in (
-        "updated_at", "last_action", "last_result", "ok",
-        "snapshots", "players", "next_auto_backup", "autobackup",
-    ):
-        check(field in status, f"editor_status 含字段 {field}")
-    check(
-        status["last_action"] == "refresh" and status["updated_at"] > 0,
-        "editor_status 记了动作与时间戳",
+        data.get("ok") is True and plugin_d.config.get("stamina_max") == 33,
+        f"POST config 写数值成功 -> stamina_max={plugin_d.config.get('stamina_max')}",
     )
     check(
-        set(status["autobackup"]) == {"enable", "daily_hour", "interval_hours", "keep_daily", "keep_interval"},
-        f"autobackup 字段齐全 -> {sorted(status['autobackup'])}",
-    )
-    check(
-        isinstance(status["players"], int) and status["players"] >= 1,
-        f"editor_status 里的 players = {status['players']}",
-    )
-    check(isinstance(status["snapshots"], list) and len(status["snapshots"]) >= 1, "snapshots 是数组且有内容")
-    snap_view = status["snapshots"][0]
-    for field in ("name", "kind", "kind_name", "note", "time", "players", "size"):
-        check(field in snap_view, f"快照条目含字段 {field}")
-    check(
-        snap_view["kind_name"] in ("每日存档", "按时存档", "手动存档"),
-        f"kind_name 是中文 -> {snap_view['kind_name']}",
-    )
-    check(
-        isinstance(snap_view["size"], str) and ("B" in snap_view["size"] or "KB" in snap_view["size"] or "MB" in snap_view["size"]),
-        f"size 是人看的字符串 -> {snap_view['size']}",
-    )
-    check(
-        isinstance(plugin_d.config["editor_status"], str)
-        and plugin_d.config["editor_status"].startswith("{"),
-        "editor_status 在配置里是 JSON 字符串（页面 JSON.parse 就能用）",
+        plugin_d.cfg.get("stamina_max") == 33,
+        "写完后立刻重建了运行期缓存（新数值这一秒就生效）",
     )
 
-    # --- 生命周期：initialize 起任务、terminate 后能退出 ---
-    plugin_e = make_plugin()
-    plugin_e.data_files_root = data_root
-    plugin_e.backup_store = mod.BACKUP_MODULE.BackupStore(
-        os.path.join(data_root, "backups_e"), mod.DATA_VERSION
+    res = await plugin_d.editor_api_config_save(
+        {"autobackup": {"daily_hour": 5, "interval_hours": 8}}
     )
-    await plugin_e.initialize()
-    task = getattr(plugin_e, "_editor_task", None)
-    check(task is not None and not task.done(), "initialize() 之后轮询任务在跑")
-    # 播种：重启后不会把上一次的指令又执行一遍
-    write_bridge({"nonce": "n-stale-after-restart", "action": "save_numbers",
-                  "payload": {"stamina_max": 999}})
-    plugin_e._editor_last_nonce = ""
-    await plugin_e._editor_seed_nonce()
+    data = api_dict(res)
     check(
-        plugin_e._editor_last_nonce == "n-stale-after-restart",
-        "启动播种：把重启前留下的指令记成「已处理」",
+        data.get("ok") is True and plugin_d.config.get("backup_daily_hour") == 5,
+        f"POST config 写自动备份成功 -> daily_hour={plugin_d.config.get('backup_daily_hour')}",
     )
-    check(plugin_e.config.get("stamina_max") != 999, "播种没有执行那条旧指令")
-    tasks_before = len(asyncio.all_tasks())
-    await plugin_e.terminate()
-    await asyncio.sleep(0)
+
+    # --- POST config：白名单之外的键必须被拒（且给出原因）---
+    res = await plugin_d.editor_api_config_save({"numbers": {"data_status": "想改我？"}})
+    data = api_dict(res)
     check(
-        getattr(plugin_e, "_editor_task", None) is None,
-        "terminate() 之后 _editor_task 被清空",
+        data.get("status") == "error" and "不是可改的数值项" in str(data.get("message")),
+        f"数值接口拒绝非数值键 -> {data.get('message')}",
     )
-    check(task.cancelled() or task.done(), "轮询任务确实退出了")
-    check(len(asyncio.all_tasks()) <= tasks_before, "terminate 没有留下悬挂任务")
-    os.remove(bridge_file)
+    res = await plugin_d.editor_api_config_save({"tables": {"editor_status": "想改我？"}})
+    data = api_dict(res)
+    check(
+        data.get("status") == "error" and "只允许改这几张内容表" in str(data.get("message")),
+        f"内容表接口拒绝管理项 -> {data.get('message')}",
+    )
+    res = await plugin_d.editor_api_config_save({"nope": 1})
+    data = api_dict(res)
+    check(
+        data.get("status") == "error" and "至少" in str(data.get("message")),
+        f"没给任何可保存的内容时明确报错 -> {data.get('message')}",
+    )
+    res = await plugin_d.editor_api_config_save("不是对象")
+    data = api_dict(res)
+    check(
+        "JSON 对象" in str(data.get("message")),
+        f"请求体不是对象时给出结构化错误 -> {data.get('message')}",
+    )
 
-    # --- 鱼类查询 ---
-    plugin_f = make_plugin()
-    ev_f = FakeEvent('89801')
-    out = await cmd(plugin_f, ev_f, '查', '鲤鱼', '')
-    body = text_of(out)
-    check('出没钓点' in body and '基准价' in body, '按鱼名查：给出去向与基准价')
-    check('新手村' in body, '   └ 列出了具体钓点')
-    out = await cmd(plugin_f, ev_f, '查', '山间湖泊', '')
-    body = text_of(out)
-    check('共' in body and '种' in body and '金' in body, '按钓点查：列出该钓点鱼种与价格')
-    out = await cmd(plugin_f, ev_f, '查', '不存在的鱼', '')
-    check('没有叫' in text_of(out), '查不到时给提示')
-    out = await cmd(plugin_f, ev_f, '查', '', '')
-    check('查 <鱼名' in text_of(out), '不带参数给用法')
+    # --- POST config：也接受 {action, payload} 信封（页面现在用这种）---
+    res = await plugin_d.editor_api_config_save(
+        {"action": "save_numbers", "payload": {"multi_cast_max": 12}}
+    )
+    data = api_dict(res)
+    check(
+        data.get("ok") is True and plugin_d.config.get("multi_cast_max") == 12,
+        f"信封写法同样生效 -> multi_cast_max={plugin_d.config.get('multi_cast_max')}",
+    )
+    res = await plugin_d.editor_api_config_save({"action": "drop_everything", "payload": {}})
+    data = api_dict(res)
+    check(
+        data.get("status") == "error" and "不认识的动作" in str(data.get("message")),
+        f"未知 action 被拒 -> {data.get('message')}",
+    )
 
-    # --- 鱼类查询 ---
-    plugin_f = make_plugin()
-    ev_f = FakeEvent('89801')
-    out = await cmd(plugin_f, ev_f, '查', '鲤鱼', '')
-    body = text_of(out)
-    check('出没钓点' in body and '基准价' in body, '按鱼名查：给出去向与基准价')
-    check('新手村' in body, '   └ 列出了具体钓点')
-    out = await cmd(plugin_f, ev_f, '查', '山间湖泊', '')
-    body = text_of(out)
-    check('共' in body and '种' in body and '金' in body, '按钓点查：列出该钓点鱼种与价格')
-    out = await cmd(plugin_f, ev_f, '查', '不存在的鱼', '')
-    check('没有叫' in text_of(out), '查不到时给提示')
-    out = await cmd(plugin_f, ev_f, '查', '', '')
-    check('查 <鱼名' in text_of(out), '不带参数给用法')
+    # --- POST snapshot：四个动作 + refresh ---
+    res = await plugin_d.editor_api_snapshot({"action": "create", "note": "第十阶段测试存档"})
+    data = api_dict(res)
+    check(
+        data.get("ok") is True and "已新建存档" in str(data.get("message")),
+        f"snapshot create 可用 -> {data.get('message')}",
+    )
+    snap_items = json.loads(plugin_d.config["editor_status"]).get("snapshots") or []
+    check(len(snap_items) >= 1, f"新建后 editor_status 里的存档清单非空（{len(snap_items)} 条）")
+    snap_name = str(snap_items[0].get("name") or "")
 
-    # --- 独立网页面板存在且引用了 SDK ---
+    res = await plugin_d.editor_api_snapshot(
+        {"action": "rename", "name": snap_name, "note": "改过的备注"}
+    )
+    data = api_dict(res)
+    check(
+        data.get("ok") is True and "改过" in str(data.get("message")),
+        f"snapshot rename 可用 -> {data.get('message')}",
+    )
+
+    res = await plugin_d.editor_api_snapshot({"action": "restore", "name": ""})
+    data = api_dict(res)
+    check(
+        data.get("status") == "error" and "需要" in str(data.get("message")),
+        f"restore 缺参数时报错而不是崩 -> {data.get('message')}",
+    )
+
+    res = await plugin_d.editor_api_snapshot({"action": "delete", "name": snap_name})
+    data = api_dict(res)
+    check(data.get("ok") is True, f"snapshot delete 可用 -> {data.get('message')}")
+
+    res = await plugin_d.editor_api_snapshot({"action": "refresh"})
+    data = api_dict(res)
+    check(data.get("ok") is True, "snapshot refresh 可用")
+
+    res = await plugin_d.editor_api_snapshot({"action": "nuke"})
+    data = api_dict(res)
+    check(
+        data.get("status") == "error" and "不认识的存档动作" in str(data.get("message")),
+        f"未知存档动作被拒 -> {data.get('message')}",
+    )
+    res = await plugin_d.editor_api_snapshot("不是对象")
+    data = api_dict(res)
+    check("JSON 对象" in str(data.get("message")), "snapshot 请求体不是对象时给出结构化错误")
+
+    # --- 状态里不该再有轮询时代的字段 ---
+    status_now = json.loads(plugin_d.config["editor_status"])
+    check(
+        "bridge_file" not in status_now and status_now.get("transport") == "plugin-api",
+        f"状态里的通道标记已更新 -> transport={status_now.get('transport')}",
+    )
+
     # =====================================================================
     print("\n[11a] 可调数值表：配置改了要真的生效")
     p_num = make_plugin()

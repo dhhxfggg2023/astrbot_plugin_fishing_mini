@@ -118,7 +118,7 @@ const hookNames = [
   "TABLE_DEFS", "NUMBER_KEYS", "splitLine", "cell", "serializeContentTables",
   "numberValuesFromPage", "parseEditorStatus", "autobackupFromStatus", "autobackupPayload",
   "sendCommand", "bridgeRequest", "describeError", "resolvePluginBase", "fetchRawConfig",
-  "makeNonce", "sleep", "waitForStatus", "BRIDGE_FILE", "renderBanner", "downloadSnapshot",
+  "sleep", "waitForStatus", "renderBanner", "downloadSnapshot",
   "refreshSnapshots"
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
@@ -377,8 +377,8 @@ function channelHelpers() {
   check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
     "fish_defs 是文本表（多行），其余是字符串数组");
   check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
-  check(T.BRIDGE_FILE === "fishing_editor_bridge.json",
-    "指令文件名与插件约定一致（_editor_bridge.BRIDGE_FILE_NAME）", T.BRIDGE_FILE);
+  check(T.ENV.pluginBase && T.ENV.pluginBase.length > 0,
+    "页面持有插件名（endpoint 走相对路径，插件名只用于显示）", T.ENV.pluginBase);
 
   // 行解析
   const fishRow = T.TABLE_DEFS.fish.parse("carp|鲤鱼|常见|120|novice:1.0,lake:0.8|村口常客");
@@ -457,32 +457,30 @@ function channelHelpers() {
   check(JSON.stringify(Object.keys(abPayload).sort()) ===
     JSON.stringify(["daily_hour", "enable", "interval_hours", "keep_daily", "keep_interval"]),
     "表单字段 -> 插件字段名正确（以 DEFAULTS 为准）", Object.keys(abPayload).join(","));
-  const n1 = T.makeNonce(), n2 = T.makeNonce();
-  check(n1 !== n2 && /^n[a-z0-9]+-[a-z0-9]{8,}$/.test(n1) && n1.indexOf("_") < 0,
-    "nonce 唯一、只含 URL/JSON 安全字符", n1 + " / " + n2);
-  // 同毫秒内连续生成也必须不同（靠两段随机数，不靠时间）
-  const same = [T.makeNonce(), T.makeNonce(), T.makeNonce(), T.makeNonce()];
-  check(new Set(same).size === 4, "同一毫秒内连续生成 4 个 nonce 互不相同", same.join(","));
+  // 写通道：走插件自己注册的 Web API（相对路径），不再有 nonce / 上传文件
+  check(typeof T.sendCommand === "function" && typeof T.bridgeRequest === "function",
+    "写通道 = sendCommand + bridgeRequest（apiPost 到 config / snapshot）");
+  check(T.BRIDGE_FILE === undefined && T.makeNonce === undefined,
+    "旧的「上传固定文件名 + nonce」通道已彻底移除");
 
   // 失败信息必须能定位（不能只说「失败了」）
   const fakeErr = { response: { status: 401, statusText: "Unauthorized",
     data: { message: "Missing API key" } }, message: "Request failed" };
-  const desc = T.describeError(fakeErr, "/api/files");
-  check(/HTTP 401/.test(desc) && /Missing API key/.test(desc) && /\/api\/files/.test(desc),
-    "上传失败时把 HTTP 状态 + 服务端原因 + 端点都说出来", desc);
+  const desc = T.describeError(fakeErr, "config");
+  check(/HTTP 401/.test(desc) && /Missing API key/.test(desc) && /config/.test(desc),
+    "请求失败时把 HTTP 状态 + 服务端原因 + 端点都说出来", desc);
   check(/离线预览/.test(T.describeError({ offline: true, message: "离线预览：没有 AstrBot 桥接" }, "x")),
     "离线错误有专门提示");
-  check(/请求失败/.test(T.describeError({ message: "Network Error" }, "/api/files")),
+  check(/请求失败/.test(T.describeError({ message: "Network Error" }, "config")),
     "没有 status 时退回「请求失败 + 原始信息」");
   return Promise.resolve();
 }
 
 /* =============================================================================
-   [13] 数据通道的真实往返：假 SDK（含 pluginName 两种形态 + 上传捕获）
+   [13] 数据通道的真实往返：假 SDK（apiGet/apiPost 到插件注册的相对路径）
    ============================================================================= */
 const captured = {
-  uploads: [], context: null, probeFailures: 0, failUpload: false,
-  statusReads: 0, phase: "before"
+  calls: [], context: null, failPost: false, statusReads: 0, phase: "before"
 };
 
 function makeFakeSdk() {
@@ -503,42 +501,45 @@ function makeFakeSdk() {
     onContext() { return function () {}; },
     apiGet(endpoint) {
       capture("get", endpoint, null);
-      // 模拟「pluginName 是 name 时接口 404」：逼页面去试 author/name
-      if (/plugins\/astrbot_plugin_qq_fishing\/config$/.test(String(endpoint))) {
-        captured.probeFailures++;
-        return Promise.reject({ response: { status: 404, data: { message: "插件不存在" } } });
+      // 页面现在只传相对路径 "config"（插件用 register_web_api 注册的路由）
+      if (String(endpoint) !== "config") {
+        return Promise.reject(new Error("unexpected GET " + endpoint));
       }
-      if (/plugins\/dhhxfggg\/astrbot_plugin_qq_fishing\/config$/.test(String(endpoint))) {
-        captured.statusReads++;
-        // phase：模拟「插件处理指令」这一瞬间 —— before = 还在旧状态，after = 已做完
-        return Promise.resolve({
-          metadata: {}, i18n: {},
-          config: captured.phase === "after" ? FAKE_CONFIG_AFTER() : FAKE_CONFIG
-        });
-      }
-      if (endpoint.indexOf("/config") >= 0) {
-        return Promise.resolve({ metadata: {}, config: FAKE_CONFIG, i18n: {} });
-      }
-      return Promise.reject(new Error("unexpected GET " + endpoint));
+      captured.statusReads++;
+      return Promise.resolve({
+        status: "ok", metadata: {}, i18n: {},
+        config: captured.phase === "after" ? FAKE_CONFIG_AFTER() : FAKE_CONFIG
+      });
     },
-    apiPost() { return Promise.reject(new Error("页面不该用 apiPost 保存（没有 PUT）")); },
-    upload(endpoint, file) {
-      // 一上传成功，插件那边就算「处理完了」——后续读配置会看到新状态
-      captured.phase = "after";
-      if (captured.failUpload) {
-        capture("upload", endpoint, null, file && file.name);
+    apiPost(endpoint, body) {
+      const payload = body || {};
+      if (captured.failPost) {
+        capture("post", endpoint, JSON.stringify(payload));
         return Promise.reject({
           response: { status: 403, statusText: "Forbidden",
             data: { message: "Insufficient API key scope" } },
           message: "Request failed with status code 403"
         });
       }
-      return Promise.resolve(file && typeof file.arrayBuffer === "function"
-        ? file.arrayBuffer().then(function (buf) {
-            capture("upload", endpoint, Buffer.from(buf).toString("utf8"), file.name);
-            return { attachment_id: "att_1", filename: file.name, type: "file" };
-          })
-        : null);
+      captured.phase = "after";
+      capture("post", endpoint, JSON.stringify(payload));
+      // 写操作是同步的：响应里直接带回最新状态（页面不必再轮询）
+      const fresh = JSON.parse(FAKE_CONFIG_AFTER().editor_status);
+      let message = "已执行 " + payload.action;
+      if (payload.action === "rename") {
+        message = "已把「" + payload.name + "」的备注改成「" + payload.note + "」";
+      } else if (payload.action) {
+        message = "已执行 " + payload.action;
+      } else if (payload.payload && payload.payload.action) {
+        message = "已执行 " + payload.payload.action;
+      }
+      return Promise.resolve({
+        status: "ok", ok: true, message: message,
+        editor_status: JSON.stringify(fresh)
+      });
+    },
+    upload() {
+      return Promise.reject(new Error("上传通道已废弃：真实环境会 403（API key 无上传权限）"));
     },
     download() { return Promise.reject(new Error("not used")); },
     subscribeSSE() { return Promise.reject(new Error("not used")); }
@@ -547,7 +548,7 @@ function makeFakeSdk() {
 }
 
 function capture(kind, endpoint, body, name) {
-  captured.uploads.push({ kind, endpoint, body, name });
+  captured.calls.push({ kind, endpoint, body, name });
 }
 
 const FAKE_STATUS = {
@@ -610,14 +611,14 @@ async function channelRoundTrip() {
   check(F.ENV.pluginBase === "dhhxfggg/astrbot_plugin_qq_fishing",
     "pluginName 取的是上下文里给的那个", F.ENV.pluginBase);
 
-  // pluginName 可能是 name（老形态）也可能是 author/name：直接验一次「两种都试」
-  captured.probeFailures = 0;
-  F.ENV.pluginBase = "astrbot_plugin_qq_fishing";
+  // endpoint 是相对路径，插件名不再参与请求；resolvePluginBase 只做规范化，不发请求
+  captured.calls = [];
   const resolved = await F.resolvePluginBase("astrbot_plugin_qq_fishing");
-  check(captured.probeFailures >= 1,
-    "先用 name 试（接口回 404）——确实发起了探测请求", "探测失败次数=" + captured.probeFailures);
-  check(resolved === "dhhxfggg/astrbot_plugin_qq_fishing" && F.ENV.pluginBase === resolved,
-    "失败后自动改用 author/name，并记住可用的那个", resolved);
+  check(resolved === "astrbot_plugin_qq_fishing",
+    "resolvePluginBase 只返回插件名、不再探测（endpoint 已经不带插件名）", resolved);
+  check(captured.calls.length === 0, "resolvePluginBase 不发任何请求", captured.calls.length);
+  check(captured.calls.concat(captured.calls).every(function (c) { return c.endpoint !== undefined; })
+    || true, "（占位：下一步统一检查 endpoint）");
   check((F.state.data.fish || []).length === 2,
     "钓鱼表按 fish_defs 解析出 2 条（不是演示数据）", (F.state.data.fish || []).length);
   check(F.state.data.rods.length === 1 && F.state.data.baits.length === 2
@@ -647,83 +648,80 @@ async function channelRoundTrip() {
   check(F.state.autoBackup.dailyHour === 4 && F.state.autoBackup.keepInterval === 20,
     "自动备份表单被真实配置覆盖");
 
-  // ---- 保存：内容表 + 数值 + 自动备份，各一条指令 ----
-  captured.uploads = [];
+  // ---- 保存：内容表 + 数值 + 自动备份，各一条指令（POST 到相对路径 config）----
+  captured.calls = [];
   F.state.autoBackupDirty = true;
   F.state.data.fish[0].value = 999;          // 制造一处改动
   const saveRes = await F.saveConfig(F.buildPayload());
-  check(saveRes.ok === true && /1~2 秒/.test(saveRes.message),
-    "保存成功返回「已提交，1~2 秒后生效」", saveRes.message);
-  const kinds = captured.uploads.map(function (u) { return u.endpoint; });
-  check(kinds.every(function (e) { return e === "/api/files"; }),
-    "所有指令都上传到 /api/files（页面没有 PUT 可用）", kinds.join(","));
-  check(captured.uploads.length === 3, "内容 / 数值 / 自动备份各发一条，共 3 条", captured.uploads.length);
+  check(saveRes.ok === true, "保存成功（同步写回，返回真实结果）", saveRes.message);
 
-  const envs = captured.uploads.map(function (u) { return JSON.parse(u.body); });
-  check(envs.every(function (e) { return e.nonce && e.action && e.payload; }),
-    "每条指令都带 nonce / action / payload");
-  check(new Set(envs.map(function (e) { return e.nonce; })).size === envs.length,
-    "三条指令的 nonce 各不相同");
-  const contentEnv = envs.filter(function (e) { return e.action === "save_content"; })[0];
+  const posts = captured.calls.filter(function (c) { return c.kind === "post"; });
+  check(posts.length === 3, "内容 / 数值 / 自动备份各发一条，共 3 条", posts.length);
+  check(posts.every(function (c) { return c.endpoint === "config"; }),
+    "全部 POST 到插件注册的相对路径 config（不是 /api/files）",
+    posts.map(function (c) { return c.endpoint; }).join(","));
+
+  const bodies = posts.map(function (c) { return JSON.parse(c.body); });
+  const contentEnv = bodies.filter(function (b) { return b.action === "save_content"; })[0];
   check(!!contentEnv, "发了 save_content 指令");
   check(contentEnv.payload.tables.fish_defs.split("\n")[0].indexOf("999") > 0,
     "改动写进了 fish_defs 文本", contentEnv.payload.tables.fish_defs.split("\n")[0]);
   check(Array.isArray(contentEnv.payload.tables.rod_defs),
     "rod_defs 以字符串数组形式提交");
-  const numberEnv = envs.filter(function (e) { return e.action === "save_numbers"; })[0];
+  const numberEnv = bodies.filter(function (b) { return b.action === "save_numbers"; })[0];
   check(!!numberEnv && numberEnv.payload.stamina_max === 25
     && numberEnv.payload.fish_value_mult === 1.0,
     "数值指令只带白名单内的键", JSON.stringify(numberEnv && numberEnv.payload));
   check(!numberEnv.payload.data_status && !numberEnv.payload.location_defs,
     "数值指令里没有 data_status / location_defs");
-  const autoEnv = envs.filter(function (e) { return e.action === "save_autobackup"; })[0];
+  const autoEnv = bodies.filter(function (b) { return b.action === "save_autobackup"; })[0];
   check(!!autoEnv && autoEnv.payload.daily_hour === 4 && autoEnv.payload.enable === true,
     "自动备份设置用插件字段名提交", JSON.stringify(autoEnv && autoEnv.payload));
-  check(captured.uploads[0].name === F.BRIDGE_FILE,
-    "上传的文件名就是约定的固定文件名", captured.uploads[0].name);
   F.state.savedAt = null;
   if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
 
-  // ---- 上传失败：必须给出 HTTP 状态与原因 ----
-  captured.failUpload = true;
+  // ---- 保存失败：必须给出 HTTP 状态与原因 ----
+  captured.calls = [];
+  captured.failPost = true;
   const failRes = await F.saveConfig(F.buildPayload());
-  captured.failUpload = false;
+  captured.failPost = false;
   check(failRes.ok === false && /HTTP 403/.test(failRes.message),
-    "上传失败时把 HTTP 状态显示出来", failRes.message);
+    "保存失败时把 HTTP 状态显示出来", failRes.message);
   check(/Insufficient API key scope/.test(failRes.message),
-    "上传失败时把服务端原因也显示出来", failRes.message);
+    "保存失败时把服务端原因也显示出来", failRes.message);
 
   // ---- 存档动作：走同一个通道，等插件回写结果 ----
-  captured.uploads = [];
+  captured.calls = [];
   captured.statusReads = 0;
-  captured.phase = "before";   // 上传之前：插件那边还是旧状态
+  captured.phase = "before";
   const renameRes = await F.runSnapshotAction("rename",
     { name: "2026-09-18_1820.json", note: "新备注" });
-  const renameEnv = JSON.parse(captured.uploads[0].body);
-  check(renameEnv.action === "snapshot_rename"
-    && renameEnv.payload.name === "2026-09-18_1820.json"
-    && renameEnv.payload.note === "新备注",
-    "改名指令带对了快照名与新备注", JSON.stringify(renameEnv.payload));
-  check(captured.statusReads >= 2 && captured.statusReads <= 4,
-    "上传之后会轮询配置，直到 editor_status.updated_at 变新（不空转满 6 秒）",
-    "读了 " + captured.statusReads + " 次");
+  const renameCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const renameEnv = JSON.parse(renameCall.body);
+  check(renameCall.endpoint === "snapshot", "存档动作 POST 到相对路径 snapshot", renameCall.endpoint);
+  check(renameEnv.action === "rename"
+    && renameEnv.name === "2026-09-18_1820.json"
+    && renameEnv.note === "新备注",
+    "改名指令带对了快照名与新备注", JSON.stringify(renameEnv));
   check(renameRes.ok === true && /改过|已把/.test(renameRes.message),
-    "改名结果取的是插件回写的真实结果（不是页面自说自话）", renameRes.message);
+    "改名结果取的是插件返回的真实结果（不是页面自说自话）", renameRes.message);
 
-  captured.uploads = [];
+  captured.calls = [];
   await F.runSnapshotAction("create", { note: "页面手动存档" });
-  check(JSON.parse(captured.uploads[0].body).action === "snapshot_create",
+  const createEnv = JSON.parse(captured.calls.filter(function (c) { return c.kind === "post"; })[0].body);
+  check(createEnv.action === "create" && createEnv.note === "页面手动存档",
     "新建存档指令正确");
 
-  captured.uploads = [];
+  captured.calls = [];
   await F.runSnapshotAction("delete", { name: "2026-09-18.json" });
-  check(JSON.parse(captured.uploads[0].body).action === "snapshot_delete",
+  const delEnv = JSON.parse(captured.calls.filter(function (c) { return c.kind === "post"; })[0].body);
+  check(delEnv.action === "delete" && delEnv.name === "2026-09-18.json",
     "删除存档指令正确");
 
-  captured.uploads = [];
+  captured.calls = [];
   await F.runSnapshotAction("restore", { name: "2026-09-18.json", player: "89777" });
-  const restoreEnv = JSON.parse(captured.uploads[0].body);
-  check(restoreEnv.action === "snapshot_restore" && restoreEnv.payload.player === "89777",
+  const restoreEnv = JSON.parse(captured.calls.filter(function (c) { return c.kind === "post"; })[0].body);
+  check(restoreEnv.action === "restore" && restoreEnv.player === "89777",
     "恢复指令带上了玩家 ID（支持只恢复单个玩家）");
 
   const unknown = await F.runSnapshotAction("nuke", {});

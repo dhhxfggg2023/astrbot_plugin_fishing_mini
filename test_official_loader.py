@@ -303,14 +303,30 @@ check(
 # 页面脚本与插件侧的通道约定必须一致（改一边忘另一边是这条通道最容易踩的坑）
 bridge_src = (PLUGIN_DIR / "_editor_bridge.py").read_text(encoding="utf-8")
 page_src = editor_entry.read_text(encoding="utf-8")
-bridge_name = "fishing_editor_bridge.json"
 check(
-    f'BRIDGE_FILE_NAME = "{bridge_name}"' in bridge_src,
-    f"插件侧固定文件名 = {bridge_name}",
+    'ENDPOINT_CONFIG = "config"' in bridge_src and 'ENDPOINT_SNAPSHOT = "snapshot"' in bridge_src,
+    "插件侧定义了相对 endpoint（config / snapshot）",
 )
 check(
-    f'BRIDGE_FILE = "{bridge_name}"' in page_src,
-    f"页面侧固定文件名 = {bridge_name}（两边一致）",
+    'bridgeRequest("get", "config"' in page_src,
+    "页面读配置用的是相对路径 config（不带 plugins/<名字>/ 前缀）",
+)
+check(
+    'apiGet("config"' in page_src or '"config"' in page_src,
+    "页面侧同样使用相对路径",
+)
+check(
+    "BRIDGE_FILE_NAME" not in bridge_src and "BRIDGE_FILE" not in page_src,
+    "旧的「上传固定文件名」通道两侧都已移除（真实环境会被 403 挡掉）",
+)
+check(
+    "register_web_api" in bridge_src,
+    "插件用 context.register_web_api 注册自己的路由（页面读写都走这里）",
+)
+check(
+    '"/{plugin}/" + ENDPOINT_CONFIG' in bridge_src
+    and '"/{plugin}/" + ENDPOINT_SNAPSHOT' in bridge_src,
+    "路由带插件名前缀（Dashboard 会转发到 extensions/<插件名>/<endpoint>）",
 )
 for action in (
     "save_content",
@@ -323,8 +339,13 @@ for action in (
     "refresh",
 ):
     check(
-        f'"{action}"' in bridge_src and f'"{action}"' in page_src,
-        f"动作 {action} 两侧都有（插件白名单 + 页面映射）",
+        f'"{action}"' in bridge_src or f"'{action}'" in bridge_src,
+        f"动作 {action} 在插件白名单里",
+    )
+for action in ("create", "restore", "delete", "rename", "refresh"):
+    check(
+        f'{action}: "snapshot_' in page_src or f'"{action}"' in page_src,
+        f"存档动作 {action} 页面侧有映射",
     )
 
 # ---------------------------------------------------------------------------

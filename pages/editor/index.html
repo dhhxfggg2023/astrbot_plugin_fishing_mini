@@ -807,11 +807,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
    群钓鱼数据编辑器 —— 前端逻辑（单文件、零外部依赖）
 
    数据通道（细节见下面第 2 节）：
-     * 读：apiGet("plugins/<pluginName>/config") → 解析 fish_defs / rod_defs /
-           bait_defs / item_defs / location_defs，以及插件回写的 editor_status
-     * 写：把 {nonce, ts, action, payload} 上传成固定文件名
-           fishing_editor_bridge.json（POST /api/files → data/attachments/），
-           插件每 1.5 秒轮询执行 → 1~2 秒生效
+     * 读：apiGet("config") → 插件用 register_web_api 注册的 /<插件名>/config，
+           返回整份配置（fish_defs / rod_defs / ... 以及 editor_status）
+     * 写：apiPost("config", {action, payload}) / apiPost("snapshot", {action, ...})
+           —— 同样是插件自己注册的路由，同步写回配置并回最新状态
+     * 旧版「上传固定文件名 + 插件轮询」在真实环境下被
+       403 /api/files：Insufficient API key scope 挡掉，已废弃
      * 离线（检测不到 AstrBotPluginPage）：用内置演示数据渲染，只提示不发送
    ============================================================================= */
 (function () {
@@ -918,32 +919,27 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   paintIdentity();
 
   /* ===========================================================================
-     2. 数据通道
+     2. 数据通道（全部走插件自己注册的 Web API）
 
      页面 → 插件（写）：
-       把 {nonce, ts, action, payload} 打包成 JSON，用**固定文件名**
-       fishing_editor_bridge.json 上传到 /api/files —— 落点是
-       <AstrBotRoot>/data/attachments/fishing_editor_bridge.json。
-       重复上传天然覆盖，文件里永远只有最新一条指令。
+       apiPost("config", {action: "save_content"|"save_numbers"|"save_autobackup", payload})
+       apiPost("snapshot", {action: "create"|"restore"|"delete"|"rename", ...})
+       —— 插件端同步写回配置 / 执行存档动作，并在响应里带回最新状态。
 
      插件 → 页面（读）：
-       插件每 1.5 秒轮询那个文件，执行后把结果写成 JSON 字符串塞进配置项
-       editor_status；页面 GET 插件配置后 JSON.parse 就能拿到存档清单、
-       玩家数、下次自动存档时间、可改的数值键白名单。
+       apiGet("config") 返回整份配置，其中 editor_status 是一个 JSON 字符串，
+       含存档清单、玩家数、下次自动存档时间、可改的数值键白名单。
 
      ⚠️ 桥接会把 endpoint 拼到 /api/v1/plugins/extensions/<pluginName>/ 后面，
-        所以这里的路径都是「相对插件」的，例如 "plugins/xxx/config"。
+        所以这里必须传「相对插件」的路径（config / snapshot），
+        路由由插件用 register_web_api("/<插件名>/config", ...) 注册。
      =========================================================================== */
 
-  /** 指令文件名（必须与 _editor_bridge.py 的 BRIDGE_FILE_NAME 一致） */
-  var BRIDGE_FILE = "fishing_editor_bridge.json";
-
-  /** 生成一个 nonce（插件靠它判断「这条指令是不是新的」）。 */
-  function makeNonce() {
-    return "n" + Date.now().toString(36) + "-" +
-      Math.random().toString(36).slice(2, 10) +
-      Math.random().toString(36).slice(2, 6);
-  }
+  /**
+   * 写操作成功后，插件会在响应里直接回一份最新 editor_status，
+   * 页面先把它存在这里，waitForStatus() 优先取它（省掉一次轮询等待）。
+   */
+  var pendingStatus = null;
 
   /**
    * 桥接请求封装：把「怎么调」和「怎么报错」分开。
@@ -955,7 +951,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
    * 自动改用 /api/ 前缀重试一次，并把成功的那种拼法记住，
    * 后续请求直接复用（只探测一次，不会每次都双发）。
    */
-  var API_CANDIDATES = ["", "/api/", "/api/v1/"];
+  var API_CANDIDATES = [""];   // 只走相对路径（Dashboard 会拼到 extensions/<插件名>/ 后面）
   // 记住首次探测成功的那一组（前缀 + 是否需要用「纯插件名」），后续请求直接复用。
   var API_PREFIX = null;
   var API_PLAIN_NAME = false;
@@ -1059,38 +1055,29 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     return head + " " + endpoint + tail;
   }
 
-  /** 试出一个能用的插件标识：context.pluginName 可能是 name，也可能是 author/name。 */
+  /**
+   * 插件标识：endpoint 现在是「相对插件」的路径，bridge 会自己补上
+   * /api/v1/plugins/extensions/<插件名>/ 前缀，所以不再需要探测，
+   * 这里只保留一个名字用于界面显示与排错。
+   */
   async function resolvePluginBase(preferred) {
-    var candidates = [];
-    [preferred, ENV.pluginBase, ctx.pluginName, ctx.plugin_name,
-     "astrbot_plugin_qq_fishing", "dhhxfggg/astrbot_plugin_qq_fishing"]
-      .forEach(function (item) {
-        var base = String(item || "").trim().replace(/^\/+|\/+$/g, "");
-        if (base && candidates.indexOf(base) < 0) candidates.push(base);
-      });
-    var lastError = null;
-    for (var i = 0; i < candidates.length; i++) {
-      try {
-        await bridgeRequest("get", "plugins/" + candidates[i] + "/config", {});
-        ENV.pluginBase = candidates[i];
-        return candidates[i];
-      } catch (e) {
-        lastError = e;
-        if (e && e.offline) throw e;   // 离线：换名字也没用
-      }
-    }
-    throw lastError || new Error("找不到可用的插件标识（pluginName）");
+    var base = String(preferred || ENV.pluginBase || ctx.pluginName || ctx.plugin_name || "")
+      .trim().replace(/^\/+|\/+$/g, "");
+    if (base) ENV.pluginBase = base;
+    return base;
   }
 
-  /** 读插件配置（在线）→ 原始配置对象。 */
+  /**
+   * 读配置：插件用 register_web_api 注册了 /<插件名>/config，
+   * 页面侧只传相对路径 "config"，Dashboard 会转发到那个路由。
+   */
   async function fetchRawConfig() {
-    var base = await resolvePluginBase(ENV.pluginBase);
-    var res = await bridgeRequest("get", "plugins/" + base + "/config", {});
+    var res = await bridgeRequest("get", "config", {});
     var config = res && typeof res === "object"
-      ? (res.config || res)   // 接口返回 {metadata, config, i18n}；老版本可能直接给配置
+      ? (res.config || res)
       : null;
     if (!config || typeof config !== "object") {
-      throw new Error("插件配置读取成功但内容为空（pluginName=" + base + "）");
+      throw new Error("配置读取成功但内容为空（插件：" + ENV.pluginBase + "）");
     }
     return config;
   }
@@ -1450,43 +1437,47 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     return out;
   }
 
-  /** 发一条指令给插件（上传固定文件名的小 JSON）。 */
+  /**
+   * 发一条指令给插件 —— 走**插件自己注册的 Web API**（相对路径）。
+   *   snapshot_* → POST "snapshot"
+   *   其余       → POST "config"
+   * 旧版「上传固定文件名 + 插件轮询」在真实环境会被 403（API key 无上传权限），已废弃。
+   */
   async function sendCommand(action, payload) {
     if (!ENV.online) {
       return { accepted: false, message: "离线预览：不会真正执行「" + action + "」" };
     }
-    var envelope = {
-      nonce: makeNonce(),
-      ts: Math.round(Date.now() / 1000),
-      plugin: ENV.pluginBase,
-      page: "editor",
-      action: action,
-      payload: payload || {}
-    };
-    var body = JSON.stringify(envelope);
-    var file;
+    var name = String(action || "");
+    var isSnapshot = name.indexOf("snapshot_") === 0;
+    var endpoint = isSnapshot ? "snapshot" : "config";
+    var body = isSnapshot
+      ? Object.assign({ action: name.replace(/^snapshot_/, "") }, payload || {})
+      : { action: name, payload: payload || {} };
     try {
-      file = new File([body], BRIDGE_FILE, { type: "application/json" });
+      var res = await bridgeRequest("post", endpoint, body);
+      // 插件在响应里直接回了最新状态 → 立刻用上，不用再轮询等待
+      if (res && typeof res === "object" && typeof res.editor_status === "string") {
+        try {
+          var fresh = parseEditorStatus({ editor_status: res.editor_status });
+          if (fresh) {
+            pendingStatus = fresh;
+            lastStatus = fresh;
+          }
+        } catch (e) { /* 状态解析失败不影响「已保存」这个结论 */ }
+      }
+      var message = (res && typeof res === "object" && res.message)
+        ? String(res.message)
+        : ("已执行「" + action + "」");
+      var okFlag = !(res && typeof res === "object" && res.ok === false);
+      return { accepted: okFlag, message: message, detail: res };
     } catch (e) {
-      // 极老的浏览器没有 File 构造器：退化用 Blob 并手动补 name
-      file = new Blob([body], { type: "application/json" });
-      file.name = BRIDGE_FILE;
-    }
-    try {
-      var res = await bridgeRequest("upload", "/api/files", file);
-      return {
-        accepted: true,
-        message: "已提交「" + action + "」",
-        detail: (res && typeof res === "object") ? res : { raw: res }
-      };
-    } catch (e) {
-      return { accepted: false, message: describeError(e, "/api/files") };
+      return { accepted: false, message: describeError(e, endpoint) };
     }
   }
 
   /**
    * 保存数据：内容表 + 核心数值 + 自动备份设置，各发一条指令。
-   * 返回的 ok 只代表「上传成功」，真正生效要等插件轮询（1~2 秒）。
+   * 插件是同步写回配置的，所以返回的 ok 就是真实结果（不再是「已提交」）。
    */
   async function saveConfig(payload) {
     if (!ENV.online) {
@@ -1503,28 +1494,26 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         results.push(await sendCommand("save_autobackup", autobackupPayload(payload.autoBackup)));
       }
     } catch (e) {
-      return { ok: false, message: "提交失败：" + describeError(e, "/api/files") };
+      return { ok: false, message: "提交失败：" + describeError(e, "config") };
     }
 
     var accepted = results.filter(function (r) { return r.accepted; });
     if (!accepted.length) {
       var first = results[0] || {};
-      return { ok: false, message: "上传没成功：" + (first.message || "未知原因") };
+      return { ok: false, message: "保存没成功：" + (first.message || "未知原因") };
     }
     if (accepted.length < results.length) {
       var bad = results.filter(function (r) { return !r.accepted; })[0] || {};
       return {
         ok: false,
-        message: "只提交了 " + accepted.length + "/" + results.length +
-          " 条指令；失败的那条：" + (bad.message || "未知原因")
+        message: "只成功了 " + accepted.length + "/" + results.length +
+          " 项；失败的那项：" + (bad.message || "未知原因")
       };
     }
-    // 上传成功 ≠ 已生效：插件每 1.5 秒才轮询一次，所以这里如实说「已提交」，
-    // 2 秒后自动重载，从 editor_status 里读真实结果。
-    scheduleReload(2000);
+    // 插件是同步写回配置的（register_web_api 的 POST），所以这里就是真实结果。
     return {
       ok: true,
-      message: "已提交 " + accepted.length + " 条指令，1~2 秒后生效（页面会自动重载）"
+      message: accepted.map(function (r) { return r.message; }).join("；")
     };
   }
 
@@ -1643,9 +1632,15 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
   /** 等插件处理完这条指令：读配置直到 editor_status.updated_at 变新。 */
   async function waitForStatus(tries) {
+    // 写操作的响应里已经带了最新状态：直接用，不用再等一轮
+    if (pendingStatus) {
+      var ready = pendingStatus;
+      pendingStatus = null;
+      return ready;
+    }
     // NaN/undefined 一律当 0：否则第一次动作会白等满 6 秒才放弃
     var base = num(lastStatus && lastStatus.updated_at, 0);
-    var rounds = tries || 10;   // 10 × 600ms ≈ 6 秒，足够覆盖 1.5 秒的轮询
+    var rounds = tries || 10;   // 写入是同步的，这里只兜底极端情况
     for (var i = 0; i < rounds; i++) {
       await sleep(600);
       try {
@@ -2501,7 +2496,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       '<span class="hint">' + esc(tab.hint) + "</span></div>";
     if (ENV.online) {
       html += '<div class="notice"><span class="notice-icon">ℹ️</span><div>' +
-        "这里的动作会排队交给插件执行（上传指令 → 插件每 1.5 秒轮询），1~2 秒后页面自动刷新。" +
+        "这里的动作会直接调用插件注册的接口并同步生效（新建 / 恢复 / 删除 / 改名都会在服务端立刻执行）。" +
         (state.players === undefined ? "" : "　当前玩家数：<b>" + esc(state.players) + "</b>") +
         (state.nextAutoBackup ? "　下次自动存档：<b>" + esc(state.nextAutoBackup) + "</b>" : "") +
         "</div></div>";
@@ -3288,11 +3283,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         "warn",
         "离线预览：不会真正保存",
         "检测不到 AstrBotPluginPage（桥接 SDK），当前用内置演示数据渲染；" +
-        "上传与存档动作只会提示、不会真正执行。"
+        "保存与存档动作只会提示、不会真正执行。"
       );
       return;
     }
-    toast("info", "已连接 AstrBot", "保存会通过上传通道提交，1~2 秒后生效");
+    toast("info", "已连接 AstrBot", "保存会直接写回插件配置（同步生效）");
   }
 
   boot();

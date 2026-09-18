@@ -1,6 +1,6 @@
 # 群钓鱼 · astrbot_plugin_qq_fishing
 
-**v1.7.0** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
+**v1.8.0** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
 （已在 AstrBot v4.28.1 + Python 3.12 上实测）。
 
 **232 种水族 · 16 个钓点 · 8 档鱼饵 · 6 档鱼竿 · 5 档鱼种品质 · 5 档个体品质 ·
@@ -748,7 +748,7 @@ node   test_editor_ui.js        # 编辑器页面运行时冒烟（Node + 最小
 
 `test_editor_ui.js` 在没有浏览器的前提下**真正执行**页面脚本：既跑离线预览分支，
 也会塞一个假 `AstrBotPluginPage` 走完整通道（探测 pluginName 两种形态 → 读配置 →
-解析内容表 → 上传指令 → 轮询到插件回写的新状态），并断言上传失败时页面会把
+解析内容表 → POST 到插件注册的路由 → 用响应里带回的新状态刷新界面），并断言请求失败时页面会把
 HTTP 状态与服务端原因显示出来。
 
 ---
@@ -888,30 +888,38 @@ data/plugins/astrbot_plugin_fishing_mini/
 
 ### 保存通道的原理（重要）
 
-AstrBot 的插件页面 SDK 只有 `apiGet / apiPost / upload / download / subscribeSSE`，
-**没有 PUT**，而「写插件配置」只有 `PUT /api/plugins/{id}/config` —— 页面够不着。
-所以这套页面走的是「**上传文件 + 插件轮询**」：
+页面**不能**直接改插件配置：写配置的接口是 `PUT /api/plugins/{id}/config`，
+而插件页面的桥接 SDK 只有 `apiGet / apiPost / upload / download / subscribeSSE`，
+**没有 PUT**。
+
+所以这套页面走的是 AstrBot 官方给插件 Pages 准备的正路 ——
+**插件自己注册 Web API**（`context.register_web_api`）：
 
 ```
-页面  --upload("/api/files")-->  data/attachments/fishing_editor_bridge.json
-                                     ↑ 固定文件名，重复上传即覆盖（永远只有最新一条指令）
-                                     │
-                            插件每 1.5 秒 stat + 读一次这个文件
-                                     │  nonce 与上次不同才执行
-                                     ↓
-                     写配置 / 建快照 / 恢复 / 删除…（动作白名单）
-                                     │
-页面  <--apiGet 插件配置--------  editor_status（插件回写的 JSON 字符串）
+页面  apiGet("config")   ┐
+页面  apiPost("config")  ├─ Dashboard 转发到
+页面  apiPost("snapshot")┘   /api/v1/plugins/extensions/<插件名>/<endpoint>
+                                    │
+                          本插件注册的三个路由（带插件名前缀）
+                                    ↓
+                    写配置 / 建快照 / 恢复 / 删除…（动作白名单）
+                                    │
+页面  <──── 响应里直接带回最新的 editor_status（不用再轮询）
 ```
 
-* **1~2 秒生效**：点「保存并生效」后页面会说「已提交，1~2 秒后生效」，
-  并在 2 秒后自动重新载入，从 `editor_status` 里读**插件的真实执行结果**。
-  看到「已提交」只代表上传成功，不代表配置已经写完 —— 这一点页面不会含糊其辞。
-* **不会重复执行**：每条指令带一个随机 `nonce`，插件记住上次处理过的那个；
-  插件重启时也会先「播种」一次现有文件的 nonce，避免把上一次的指令又跑一遍。
-* **坏数据不卡住**：解析失败或动作不认识，一样记 nonce 并回写中文错误，
-  轮询循环永远不退出。
-* **上传失败会明说**：把 HTTP 状态、服务端返回的原因、出错端点都显示出来，不静默。
+| 路由（注册用，带插件名） | 方法 | 页面侧调用（相对路径） | 作用 |
+| --- | --- | --- | --- |
+| `/<插件名>/config` | GET | `apiGet("config")` | 返回整份配置 + 编辑器状态 |
+| `/<插件名>/config` | POST | `apiPost("config", {action, payload})` | 写内容表 / 数值 / 自动备份 |
+| `/<插件名>/snapshot` | POST | `apiPost("snapshot", {action, …})` | 存档新建 / 恢复 / 删除 / 改名 |
+
+* **同步生效**：点「保存并生效」后配置立刻写回并落盘，页面显示的是插件的真实结果。
+* **登录态由 Dashboard 把关**：这三个路由挂在 `require_plugin_scope` 之后，
+  只有登录 WebUI 的人能调；插件侧只做「白名单 + 类型」校验。
+* **失败会明说**：HTTP 状态、服务端原因、出错端点都会显示出来，不静默。
+* 历史：早先试过「页面上传文件 → 插件轮询」，在真实环境下被
+  `403 /api/files：Insufficient API key scope` 挡掉（插件页面的 API key 没有上传权限），
+  **已废弃**，不要再回到那条路。
 
 指令文件的落点由 `ASTRBOT_ROOT` 决定：`<AstrBotRoot>/data/attachments/`；
 目录还不存在时插件静默跳过（每秒一次 `stat`，几乎零开销）。
@@ -927,7 +935,7 @@ AstrBot 的插件页面 SDK 只有 `apiGet / apiPost / upload / download / subsc
 | 🗑 删除 | 删除该快照（删除前**自动再存一份**，防手滑） |
 | ✏️ 点备注改名 | 只改 JSON 里的 `note` 字段与索引，**不重命名文件**（保持「最新快照 = 按 mtime 排序」的语义） |
 | ⬇ 下载信息 | 下载这份存档的**信息**（名字/时间/玩家数）。要拿玩家数据本体，请用「插件配置 → 导出存档文件」或直接取 `backups/` 里的同名文件 |
-| ↻ 刷新列表 | 重新读 `editor_status` |
+| ↻ 刷新列表 | 重新调 `config` 读 `editor_status` |
 
 自动备份设置（开关 / 每日时间点 / 间隔 / 保留份数）也在这个页面里改，改完一并提交。
 
@@ -948,7 +956,7 @@ AstrBot 的插件页面 SDK 只有 `apiGet / apiPost / upload / download / subsc
 | --- | --- |
 | `pages/editor/index.html` | 页面本体（单文件、零外部依赖，主题走 CSS 变量） |
 | `.astrbot-plugin/i18n/zh-CN.json` | 页面标题等文案（AstrBot 唯一认的 i18n 路径） |
-| `_editor_bridge.py` | 插件侧的通道：轮询、动作白名单、`editor_status` 回写 |
+| `_editor_bridge.py` | 插件侧的通道：注册 Web API（config / snapshot）、动作白名单、`editor_status` 回写 |
 | `editor_status`（配置项） | 插件回写给页面的状态：存档清单、玩家数、下次自动存档、可改的数值键 |
 
 > ⚠️ Docker 部署注意：`docker/entrypoint.sh` 会把插件同步进 `data/plugins/`，
@@ -1109,6 +1117,21 @@ big_fat_fish|大肥鱼|稀有|120|*:0.15|深海里最肥的一条
 
 ## 📝 更新日志
 
+### v1.8.0
+
+- **数据编辑器页面终于能真正读写配置了**：改用 AstrBot 官方给插件 Pages 的
+  `context.register_web_api` 注册自己的后端接口 ——
+  `/<插件名>/config`（GET 读 / POST 写）与 `/<插件名>/snapshot`（存档动作）。
+  页面点「保存并生效」是**同步写回并落盘**，响应里直接带回最新状态，不再需要等待。
+- **废弃旧通道**：早先实现的「页面上传文件 → 插件每 1.5 秒轮询」在真实环境下会被
+  `403 /api/files：Insufficient API key scope` 挡掉（插件页面的 API key 没有上传权限），
+  已整体移除（连同 `nonce`、固定文件名、轮询任务与相关常量）。
+- 修掉一个诊断了很久的坑：页面请求的 endpoint 必须是**相对插件**的路径，
+  Dashboard 会把它拼到 `/api/v1/plugins/extensions/<插件名>/` 后面；
+  而插件注册路由时**必须**带插件名前缀 —— 少一层或多一层都会得到「未找到该路由」。
+- 新增断言：路由注册与反注册（只摘自己的、不动别的插件）、GET 结构、
+  POST 白名单（数值键 / 内容表 / 自动备份）、四个存档动作、坏请求体不炸、
+  以及「旧通道常量已彻底移除」。
 ### v1.7.0
 
 - **🐟 鱼池可以在配置面板里改了**：新增 `fish_defs`（多行文本，默认 232 行），格式 `id|名称|稀有度|基准价|分布|说明`，分布支持 `钓点:权重`（逗号分隔）、中文钓点名、`*` 表示所有钓点。加一条鱼 = 加一行；坏行会被跳过并在日志点名，不会让插件起不来。

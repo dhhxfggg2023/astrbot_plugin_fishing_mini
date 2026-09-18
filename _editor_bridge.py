@@ -1,52 +1,35 @@
 # -*- coding: utf-8 -*-
-"""数据编辑器页面 ↔ 插件 的「上传文件 + 轮询」数据通道。
+"""数据编辑器页面 ↔ 插件 的 Web API 通道（插件自己注册路由）。
 
-================================ 为什么是这条路 ================================
+=============================== 为什么是这条路 ================================
 
-AstrBot 的插件页面（``pages/<目录名>/index.html``）只拿到一个很窄的桥接 SDK：
+AstrBot 的插件页面（``pages/<目录名>/index.html``）拿到的是很窄的桥接 SDK
+（``apiGet / apiPost / upload / download / subscribeSSE``）。它能把请求转发到
+**插件自己注册的 Web API**：
 
-    apiGet / apiPost / upload / download / subscribeSSE
+    页面  bridge.apiGet("config")
+      →  Dashboard  /api/v1/plugins/extensions/<插件名>/config
+      →  本插件用 context.register_web_api("/<插件名>/config", ...) 注册的 handler
 
-**没有 PUT**，而「写插件配置」在 AstrBot 里只有
-``PUT /api/plugins/{plugin_id}/config`` —— 页面够不着。
-所以配置改不了、只能读（``GET /api/plugins/{plugin_id}/config`` 是有的）。
+要点（已核对 AstrBot 源码与官方文档）：
 
-能用的写入口只剩一个：``POST /api/files``（SDK 的 ``upload``）。
-它落到 ``ChatService.save_uploaded_file`` →
-``<ASTRBOT_ROOT>/data/attachments/<清洗后的文件名>``，非图片走 ``attach_type="file"``，
-**文件名基本原样保留**。于是就有了下面这条通道：
+* **路由必须带插件名前缀**（``/<plugin>/config``），页面侧的 endpoint **不带**
+  （``config``）—— 少一层或多一层都会得到「未找到该路由」。
+* handler 用 ``astrbot.api.web`` 的 ``json_response`` / ``error_response`` /
+  ``request``；登录态由 Dashboard 的 ``require_plugin_scope`` 校验。
+* 三种路由：GET ``config``（读）、POST ``config``（写内容表/数值/自动备份）、
+  POST ``snapshot``（存档新建/恢复/删除/改名）。
 
-    页面  --upload(固定文件名)-->  data/attachments/fishing_editor_bridge.json
-                                        |
-                                        v  （插件每 POLL_INTERVAL 秒 stat + 读一次）
-                                  动作白名单 --> self.config / 存档仓库
-                                        |
-    页面  <--apiGet 读配置-------- editor_status（插件回写的 JSON 字符串）
+⚠️ 历史：早先试过「页面上传文件 + 插件轮询」，在真实环境下被
+``403 /api/files：Insufficient API key scope`` 挡掉（插件页面的 API key 没有
+上传权限），已废弃 —— 不要再回到那条路。
 
-============================== 指令信封与 nonce ==============================
+============================== 安全边界 ==============================
 
-页面上传的文件内容就是一个 JSON：
-
-    {"nonce": "<随机串>", "ts": 1789000000, "action": "save_numbers",
-     "payload": {"stamina_max": 30}}
-
-* **固定文件名** → 重复上传天然「覆盖」，文件里永远只有最新一条指令。
-* **nonce** → 插件记住「上次处理过的 nonce」，相同就跳过，避免同一条指令
-  被轮询反复执行（文件不会自己消失）。
-* **启动播种** → 插件启动时先读一次现有文件的 nonce 并记为「已处理」，
-  这样重启不会把上一次的指令又跑一遍。
-* 解析失败 / 未知 action → **照样记 nonce 并回写错误**，绝不卡住轮询。
-
-=============================== 安全边界 ===============================
-
-* 只认白名单里的 action，其余一律拒绝并回写中文原因。
-* ``save_content`` 只接受 9 张**内容表**（``fish_defs / rod_defs / bait_defs /
-  item_defs / location_defs``）；``editor_status``、``data_action`` 这类
-  管理项递进来会被明确拒绝。
-* ``save_numbers`` 只接受**数值类**键：从 ``DEFAULTS`` 里筛掉
-  ``*_defs / *_slots / *_upgrades`` 与 ``data_* / backup_* / editor_*``，
-  再逐个按 DEFAULTS 里的类型校验（int/float/bool/str），非法就整批拒绝。
-* 单个指令文件有大小上限，超过就当坏数据（记 nonce + 回写错误）。
+* 写操作只认白名单：``save_content`` 只收 9 张内容表；``save_numbers`` 只收
+  ``DEFAULTS`` 里的数值类键（筛掉 ``*_defs / *_slots / *_upgrades`` 与
+  ``data_* / backup_* / editor_*``）并逐个类型校验，非法就整批拒绝。
+* 未知 action、坏 JSON、非对象请求体 → 返回结构化错误，绝不 500。
 
 ⚠️ 维护约定：本模块的方法**不要**对共享的模块级变量做重新赋值
 （``X = ...`` 只会改到本模块的副本），要改就原地改（``X.update()`` 等）。
@@ -58,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pathlib
 import re
 import time
 from typing import Any
@@ -66,12 +50,9 @@ from typing import Any
 # 通道常量（页面侧必须与这里保持一致）
 # ---------------------------------------------------------------------------
 
-#: 页面把指令上传成这个名字，插件就盯这个名字
-BRIDGE_FILE_NAME = "fishing_editor_bridge.json"
-#: 轮询间隔（秒）：够快（1~2 秒生效），又不至于把磁盘打满
-POLL_INTERVAL = 1.5
-#: 指令文件大小上限（正常几 KB，超过说明不是我们的文件）
-MAX_BRIDGE_BYTES = 256 * 1024
+#: 页面调用的「相对插件」endpoint（路由注册时会加上 /<插件名> 前缀）
+ENDPOINT_CONFIG = "config"
+ENDPOINT_SNAPSHOT = "snapshot"
 
 #: 内容表白名单：键 -> 期望的配置值类型
 CONTENT_TABLES: dict[str, type] = {
@@ -245,203 +226,271 @@ def _coerce_number(key: str, value: Any, default: Any) -> tuple[Any, str]:
     return None, f"「{key}」的类型不支持由页面修改"
 
 
-class EditorBridgeMixin:
-    """编辑器页面的数据通道（由 FishingPlugin 继承，见 main.py 的类定义）。"""
+# =============================================================================
+# 页面 Web API（插件注册；handler 用 astrbot.api.web 的 helper）
+# =============================================================================
+
+
+def _meta_name() -> str:
+    """读 metadata.yaml 里的 name（AstrBot 用作插件名，也就是路由前缀）。"""
+    try:
+        path = pathlib.Path(__file__).with_name("metadata.yaml")
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("name:"):
+                return line.split(":", 1)[1].strip().strip("'\"")
+    except Exception:
+        pass
+    return ""
+
+
+class EditorApiMixin:
+    """把编辑器页面的读写接口挂成插件 Web API（由 EditorBridgeMixin 继承）。"""
+
+    # ---------------------------------------------------------------- 路由表
+    def _editor_plugin_names(self) -> list[str]:
+        """可能被 AstrBot 当作插件名的标识（路由前缀必须与它一致）。"""
+        names: list[str] = []
+
+        def push(value: Any) -> None:
+            text = str(value or "").strip().strip("/")
+            if text and text not in names:
+                names.append(text)
+
+        push(getattr(self, "name", ""))          # star_manager 注入的 name
+        push(_meta_name())                       # metadata.yaml 的 name
+        push(pathlib.Path(__file__).parent.name)  # 插件目录名
+        return names or ["astrbot_plugin_qq_fishing"]
+
+    def _editor_route_specs(self) -> list[tuple[str, Any, list[str], str]]:
+        """(路由模板, handler, 方法, 描述)。"""
+        return [
+            (
+                "/{plugin}/" + ENDPOINT_CONFIG,
+                self.editor_api_config,
+                ["GET"],
+                "读取群钓鱼的配置与编辑器状态",
+            ),
+            (
+                "/{plugin}/" + ENDPOINT_CONFIG,
+                self.editor_api_config_save,
+                ["POST"],
+                "保存群钓鱼的内容表 / 数值 / 自动备份设置",
+            ),
+            (
+                "/{plugin}/" + ENDPOINT_SNAPSHOT,
+                self.editor_api_snapshot,
+                ["POST"],
+                "群钓鱼存档：新建 / 恢复 / 删除 / 改名",
+            ),
+        ]
+
+    # ------------------------------------------------------------ GET config
+    def _editor_config_payload(self) -> dict[str, Any]:
+        """交给页面的整份配置（内容表 + 数值项 + editor_status）。
+
+        结构刻意与「读插件配置」一致：页面直接按配置键取值，
+        没有 ``config`` 子对象（老代码的 ``res.config || res`` 也能吃下）。
+        """
+        payload: dict[str, Any] = {}
+        try:
+            payload = {str(k): v for k, v in dict(self.config).items()}
+        except Exception as e:  # pragma: no cover
+            _log_warning(f"读取插件配置失败：{e}")
+        if not payload.get("editor_status"):
+            payload["editor_status"] = getattr(self, "_editor_status_text", "") or ""
+        payload["status"] = "ok"
+        payload["transport"] = "plugin-api"
+        return payload
+
+    async def editor_api_config(self):
+        """GET config：返回当前配置，供页面渲染。"""
+        data = self._editor_config_payload()
+        try:
+            from astrbot.api.web import json_response
+        except Exception:  # pragma: no cover - 单测里可能没有 astrbot
+            return data
+        return json_response(data)
+
+    # ----------------------------------------------------------- POST config
+    async def editor_api_config_save(self, body: dict[str, Any] | None = None):
+        """POST config：支持两种写法。
+
+        * ``{"action": "save_content", "payload": {...}}``（页面现在用这种）
+        * ``{"tables": {...}}`` / ``{"numbers": {...}}`` / ``{"autobackup": {...}}``
+
+        ``body`` 可以显式传入（单测用），不传就读真实请求体。
+        """
+        if body is None:
+            body, err = await self._editor_request_json()
+            if err:
+                return self._editor_api_error(err)
+        if not isinstance(body, dict):
+            return self._editor_api_error("请求体必须是一个 JSON 对象")
+
+        results: list[str] = []
+        ok_all = True
+        action = body.get("action")
+        if isinstance(action, str) and action.strip():
+            ok_all, message = await self._editor_run_action(
+                action.strip(), body.get("payload") if isinstance(body.get("payload"), dict) else {}
+            )
+            results.append(message)
+        else:
+            plan = (
+                ("tables", "save_content"),
+                ("numbers", "save_numbers"),
+                ("autobackup", "save_autobackup"),
+            )
+            for key, remote in plan:
+                if key not in body:
+                    continue
+                chunk = body[key]
+                if remote == "save_content":
+                    chunk = {"tables": chunk}
+                elif not isinstance(chunk, dict):
+                    return self._editor_api_error(f"「{key}」需要是一个 JSON 对象")
+                ok, message = await self._editor_run_action(remote, chunk)
+                ok_all = ok_all and ok
+                results.append(message)
+            if not results:
+                return self._editor_api_error(
+                    "请求体里没有可保存的内容：至少要有 tables / numbers / autobackup 之一"
+                )
+
+        summary = "；".join(results)
+        await self._editor_write_status(action="save", ok=ok_all, message=summary)
+        return self._editor_api_ok(summary, ok=ok_all)
+
+    # --------------------------------------------------------- POST snapshot
+    async def editor_api_snapshot(self, body: dict[str, Any] | None = None):
+        """POST snapshot：``{"action": "create|restore|delete|rename|refresh", ...}``。
+
+        ``body`` 可以显式传入（单测用），不传就读真实请求体。
+        """
+        if body is None:
+            body, err = await self._editor_request_json()
+            if err:
+                return self._editor_api_error(err)
+        if not isinstance(body, dict):
+            return self._editor_api_error("请求体必须是一个 JSON 对象")
+
+        mapping = {
+            "create": "snapshot_create",
+            "restore": "snapshot_restore",
+            "delete": "snapshot_delete",
+            "rename": "snapshot_rename",
+            "refresh": "refresh",
+        }
+        action = str(body.get("action") or "").strip().lower()
+        remote = mapping.get(action)
+        if remote is None:
+            return self._editor_api_error(
+                f"不认识的存档动作「{action}」（可用：{'、'.join(mapping)}）"
+            )
+
+        ok, message = await self._editor_run_action(remote, body)
+        await self._editor_write_status(action=remote, ok=ok, message=message)
+        return self._editor_api_ok(message, ok=ok)
+
+    # ---------------------------------------------------------------- 小工具
+    async def _editor_request_json(self) -> tuple[dict[str, Any], str]:
+        """读 JSON 请求体，返回 ``(body, 错误说明)``。"""
+        try:
+            from astrbot.api.web import request as web_request
+        except Exception:
+            return {}, "当前 AstrBot 不支持 astrbot.api.web.request，无法读取请求体"
+        try:
+            body = await web_request.json(default={})
+        except Exception as e:
+            return {}, f"解析请求体失败：{e}"
+        if not isinstance(body, dict):
+            return {}, "请求体必须是一个 JSON 对象"
+        return body, ""
+
+    def _editor_api_ok(self, message: str, *, ok: bool = True):
+        """成功响应：带上最新 editor_status，页面不用再轮询。"""
+        payload = {
+            "status": "ok" if ok else "error",
+            "ok": bool(ok),
+            "message": str(message or ""),
+            "editor_status": getattr(self, "_editor_status_text", "") or "",
+        }
+        try:
+            from astrbot.api.web import json_response
+        except Exception:  # pragma: no cover
+            return payload
+        return json_response(payload)
+
+    def _editor_api_error(self, message: str):
+        """错误响应：用 AstrBot 约定的 error 信封。"""
+        try:
+            from astrbot.api.web import error_response
+        except Exception:  # pragma: no cover
+            return {"status": "error", "message": str(message or "")}
+        return error_response(str(message or ""))
+
+
+class EditorBridgeMixin(EditorApiMixin):
+    """编辑器页面的数据通道（由 FishingPlugin 继承，见 main.py 的类定义）。
+
+    读写都走**插件自己注册的 Web API**（见文件末尾的 EditorApiMixin）：
+    旧版「页面上传文件 + 插件轮询」在真实环境下会被
+    ``403 /api/files: Insufficient API key scope`` 挡掉，已废弃。
+    """
 
     # =====================================================================
     # 生命周期
     # =====================================================================
     def start_editor_bridge(self) -> None:
-        """启动编辑器页面轮询任务（重复调用是安全的）。
+        """注册编辑器页面的 Web API（重复调用安全；任何异常都不影响插件启动）。
 
-        整段包在 try/except 里：**任何异常都不影响插件启动**，
-        最差情况只是「页面保存不了」，游戏本体照常。
+        页面用相对路径调用（``config`` / ``snapshot``），Dashboard 会转发到
+        ``/api/v1/plugins/extensions/<插件名>/<endpoint>``；路由必须带插件名前缀，
+        否则匹配不到（用户此前看到的「未找到该路由」就是这个原因）。
         """
         try:
-            self._editor_last_nonce = ""
-            self._editor_status_text = ""
-            self._editor_seed_done = False
-            task = getattr(self, "_editor_task", None)
-            if task is not None and not task.done():
+            self._editor_status_text = getattr(self, "_editor_status_text", "") or ""
+            context = getattr(self, "context", None)
+            register = getattr(context, "register_web_api", None)
+            if not callable(register):
+                _log_warning(
+                    "当前 AstrBot 不支持 register_web_api：编辑器页面只能只读预览"
+                )
                 return
-            loop = asyncio.get_running_loop()
-            self._editor_task = loop.create_task(self._editor_bridge_loop())
-            _log_info(
-                f"数据编辑器通道已启动：每 {POLL_INTERVAL:g} 秒检查 "
-                f"{self._editor_bridge_path()}"
-            )
+            routes: list[str] = []
+            for name in self._editor_plugin_names():
+                for route, handler, methods, desc in self._editor_route_specs():
+                    full = route.format(plugin=name)
+                    try:
+                        register(full, handler, list(methods), desc)
+                        routes.append(f"{full} [{'/'.join(methods)}]")
+                    except Exception as e:
+                        _log_warning(f"注册编辑器路由失败（{full}）：{e}")
+            self._editor_registered_routes = routes
+            _log_info("数据编辑器通道已就绪（插件 Web API）：" + "、".join(routes))
         except Exception as e:  # pragma: no cover - 绝不能让插件启动失败
-            self._editor_task = None
             _log_warning(f"数据编辑器通道启动失败（页面保存将不可用）：{e}")
 
     async def stop_editor_bridge(self) -> None:
-        """取消轮询任务（停用/重载插件时调用）。"""
+        """停用/重载插件时把自己注册的路由摘掉（AstrBot 没有提供反注册 API）。"""
         try:
-            task = getattr(self, "_editor_task", None)
-            self._editor_task = None
-            if task is None or task.done():
-                return
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+            raw = getattr(self, "_editor_registered_routes", None) or []
+            routes = {str(item).split(" [")[0] for item in raw}
+            context = getattr(self, "context", None)
+            table = getattr(context, "registered_web_apis", None)
+            if routes and isinstance(table, list):
+                table[:] = [
+                    item
+                    for item in table
+                    if not (
+                        isinstance(item, (tuple, list))
+                        and item
+                        and str(item[0]) in routes
+                    )
+                ]
+            self._editor_registered_routes = []
         except Exception as e:  # pragma: no cover
             _log_warning(f"数据编辑器通道停止失败（忽略）：{e}")
-
-    # =====================================================================
-    # 路径
-    # =====================================================================
-    def _editor_bridge_path(self) -> str:
-        """指令文件的绝对路径：``<AstrBotRoot>/data/attachments/<固定名>``。
-
-        必须与 ``ChatService.save_uploaded_file`` 的落点一致，所以这里直接复用
-        AstrBot 自己的 ``get_astrbot_root()``（它会认 ``ASTRBOT_ROOT``、桌面版
-        的 ``~/.astrbot``，最后才退回 cwd）—— 自己手写路径很容易在桌面版上跑偏。
-        连 AstrBot 都导入不到（单测里裸跑本模块）时才退回环境变量。
-        """
-        root = ""
-        try:
-            from astrbot.core.utils.astrbot_path import get_astrbot_root
-
-            root = str(get_astrbot_root() or "")
-        except Exception:
-            root = ""
-        if not root:
-            # 兜底：与 astrbot_path.get_astrbot_root() 同序
-            root = str(os.environ.get("ASTRBOT_ROOT") or "").strip()
-            if not root:
-                try:
-                    from astrbot.core.utils.runtime_env import (
-                        is_packaged_desktop_runtime,
-                    )
-
-                    if is_packaged_desktop_runtime():
-                        root = os.path.join(os.path.expanduser("~"), ".astrbot")
-                except Exception:
-                    root = ""
-            if not root:
-                root = os.getcwd()
-        return os.path.join(str(root), "data", "attachments", BRIDGE_FILE_NAME)
-
-    # =====================================================================
-    # 轮询
-    # =====================================================================
-    async def _editor_bridge_loop(self) -> None:
-        """后台循环：读一条指令 -> 执行 -> 回写状态。绝不因为坏数据退出。"""
-        try:
-            # 启动播种：把「重启前留下的那条指令」记成已处理，不重复执行
-            await self._editor_seed_nonce()
-            while True:
-                try:
-                    await self._editor_poll_once()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:  # pragma: no cover - 循环必须活下去
-                    _log_warning(f"编辑器通道轮询出错（会继续跑）：{e}")
-                await asyncio.sleep(POLL_INTERVAL)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:  # pragma: no cover
-            _log_warning(f"编辑器通道轮询任务退出：{e}")
-
-    async def _editor_seed_nonce(self) -> None:
-        """播种 nonce：读一次现有文件但不执行。"""
-        try:
-            payload = self._editor_read_bridge_file()
-            if isinstance(payload, dict):
-                self._editor_last_nonce = str(payload.get("nonce") or "")
-            self._editor_seed_done = True
-        except Exception as e:  # pragma: no cover
-            _log_debug(f"编辑器通道播种 nonce 失败（下次轮询再说）：{e}")
-
-    def _editor_read_bridge_file(self) -> dict[str, Any] | None:
-        """读指令文件；不存在 / 读不动 / 不是 JSON 对象都返回 None。"""
-        path = self._editor_bridge_path()
-        if not path:
-            return None
-        try:
-            if not os.path.isfile(path):
-                return None
-            if os.path.getsize(path) > MAX_BRIDGE_BYTES:
-                return None
-            with open(path, encoding="utf-8") as fp:
-                raw = fp.read(MAX_BRIDGE_BYTES + 1)
-        except OSError:
-            return None
-        if len(raw) > MAX_BRIDGE_BYTES:
-            return None
-        stripped = raw.lstrip("\ufeff \t\r\n")
-        if not stripped:
-            return None
-        try:
-            payload = json.loads(stripped)
-        except ValueError:
-            return None
-        return payload if isinstance(payload, dict) else None
-
-    async def _editor_poll_once(self) -> None:
-        """检查一次指令文件：没新指令就立刻返回（只 stat + 读小 JSON）。"""
-        path = self._editor_bridge_path()
-        if not path or not os.path.isfile(path):
-            return  # 目录/文件还不存在 -> 静默跳过
-
-        raw_text = ""
-        payload: dict[str, Any] | None = None
-        try:
-            with open(path, encoding="utf-8") as fp:
-                raw_text = fp.read(MAX_BRIDGE_BYTES + 1)
-        except OSError as e:
-            _log_debug(f"编辑器通道读文件失败（跳过）：{e}")
-            return
-
-        nonce = ""
-        action = ""
-        action_payload: dict[str, Any] = {}
-        if len(raw_text) > MAX_BRIDGE_BYTES:
-            nonce = ""  # 太大：连 nonce 都读不到，只能靠人工再传一次
-            action = ""
-            payload = None
-        else:
-            try:
-                parsed = json.loads(raw_text.lstrip("\ufeff \t\r\n") or "null")
-            except ValueError:
-                parsed = None
-            if isinstance(parsed, dict):
-                payload = parsed
-                nonce = str(parsed.get("nonce") or "")
-                action = str(parsed.get("action") or "").strip()
-                raw_payload = parsed.get("payload")
-                action_payload = raw_payload if isinstance(raw_payload, dict) else {}
-
-        # 坏 JSON：只要文件里能抠出 nonce 就记下来，避免每 1.5 秒重试一次
-        if payload is None:
-            if not nonce:
-                nonce = self._editor_nonce_from_text(raw_text)
-            if not nonce:
-                return
-            if nonce == self._editor_last_nonce:
-                return
-            self._editor_last_nonce = nonce
-            _log_warning("编辑器通道收到坏 JSON（已跳过并记录 nonce，不会卡住轮询）")
-            await self._editor_write_status(
-                action="", ok=False, message="页面传上来的不是合法 JSON，已忽略这一条"
-            )
-            return
-
-        if not nonce or nonce == self._editor_last_nonce:
-            return  # 同一条指令：已经处理过，跳过
-
-        # 先记 nonce 再执行：无论后面成功还是炸了，都不会重复跑
-        self._editor_last_nonce = nonce
-        ok, message = await self._editor_run_action(action, action_payload)
-        await self._editor_write_status(action=action, ok=ok, message=message)
-
-    @staticmethod
-    def _editor_nonce_from_text(raw_text: str) -> str:
-        """坏 JSON 兜底：用正则把 ``"nonce": "xxx"`` 抠出来。"""
-        match = re.search(r'"nonce"\s*:\s*"([^"]{1,128})"', raw_text or "")
-        return match.group(1) if match else ""
 
     # =====================================================================
     # 动作分发
@@ -702,7 +751,7 @@ class EditorBridgeMixin:
             "next_auto_backup": next_auto,
             "autobackup": autobackup,
             "numbers_editable": number_whitelist(),
-            "bridge_file": BRIDGE_FILE_NAME,
+            "transport": "plugin-api",
         }
         try:
             return json.dumps(payload, ensure_ascii=False)
