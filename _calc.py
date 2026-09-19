@@ -2062,18 +2062,24 @@ def _parse_button_layout(raw: Any, *, warn: Any = None) -> dict[str, int]:
         )
     return rows
 
-#: 样式别名 -> QQ 官方键盘的 render_data.style（内置默认只用到 1 和 4）
+#: 样式别名 -> QQ 官方键盘的 ``render_data.style``（内置默认只用到 0 和 1）
+#:
+#: 官方文档《消息按钮》写得很死：``render_data.style | int | 是 | 按钮样式：0 灰色线框，1 蓝色线框``
+#: （bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/msg-btn.html，2026-07-21 版）。
+#: v1.13.1 之前这张表写成 default=1 / primary=4 —— 那是猜的：结果是「默认（灰）」的按钮
+#: 在 QQ 里显示成蓝色线框，而 primary=4 根本不是文档里的取值。现在按官方取值来，
+#: 谁想要别的颜色，直接在样式列写数字（0~255 原样透传）。
 BUTTON_STYLE_ALIASES: dict[str, int] = {
-    "": 1,
-    "default": 1,
-    "默认": 1,
-    "灰": 1,
-    "gray": 1,
-    "grey": 1,
-    "primary": 4,
-    "主要": 4,
-    "蓝": 4,
-    "blue": 4,
+    "": 0,
+    "default": 0,
+    "默认": 0,
+    "灰": 0,
+    "gray": 0,
+    "grey": 0,
+    "primary": 1,
+    "主要": 1,
+    "蓝": 1,
+    "blue": 1,
 }
 
 #: 按钮点击后发送的指令，第一个词必须在这里（否则点了没反应，属于死按钮）。
@@ -2106,7 +2112,8 @@ def _fill_button_text(template: Any, label: str, n: int = 0) -> str:
 
 def _parse_button_style(value: Any) -> int | None:
     """解析按钮样式；不认识就返回 None（调用方回退默认）。"""
-    raw = str(value or "").strip().lower()
+    # 不能写 ``value or ""``：数字 0 是合法样式（QQ 的 0 号色），会被 or 当成「没写」
+    raw = "" if value is None or value is False else str(value).strip().lower()
     if raw in BUTTON_STYLE_ALIASES:
         return BUTTON_STYLE_ALIASES[raw]
     try:
@@ -2116,8 +2123,8 @@ def _parse_button_style(value: Any) -> int | None:
     return number if 0 <= number <= 255 else None
 
 
-#: 按钮默认样式（配置没写时的兜底，= QQ 键盘的 render_data.style）
-BUTTON_STYLE_DEFAULT = 1
+#: 按钮默认样式（配置没写时的兜底，= QQ 键盘的 render_data.style：0 = 灰色线框）
+BUTTON_STYLE_DEFAULT = 0
 #: 样式策略：``table`` = 按按钮表里每行自己写的（历史行为）/ ``uniform`` = 全部统一
 BUTTON_STYLE_MODES: tuple[str, ...] = ("按按钮表", "统一")
 BUTTON_STYLE_MODE_ALIASES: dict[str, str] = {

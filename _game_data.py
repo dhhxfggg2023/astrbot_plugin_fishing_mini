@@ -396,7 +396,8 @@ lost_ring|5|💍 鱼线上缠着一枚旧戒指，不知道是谁的。|gold=80
 #   场景|按钮文案|点击后发送|样式
 #   场景  cast=抛竿结果 / pull=咬钩提示（拉线） / bag=背包视图
 #         location=钓点视图 / story=随机插曲（模板：{label}=选项文案，{n}=第几个选项）
-#   样式  default（灰）/ primary（蓝），也可以直接写数字（QQ 的 render_data.style）
+#   样式  default（灰，= 官方 0）/ primary（蓝，= 官方 1），
+#         也可以直接写数字 0~255（QQ 的 render_data.style，原样透传）
 #   同一场景的多行 = 多个按钮，顺序即显示顺序；每行最多摆几个由代码决定
 #   （cast/bag/location/pull 每行 3 个，story 每个选项一行）
 #   点击后发送必须是本插件认识的指令（/钓鱼 …），否则这一行会被跳过

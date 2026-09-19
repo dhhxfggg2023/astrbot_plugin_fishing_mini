@@ -235,25 +235,25 @@ check(
     "策略=按按钮表：样式一行都不动（升级后逐字不变）",
 )
 check(
-    CALC._parse_button_defs("pull|拉线|/钓鱼 拉|primary") == {"pull": [("拉线", "/钓鱼 拉", 4)]},
-    "没传 default_style 时解析结果 == 历史行为",
+    CALC._parse_button_defs("pull|拉线|/钓鱼 拉|primary") == {"pull": [("拉线", "/钓鱼 拉", 1)]},
+    "primary 解析成官网的 1（蓝色线框）",
 )
 check(
-    CALC._parse_button_defs("pull|拉线|/钓鱼 拉", default_style="primary") == {"pull": [("拉线", "/钓鱼 拉", 4)]},
+    CALC._parse_button_defs("pull|拉线|/钓鱼 拉", default_style="primary") == {"pull": [("拉线", "/钓鱼 拉", 1)]},
     "没写样式时用 button_default_style",
 )
 check(
-    CALC._parse_button_defs("pull|拉线|/钓鱼 拉|乱写", default_style="primary") == {"pull": [("拉线", "/钓鱼 拉", 4)]},
+    CALC._parse_button_defs("pull|拉线|/钓鱼 拉|乱写", default_style="primary") == {"pull": [("拉线", "/钓鱼 拉", 1)]},
     "样式写坏了也用兜底样式",
 )
 check(
-    CALC._parse_button_defs("pull|拉线|/钓鱼 拉", default_style="乱写") == {"pull": [("拉线", "/钓鱼 拉", 1)]},
-    "兜底样式也写坏时回到 1（灰）",
+    CALC._parse_button_defs("pull|拉线|/钓鱼 拉", default_style="乱写") == {"pull": [("拉线", "/钓鱼 拉", 0)]},
+    "兜底样式也写坏时回到 0（灰色线框）",
 )
 _uniform = CALC._apply_button_style_policy(_rows, "统一", "primary")
 check(
-    {style for items in _uniform.values() for _l, _d, style in items} == {4},
-    "策略=统一：所有场景所有按钮都换成统一样式",
+    {style for items in _uniform.values() for _l, _d, style in items} == {1},
+    "策略=统一：所有场景所有按钮都换成统一样式（primary = 1）",
 )
 check(
     [(a, b) for a, b, _s in _uniform.get("pull", [])] == [(a, b) for a, b, _s in _rows.get("pull", [])],
@@ -261,8 +261,8 @@ check(
 )
 check(
     {style for items in CALC._apply_button_style_policy(_rows, "统一", "乱写").values()
-     for _l, _d, style in items} == {1},
-    "统一样式写坏时回到 1（不会出现非法样式）",
+     for _l, _d, style in items} == {0},
+    "统一样式写坏时回到 0（不会出现非法样式）",
 )
 check(
     "无" not in str(mod.BUTTON_STYLE_MODE) and mod.BUTTON_DEFAULT_STYLE == "default",

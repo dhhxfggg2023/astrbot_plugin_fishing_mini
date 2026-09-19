@@ -706,8 +706,29 @@ async function repliesPure() {
   check(scenes[0].id === "cast.hit" && scenes[0].source === "config" && scenes[0].buttons.length === 2,
     "第一个场景 cast.hit：来源=配置、2 个按钮");
   check(scenes[0].buttons[0].style === "primary" && scenes[0].buttons[0].label === "🎣 再来一竿",
-    "按钮三元组 [文案, 指令, 1] 被规范成 {label,data,style=primary}",
+    "按钮三元组 [文案, 指令, 1] 被规范成 {label,data,style=primary}（官方 1 = 蓝色线框）",
     JSON.stringify(scenes[0].buttons[0]));
+  // 数字样式只有 0/1 能翻译成下拉里的两个选项，其余必须原样保留：
+  // 翻译错了 = 保存一次就把玩家所有按钮的颜色改掉（v1.13.1 修的坑）
+  check(T.normalizeButtonStyle(0) === "default" && T.normalizeButtonStyle(1) === "primary",
+    "数字样式 0/1 -> default/primary（对齐官网 0 灰 / 1 蓝）",
+    T.normalizeButtonStyle(0) + "/" + T.normalizeButtonStyle(1));
+  check(T.normalizeButtonStyle(2) === "2" && T.normalizeButtonStyle(7) === "7"
+    && T.normalizeButtonStyle(255) === "255",
+    "认不出的数字样式原样保留（2~255 不会被改成 default）",
+    [T.normalizeButtonStyle(2), T.normalizeButtonStyle(7), T.normalizeButtonStyle(255)].join(","));
+  check(T.normalizeButtonStyle("") === "default" && T.normalizeButtonStyle("默认") === "default"
+    && T.normalizeButtonStyle("灰") === "default" && T.normalizeButtonStyle("蓝") === "primary",
+    "字符串别名照旧：空/默认/灰 -> default，蓝 -> primary");
+  // 往返：插件发 [文案, 指令, 1] -> 页面存回 ...|primary -> 插件再解析还是 1
+  const rtBtn = T.normalizeReplyButton(["🎣 再来一竿", "/钓鱼", 1]);
+  check(T.TABLE_DEFS.buttons.serialize({
+    scene: "cast", label: rtBtn.label, data: rtBtn.data, style: rtBtn.style
+  }) === "cast|🎣 再来一竿|/钓鱼|primary",
+    "往返不漂：插件给 1，页面存回 primary（插件解析仍是 1）",
+    T.TABLE_DEFS.buttons.serialize({
+      scene: "cast", label: rtBtn.label, data: rtBtn.data, style: rtBtn.style
+    }));
   check(T.state.replies.scenes.filter(function (s) { return s.source === "inherit"; }).length === 1 &&
     T.state.replies.scenes.filter(function (s) { return s.source === "none"; }).length === 1,
     "继承 / 无按钮的来源状态都在演示数据里");

@@ -73,8 +73,12 @@ class InteractionsMixin:
     # 其它平台 / 发送失败时自动退回纯文本，并在正文里把指令写清楚。
 
     @staticmethod
-    def _btn(label: str, data: str, style: int = 1) -> dict[str, Any]:
-        """构造一个官方「指令按钮」。"""
+    def _btn(label: str, data: str, style: int = 0) -> dict[str, Any]:
+        """构造一个官方「指令按钮」。
+
+        ``style`` 就是官网的 ``render_data.style``：0 = 灰色线框、1 = 蓝色线框
+        （默认 0，和 ``_calc.BUTTON_STYLE_ALIASES`` 的兜底一致）。
+        """
         return {
             "id": f"b{abs(zlib.crc32(data.encode('utf-8'))) % 100000000}",
             "render_data": {

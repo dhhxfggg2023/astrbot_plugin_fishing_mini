@@ -161,3 +161,20 @@ v1.12.1 的**紧急修复**（页面白名单写死 5 个场景 → 改命令别
 * 扩展处理函数的签名固定为 `(*, plugin, player, item_id, key, value)`；
   只有扩展键的道具由插件代劳「消耗一件 + 保存 + 提示」，和内置效果混在一件道具上时
   提示仍由内置分支负责（扩展的文字不单独显示）
+
+### 8. 按钮样式：0 = 灰、1 = 蓝（v1.13.1 更正，别再猜）
+
+**官网取值就是 0 和 1，别自己发明数字。**
+《消息按钮》文档写得很死：`render_data.style | int | 是 | 按钮样式：0 灰色线框，1 蓝色线框`
+（bot.q.qq.com/wiki/develop/api-v2/server-inter/message/trans/msg-btn.html）。
+`botpy` 的 `RenderData.style` 只是个裸 `int`（没有枚举），所以文档就是唯一定义。
+
+* v1.13.1 之前 `_calc.BUTTON_STYLE_ALIASES` 写的是 `default=1 / primary=4` —— 纯猜的。
+  后果：标着「默认（灰）」的按钮在 QQ 里是**蓝色线框**，而 `primary=4` 根本不在文档里。
+  现在 `default=0`、`primary=1`，`BUTTON_STYLE_DEFAULT = 0`，`_interactions._btn` 兜底也是 0。
+* **页面与插件必须用同一套数字**：`pages/editor/index.html` 的 `normalizeButtonStyle()`
+  把 `0→default`、`1→primary`，其余数字（2~255）**原样透传**。
+  页面认不出的数字绝不能改写成 default —— 那是「保存一次就把玩家的按钮颜色全改了」。
+* 改这张表 = 改站长线上按钮的颜色。要改先想清楚：老配置里 `|default` 的按钮会换色。
+* 数值样式（`|7` 这种）任何环节都不要翻译、不要四舍五入，官网只保证 0/1 的含义，
+  其余数字是「原样透传」，插件不替 QQ 做解释。

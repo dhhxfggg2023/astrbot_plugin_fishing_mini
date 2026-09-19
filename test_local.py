@@ -2707,24 +2707,24 @@ async def main():
     # 默认文本解析出来的按钮，必须与之前硬编码的那一套逐项一致（等价性回归）
     expect_buttons = {
         "cast": [
-            ("再来一竿", "/钓鱼", 1),
-            ("看背包", "/钓鱼 背包", 1),
-            ("今日", "/钓鱼 今日", 1),
-            ("卖光光", "/钓鱼 卖光光", 1),
-            ("帮助", "/钓鱼 帮助", 1),
+            ("再来一竿", "/钓鱼", 0),
+            ("看背包", "/钓鱼 背包", 0),
+            ("今日", "/钓鱼 今日", 0),
+            ("卖光光", "/钓鱼 卖光光", 0),
+            ("帮助", "/钓鱼 帮助", 0),
         ],
-        "pull": [("拉线！", "/钓鱼 拉", 4)],
+        "pull": [("拉线！", "/钓鱼 拉", 1)],
         "bag": [
-            ("卖光光", "/钓鱼 卖光光", 1),
-            ("水族馆", "/钓鱼 水族馆", 1),
-            ("再来一竿", "/钓鱼", 1),
+            ("卖光光", "/钓鱼 卖光光", 0),
+            ("水族馆", "/钓鱼 水族馆", 0),
+            ("再来一竿", "/钓鱼", 0),
         ],
         "location": [
-            ("查图鉴", "/钓鱼 图鉴", 1),
-            ("背包", "/钓鱼 背包", 1),
-            ("今日", "/钓鱼 今日", 1),
+            ("查图鉴", "/钓鱼 图鉴", 0),
+            ("背包", "/钓鱼 背包", 0),
+            ("今日", "/钓鱼 今日", 0),
         ],
-        "story": [("{label}", "/钓鱼 事件 {n}", 1)],
+        "story": [("{label}", "/钓鱼 事件 {n}", 0)],
     }
 
     def _buttons_snapshot() -> dict:
@@ -2747,10 +2747,10 @@ async def main():
         "默认排版不变：cast 3+2 两行、bag/location/pull 各一行",
     )
     check(
-        [b["render_data"]["style"] for r in plugin._pull_rows() for b in r] == [4]
+        [b["render_data"]["style"] for r in plugin._pull_rows() for b in r] == [1]
         and [b["render_data"]["style"] for r in plugin._cast_rows() for b in r]
-        == [1, 1, 1, 1, 1],
-        "样式来自配置（拉线=primary/蓝=4，其余 default=1）",
+        == [0, 0, 0, 0, 0],
+        "样式来自配置（拉线=primary/蓝=1，其余 default/灰=0，对齐官网取值）",
     )
     # story 是模板：每个选项展开成一行
     ev_def = mod.EVENT_BY_ID[sorted(mod.EVENT_BY_ID)[0]]
@@ -2796,7 +2796,7 @@ async def main():
     plugin_c = make_plugin(custom_cfg)
     check(
         _buttons_snapshot()["cast"]
-        == [("抛一竿", "/钓鱼 3", 4), ("开包", "/钓鱼 背包", 4), ("看钱", "/钓鱼 档案", 7)],
+        == [("抛一竿", "/钓鱼 3", 1), ("开包", "/钓鱼 背包", 1), ("看钱", "/钓鱼 档案", 7)],
         f"自定义按钮生效 -> {_buttons_snapshot()['cast']}",
     )
     check(
@@ -2830,7 +2830,7 @@ async def main():
         warn=warns.append,
     )
     check(
-        parsed == {"cast": [("好按钮", "/钓鱼 帮助", 1)]},
+        parsed == {"cast": [("好按钮", "/钓鱼 帮助", 0)]},
         f"坏行全部跳过、只留合法按钮 -> {parsed}",
     )
     check(
@@ -2853,7 +2853,7 @@ async def main():
     # 只配一个场景 -> 其余场景各自回退内置
     make_plugin({**dict(_CFG), "button_defs": "bag|清空|/钓鱼 卖光光|灰"})
     check(
-        _buttons_snapshot() == {**expect_buttons, "bag": [("清空", "/钓鱼 卖光光", 1)]},
+        _buttons_snapshot() == {**expect_buttons, "bag": [("清空", "/钓鱼 卖光光", 0)]},
         "只配一个场景时，其余场景各自回退内置",
     )
     # 留空 -> 全表回退内置（等价于默认）
@@ -3564,7 +3564,7 @@ async def main():
     )
     check(
         str(plugin_d.config.get("button_defs", "")).startswith("cast|我的按钮")
-        and mod.BUTTONS.get("cast", [])[:1] == [("我的按钮", "/钓鱼 帮助", 4)],
+        and mod.BUTTONS.get("cast", [])[:1] == [("我的按钮", "/钓鱼 帮助", 1)],
         f"写完后运行期按钮表立刻生效 -> {mod.BUTTONS.get('cast')}",
     )
     check(
@@ -5381,6 +5381,33 @@ async def main():
         "帮助页继承 cast（老行为：帮助也带那 5 个按钮）",
     )
     check([len(r) for r in _p0._scene_rows("pull.hook")] == [1], "pull.hook 1 个按钮")
+    # 按钮样式的数字含义：编辑器页面把数字翻译成下拉选项（default/primary），
+    # 两边必须是同一套，而且必须是官网那一套（0 = 灰色线框、1 = 蓝色线框），
+    # 否则「默认（灰）」的按钮在 QQ 里其实是蓝的，保存一次还会被改成别的数字
+    check(
+        (mod.CALC._parse_button_style("default"), mod.CALC._parse_button_style("primary"))
+        == (0, 1),
+        "按钮样式别名：default=0（灰）、primary=1（蓝）—— 官网 render_data.style 取值",
+    )
+    check(
+        (
+            mod.CALC._parse_button_style("0"),
+            mod.CALC._parse_button_style(0),
+            mod.CALC._parse_button_style("7"),
+        )
+        == (0, 0, 7),
+        "数字样式照原样解析（0 号色不会被当「没写」吃掉，也不改别的数字）",
+    )
+    check(
+        (
+            mod.CALC._parse_button_style(None),
+            mod.CALC._parse_button_style(""),
+            mod.CALC._parse_button_style("乱写"),
+            mod.CALC._parse_button_style(300),
+        )
+        == (0, 0, None, None),
+        "没写样式 = 0（灰色线框）；认不出 / 越界 = None 交给调用方兜底",
+    )
     check(
         _p0._scene_rows("pull.hook")[0][0]["action"]["data"] == "/钓鱼 拉",
         "pull.hook 仍然是「拉线！」按钮",
@@ -5536,7 +5563,7 @@ async def main():
     )
     check(_ok, f"save_replies 成功 -> {_msg}")
     check(
-        mod.BUTTONS.get("cast.hit") == [("再来一竿", "/钓鱼", 1)],
+        mod.BUTTONS.get("cast.hit") == [("再来一竿", "/钓鱼", 0)],
         "保存后按钮立刻生效",
     )
     check(mod.TEXT_OVERRIDES.get("cast.miss_none") == "🪝 静悄悄", "保存后文案立刻生效")

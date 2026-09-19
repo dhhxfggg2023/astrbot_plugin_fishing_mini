@@ -3578,7 +3578,13 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     return n;
   }
 
-  /** 插件回来的样式可能是 1/0 这样的数字标记，也可能是 default/primary 字符串。 */
+  /**
+   * 插件回来的样式是数字（QQ 键盘的 render_data.style），也可能是 default/primary 字符串。
+   *
+   * 数字的含义按官网来：**0 = 灰色线框、1 = 蓝色线框**（与插件 ``_calc.BUTTON_STYLE_ALIASES``
+   * 一致），其余数字（2~255）原样留着 —— 页面认不出的值不能改写，
+   * 否则保存一次就把玩家所有按钮的颜色改掉了。
+   */
   function normalizeButtonStyle(v) {
     var s = toText(v).trim();
     if (s === "") return "default";
@@ -3586,6 +3592,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       var n = Number(s);
       if (n === 0) return "default";
       if (n === 1) return "primary";
+      return s;                 // 2~255：页面不认识，原样带走
     }
     var low = s.toLowerCase();
     if (BUTTON_STYLE_ALIASES.indexOf(low) >= 0) {
