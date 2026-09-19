@@ -92,6 +92,12 @@
     "type": "float",
     "default": 1.2
   },
+  "aquarium_bonus_min_hours": {
+    "invisible": true,
+    "description": "拿「展出加成」要求鱼在缸里展出满多少小时（累计制：没放够可以放回去接着攒）。0 = 不要求，放进去马上取出来也给（老行为）",
+    "type": "float",
+    "default": 1.0
+  },
   "decoration_slots": {
     "description": "水族馆里最多同时摆几个耐久型装饰（珊瑚造景），0 = 不开放",
     "type": "int",

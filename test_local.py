@@ -2089,7 +2089,7 @@ async def main():
     check("新手村" in body and "/" in body, "主视图的进度（x/y）保留")
 
 
-    # --- 水族馆展出加成只能领一次（修复无限叠加漏洞）---
+    # --- 水族馆展出加成：既要只能领一次，也要「放进去待够时间」才给（v1.16.0）---
     plugin4 = make_plugin()
     ev4 = FakeEvent("89004")
     p = mod._default_player("89004")
@@ -2098,34 +2098,141 @@ async def main():
                           attrs={"meat": 70, "spirit": 70, "sheen": 70})
     ]
     await plugin4._save_player(p)
+    # ① 立刻放进取出（来回 15 轮）：一分钟都不给 —— 站长报的「那 1.2 的倍数不能立刻拿到」
     for _ in range(15):  # 反复放入 / 取出
         await cmd(plugin4, ev4, "水族馆", "放", "1")
         await cmd(plugin4, ev4, "水族馆", "取", "1")
     p = await plugin4._load_player("89004")
     value = p["inventory"][0]["value"]
+    check(
+        value <= 1000,
+        f"立刻放入取出 15 轮后价值 {value}（不应超过原价 1000）—— 展出时间不够不给加成",
+    )
+    check(
+        p["inventory"][0]["pond_claimed"] is not True,
+        "没给加成就不该打上「已领」标记（放回去接着攒还能拿）",
+    )
+    check(
+        mod._safe_int(p["inventory"][0].get("tank_seconds"), 0, 0) >= 1,
+        f"进过缸就记时间 -> tank_seconds={p['inventory'][0].get('tank_seconds')}",
+    )
+    # ② 把展出时间攒够（直接改存档里的累计值，等价于等了 2 小时）
+    p["inventory"][0]["tank_seconds"] = int(2 * 3600)
+    await plugin4._save_player(p)
+    await cmd(plugin4, ev4, "水族馆", "放", "1")
+    out = await cmd(plugin4, ev4, "水族馆", "取", "1")
+    p = await plugin4._load_player("89004")
+    value = p["inventory"][0]["value"]
     bonus_cap = int(1000 * float(plugin4.cfg["aquarium_bonus"]))
     check(
-        value <= bonus_cap + 5,
-        f"15 轮放入/取出后价值 {value}（上限 {bonus_cap}）—— 加成只领一次",
+        value >= bonus_cap - 5,
+        f"累计展出够 2 小时后取出，价值 {value}（应到 {bonus_cap}）—— 加成到手",
     )
     check(p["inventory"][0]["pond_claimed"] is True, "加成标记已写入存档")
-
-    # 馆内卖出同样只加成一次
-    p["aquarium"] = [
+    # ③ 拿过之后再怎么来回放（每次都把展出时间攒够）也只加一次
+    for _ in range(15):
+        p = await plugin4._load_player("89004")
+        if p["inventory"]:
+            p["inventory"][0]["tank_seconds"] = int(2 * 3600)
+            await plugin4._save_player(p)
+        await cmd(plugin4, ev4, "水族馆", "放", "1")
+        await cmd(plugin4, ev4, "水族馆", "取", "1")
+    p = await plugin4._load_player("89004")
+    check(
+        p["inventory"][0]["value"] <= bonus_cap + 5,
+        f"再轮 15 次放入/取出后价值 {p['inventory'][0]['value']}（上限 {bonus_cap}）—— 加成只领一次",
+    )
+    # ④ 展出门槛设 0 = 回到老行为（放进去马上取出来也给）
+    legacy_plugin = make_plugin({**dict(_CFG), "aquarium_bonus_min_hours": 0})
+    lp = mod._default_player("89005")
+    lp["inventory"] = [
+        mod._new_instance("koi", 1.2, value_override=1000,
+                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
+    ]
+    await legacy_plugin._save_player(lp)
+    await cmd(legacy_plugin, FakeEvent("89005"), "水族馆", "放", "1")
+    await cmd(legacy_plugin, FakeEvent("89005"), "水族馆", "取", "1")
+    lp = await legacy_plugin._load_player("89005")
+    check(
+        lp["inventory"][0]["value"] > 1000,
+        f"aquarium_bonus_min_hours=0 时照旧立刻给加成 -> {lp['inventory'][0]['value']}",
+    )
+    # ⑤ 老存档：缸里的鱼没有计时字段 -> 视为早就放够了（升级不吃掉站长攒着的加成）
+    op = mod._default_player("89006")
+    op["aquarium"] = [
         mod._new_instance("carp", 1.0, value_override=500,
                           attrs={"meat": 70, "spirit": 70, "sheen": 70})
     ]
-    p["inventory"] = []
+    op["aquarium"][0].pop("tank_since", None)
+    op["aquarium"][0].pop("tank_seconds", None)
+    await plugin4._save_player(op)
+    await cmd(plugin4, FakeEvent("89006"), "水族馆", "取", "1")
+    op = await plugin4._load_player("89006")
+    check(
+        op["inventory"][0]["value"] > 500,
+        f"老存档里已在缸中的鱼照旧拿得到加成 -> {op['inventory'][0]['value']}",
+    )
+
+    # 馆内卖出：同样要展出够时间，而且只加成一次
+    p["aquarium"] = []
+    p["inventory"] = [
+        mod._new_instance("carp", 1.0, value_override=500,
+                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
+    ]
     p["gold"] = 0
     await plugin4._save_player(p)
-    for _ in range(5):
-        await cmd(plugin4, ev4, "水族馆", "取", "1")
-        await cmd(plugin4, ev4, "水族馆", "放", "1")
+    check(
+        plugin4._migrate_tank_display(p) is False,
+        "不在缸里的鱼不会被迁移补计时（迁移只看 aquarium）",
+    )
+    await cmd(plugin4, ev4, "水族馆", "卖", "1")
+    p = await plugin4._load_player("89004")
+    check(p["gold"] == 0, f"缸是空的，卖不出东西 -> 金币 {p['gold']}")
+    # 放进缸里（会开始计时）→ 立刻卖出：拿不到加成
+    await cmd(plugin4, ev4, "水族馆", "放", "1")
+    out = await cmd(plugin4, ev4, "水族馆", "卖", "1")
+    p = await plugin4._load_player("89004")
+    check(
+        p["gold"] <= 500 + 5,
+        f"放进缸里马上卖出只得 {p['gold']} 金币（≈原价 500）—— 没白给加成",
+    )
+    check("还没满" in text_of(out) or "展出" in text_of(out), f"卖的时候说清为什么没加成 -> {text_of(out).splitlines()[-2:]}")
+    # 攒够展出时间再买一条卖掉 → 有加成，且只此一次
+    p["inventory"] = [
+        mod._new_instance("carp", 1.0, value_override=500,
+                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
+    ]
+    p["gold"] = 0
+    await plugin4._save_player(p)
+    await cmd(plugin4, ev4, "水族馆", "放", "1")
+    p = await plugin4._load_player("89004")
+    p["aquarium"][0]["tank_seconds"] = int(2 * 3600)   # 假装已经展出 2 小时
+    await plugin4._save_player(p)
     await cmd(plugin4, ev4, "水族馆", "卖", "1")
     p = await plugin4._load_player("89004")
     check(
-        p["gold"] <= int(500 * float(plugin4.cfg["aquarium_bonus"])) + 5,
-        f"循环后卖出得 {p['gold']} 金币（上限 600）—— 不再无限叠加",
+        p["gold"] > 500,
+        f"展出够时间后卖出得 {p['gold']} 金币（>500，含展出加成）",
+    )
+
+    # 列表里要看得见「还差多久」（超了就不显示，别刷屏）
+    vp = mod._default_player("89007")
+    vp["inventory"] = [
+        mod._new_instance("koi", 1.2, value_override=800,
+                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
+    ]
+    await plugin4._save_player(vp)
+    await cmd(plugin4, FakeEvent("89007"), "水族馆", "放", "1")
+    vout = await cmd(plugin4, FakeEvent("89007"), "水族馆", "", "")
+    check("🖼展出" in text_of(vout), f"水族馆列表显示展出进度 -> {text_of(vout).splitlines()[:3]}")
+    check("还没展出满" in text_of(vout), "末尾汇总说清还差多少小时")
+    vp = await plugin4._load_player("89007")
+    vp["aquarium"][0]["tank_seconds"] = int(2 * 3600)
+    await plugin4._save_player(vp)
+    vout = await cmd(plugin4, FakeEvent("89007"), "水族馆", "", "")
+    check(
+        "🖼" not in text_of(vout),
+        "攒够展出时间后列表不再提示（加成随时可拿）",
     )
 
     # --- 鱼名模糊匹配 ---
@@ -4838,12 +4945,13 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 106,
+        len(_schema) == 107,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
         f" + v1.13.0 的 button_style_mode/button_default_style"
-        f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden）",
+        f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden"
+        f" + v1.16.0 的 aquarium_bonus_min_hours）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -4851,7 +4959,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 103, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 104, f"其余 {len(_hidden)} 项全部 invisible")
     check(
         all(k in mod.DEFAULTS for k in _visible),
         "3 条救生索都在 DEFAULTS 里（不是凭空写的）",

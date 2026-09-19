@@ -260,6 +260,8 @@ DEFAULTS: dict[str, Any] = {
     "backpack_upgrades": ["15|400", "25|1100", "30|2700"],
     "aquarium_capacity": 8,
     "aquarium_bonus": 1.2,
+    # 水族馆展出加成（取出/卖出时的加价）要求鱼在缸里展出满这么多小时（0 = 不要求）
+    "aquarium_bonus_min_hours": 1.0,
     "interactive_rarities": "传说,神话",
     "window_min": 4,
     "window_max": 8,
@@ -2362,6 +2364,10 @@ class FishingPlugin(
             _clamp(_safe_int(cfg["aquarium_capacity"], 12, 1), 1, 64)
         )
         cfg["aquarium_bonus"] = _clamp(_safe_number(cfg["aquarium_bonus"], 1.2), 1.0, 5.0)
+        # 展出加成的时间门槛：放进去一秒就取出来不给加成（0 = 关掉门槛，回到老行为）
+        cfg["aquarium_bonus_min_hours"] = _clamp(
+            _safe_number(cfg.get("aquarium_bonus_min_hours"), 1.0), 0.0, 168.0
+        )
         cfg["window_min"] = int(_clamp(_safe_int(cfg["window_min"], 4, 1), 1, 60))
         cfg["window_max"] = int(_clamp(_safe_int(cfg["window_max"], 8, 1), 1, 90))
         if cfg["window_max"] < cfg["window_min"]:
@@ -2659,10 +2665,32 @@ class FishingPlugin(
         if not isinstance(raw, dict):
             # 全新玩家：初始金币走配置（默认 100）
             player["gold"] = _safe_int(self.cfg.get("initial_gold"), 100, 0)
+        # 老存档迁移：升级前就在缸里的鱼没记过展出时间，按「早就放够了」记一笔
+        # （一次性：记过之后就走正常计时）。不做这个迁移的话，
+        # 站长缸里攒着的加成会因为「没计时」而永远领不到。
+        migrated = self._migrate_tank_display(player) or migrated
         if migrated:
             logger.info(f"玩家 {user_id} 数据已迁移到 v{DATA_VERSION}")
             await self._save_player(player)
         return player
+
+    def _migrate_tank_display(self, player: dict[str, Any]) -> bool:
+        """给老存档里「已经在缸里但没计时」的鱼补上展出时间（返回是否有改动）。"""
+        need = int(
+            max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0)) * 3600
+        )
+        changed = False
+        for instance in player.get("aquarium") or []:
+            if not isinstance(instance, dict):
+                continue
+            if _safe_int(instance.get("tank_since"), 0, 0) > 0:
+                continue
+            if _safe_int(instance.get("tank_seconds"), 0, 0) > 0:
+                continue
+            # 记为「刚好够」：够门槛（拿得到加成），又不至于让页面显示成几百小时
+            instance["tank_seconds"] = max(1, need)
+            changed = True
+        return changed
 
     async def _save_player(self, player: dict[str, Any]) -> bool:
         """写回玩家数据（包成信封，自带版本/时间/身份）。失败只记日志。"""
@@ -3416,23 +3444,63 @@ class FishingPlugin(
             return candidates[0]
         return None
 
-    def _claim_aquarium_bonus(self, instance: dict[str, Any]) -> int:
-        """结算「水族馆展出加成」，**每条鱼一生只能领一次**。
+    def _settle_tank_display(self, instance: dict[str, Any], now: int | None = None) -> int:
+        """结清这条鱼的「在缸展出时间」并清掉入缸时间戳，返回累计秒数。
 
-        ⚠️ 这里修的是一个真实漏洞：早期版本每次「取出」都按 base_value 加一次
-        加成、且直接累加到 live_bonus，于是「取出 -> 再放入 -> 再取出」可以
-        无限叠加价格。现在用 ``pond_claimed`` 标记锁定，只能领一次。
-        返回本次实际获得的加成金币（已领过则为 0）。
+        拿出来（取/卖）时调用。累计不清零：这次没放够，放回去接着攒。
         """
+        now = int(now if now is not None else time.time())
+        total = _tank_display_seconds(instance, now)
+        instance["tank_since"] = 0
+        instance["tank_seconds"] = total
+        return total
+
+    def _claim_aquarium_bonus(
+        self, instance: dict[str, Any], now: int | None = None
+    ) -> tuple[int, str]:
+        """结算「水族馆展出加成」（取出/卖出时按 base_value 加价），**一生只能领一次**。
+
+        ⚠️ 两个真实漏洞都在这：
+        1. 早期版本每次「取出」都加一次，于是「取出 → 再放入 → 再取出」可以无限叠加价格
+           —— 用 ``pond_claimed`` 锁成终生一次；
+        2. 后来发现**放进缸里一秒再取出来照样加**（站长报的：「那 1.2 的倍数不能立刻
+           放入取出就有」）—— v1.16.0 起要求**展出满 ``aquarium_bonus_min_hours`` 小时**
+           （``tank_since`` / ``tank_seconds`` 计时，累计制：没放够可以放回去接着攒）。
+
+        返回 ``(加成金币, 结果码)``；结果码：``ok`` / ``claimed``（已领过）/
+        ``too_new``（展出时间不够，本次没有，放回去接着累计）/ ``off``（加成倍率 <= 1）。
+        """
+        displayed = self._settle_tank_display(instance, now)
         if instance.get("pond_claimed"):
-            return 0
-        base = _safe_int(instance.get("base_value"), _instance_value(instance), 1)
+            return 0, "claimed"
         bonus = float(self.cfg["aquarium_bonus"])
+        if bonus <= 1.0:
+            return 0, "off"
+        need = int(
+            max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0)) * 3600
+        )
+        # 展出时间不够就不给（老存档的缸中鱼在 _load_player 里已经补过计时，
+        # 所以这里不需要再有「没计时就放行」的特例 —— 特例会让任何绕过「放入」
+        # 直接写进缸里的鱼白拿加成）
+        if need > 0 and displayed < need:
+            return 0, "too_new"
+        base = _safe_int(instance.get("base_value"), _instance_value(instance), 1)
         gain = max(0, int(base * (bonus - 1.0)))
         instance["pond_claimed"] = True
         instance["live_bonus"] = _safe_int(instance.get("live_bonus"), 0, 0) + gain
         instance["value"] = base + instance["live_bonus"]
-        return gain
+        return gain, "ok"
+
+    def _tank_bonus_note(self, gain: int, why: str) -> str:
+        """取/卖时那句加成说明（拿不到就说清为什么，别让玩家以为是 bug）。"""
+        if gain:
+            return f"　养大+{_fmt_gold(gain)}"
+        if why == "too_new":
+            hours = max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0))
+            return f"　（展出还没满 {hours:g} 小时，放回缸里接着攒）"
+        if why == "claimed":
+            return "　（加成已领过）"
+        return ""
 
     async def _finalize_sale(
         self,

@@ -1548,9 +1548,12 @@ class CommandsMixin:
 
                 accepted = picked[:room]
                 skipped = len(picked) - len(accepted)
+                now_put = int(time.time())
                 for instance in accepted:
                     inventory.remove(instance)
                     instance["source"] = "aquarium"
+                    # 开始计时：展出加成要「在缸里待够时间」才给（v1.16.0）
+                    instance["tank_since"] = now_put
                     aquarium.append(instance)
                 player["inventory"] = inventory
                 self._sort_aquarium(aquarium)
@@ -1599,24 +1602,21 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
-                got: list[tuple[dict[str, Any], int]] = []
+                got: list[tuple[dict[str, Any], int, str]] = []
                 for idx in sorted(indices, reverse=True):
                     if not (1 <= idx <= len(aquarium)):
                         continue
                     instance = aquarium.pop(idx - 1)
-                    gain = self._claim_aquarium_bonus(instance)
+                    gain, why = self._claim_aquarium_bonus(instance)
                     instance["source"] = "fishing"
                     inventory.append(instance)
-                    got.append((instance, gain))
+                    got.append((instance, gain, why))
                 player["inventory"] = inventory
                 saved = await self._save_player(player)
-                total_gain = sum(g for _, g in got)
+                total_gain = sum(g for _, g, _w in got)
                 lines = [f"🎣 取出 {len(got)} 条鱼（估值 +{_fmt_gold(total_gain)}）"]
-                for instance, gain in got[:5]:
-                    lines.append(
-                        f"　{_instance_line(instance)}"
-                        + (f"　养大+{_fmt_gold(gain)}" if gain else "　（加成已领过）")
-                    )
+                for instance, gain, why in got[:5]:
+                    lines.append(f"　{_instance_line(instance)}" + self._tank_bonus_note(gain, why))
                 if len(got) > 5:
                     lines.append(f"　… 其余 {len(got) - 5} 条已放入背包")
                 lines.append(f"🧺 背包 {len(inventory)}/{_backpack_capacity(player, self.cfg)}")
@@ -1638,15 +1638,15 @@ class CommandsMixin:
                     return
                 discount = float(self.cfg["sell_discount"])
                 income = 0
-                sold: list[tuple[dict[str, Any], int, int]] = []
+                sold: list[tuple[dict[str, Any], int, int, str]] = []
                 for idx in sorted(indices, reverse=True):
                     if not (1 <= idx <= len(aquarium)):
                         continue
                     instance = aquarium.pop(idx - 1)
-                    gain = self._claim_aquarium_bonus(instance)
+                    gain, why = self._claim_aquarium_bonus(instance)
                     price = max(1, int(_instance_value(instance) * discount))
                     income += price
-                    sold.append((instance, price, gain))
+                    sold.append((instance, price, gain, why))
                 if not sold:
                     async for _r in self._say_msg(event, "aquarium.bad_slot", event.plain_result(f"🤔 没有有效的栏位号（1~{len(aquarium)}）")):
                         yield _r
@@ -1657,10 +1657,13 @@ class CommandsMixin:
                 )
                 await self._touch_leaderboard(player)
                 lines = [f"💵 卖出馆藏 {len(sold)} 条 → {_fmt_gold(income)} 金币"]
-                for instance, price, gain in sold[:5]:
+                for instance, price, gain, why in sold[:5]:
+                    note = self._tank_bonus_note(gain, why)
+                    if gain:
+                        note = f"（含展出+{_fmt_gold(gain)}）"
                     lines.append(
                         f"　{_instance_line(instance, with_value=False)} → {_fmt_gold(price)}"
-                        + (f"（含展出+{_fmt_gold(gain)}）" if gain else "")
+                        + (f"　{note}" if note else "")
                     )
                 if len(sold) > 5:
                     lines.append(f"　… 其余 {len(sold) - 5} 条同上")
@@ -1670,6 +1673,7 @@ class CommandsMixin:
                     yield _r
                 return
 
+            _need_h = max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0))
             async for _r in self._say_msg(event, "aquarium.usage", event.plain_result(
                     "📖 水族馆用法\n"
                     "　/钓鱼 水族馆　　　　　　欣赏\n"
@@ -1678,7 +1682,13 @@ class CommandsMixin:
                     "　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n"
                     "　/钓鱼 用 <道具> 1　　　投喂提升三维\n"
                     "　/钓鱼 水族馆 领　　　　 领取每日收益\n"
-                    "　/钓鱼 水族馆 扩建　　　 花金币扩容"
+                    "　/钓鱼 水族馆 扩建　　　 花金币扩容\n"
+                    + (
+                        f"　⚠️ 展出加成要「在缸里待满 {_need_h:g} 小时」才有"
+                        "（放进去马上取出来不算；没待够可以放回去接着攒）\n"
+                        if _need_h > 0 else ""
+                    )
+                    + "　🙈 缸里的鱼之间会发生什么，自己观察"
                 )):
                 yield _r
 

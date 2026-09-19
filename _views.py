@@ -335,17 +335,35 @@ class ViewsMixin:
 
         total = 0
         best = None
+        # 展出加成要「在缸里待够时间」才有：还没攒够的鱼标一下进度（够了就不显示，别刷屏）
+        need_s = int(
+            max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0)) * 3600
+        )
+        bonus_on = float(self.cfg["aquarium_bonus"]) > 1.0 and need_s > 0
+        pending = 0
         for idx, instance in enumerate(aquarium, start=1):
             value = _instance_value(instance)
             total += value
             if best is None or value > _instance_value(best):
                 best = instance
             feed = _safe_int(instance.get("feed_uses"), 0, 0)
+            extra = f" 喂{feed}" if feed else ""
+            # ⚠️ 要用 _tank_display_seconds（含「这次还待在缸里」的那段），
+            # 直接读 tank_seconds 只有「上一次结清」的量，进度会看着不动
+            shown = _tank_display_seconds(instance, now_ts)
+            tracked = _safe_int(instance.get("tank_since"), 0, 0) > 0 or shown > 0
+            if bonus_on and tracked and not instance.get("pond_claimed") and shown < need_s:
+                pending += 1
+                extra += f"　🖼展出{shown / 3600.0:.1f}/{need_s / 3600.0:g}h"
             lines.append(
-                f"{idx:>2}.{_instance_line(instance)}　{_attrs_line(instance)}"
-                + (f" 喂{feed}" if feed else "")
+                f"{idx:>2}.{_instance_line(instance)}　{_attrs_line(instance)}" + extra
             )
         lines.append(f"🧮 估值 {_fmt_gold(total)}（取出/卖出 ×{self.cfg['aquarium_bonus']:g}）")
+        if pending:
+            lines.append(
+                f"　🖼 {pending} 条还没展出满 {need_s / 3600.0:g} 小时（累计）——"
+                "满了再取出/卖出才加价"
+            )
         if best is not None:
             lines.append(f"👑 镇馆之宝：{_instance_line(best)}")
         # 装饰（耐久型）：显示剩余小时，顺带清掉过期的

@@ -116,6 +116,21 @@ def _instance_value(instance: dict[str, Any]) -> int:
 def _inventory_value(fish_list: list[dict[str, Any]]) -> int:
     return sum(_instance_value(x) for x in fish_list)
 
+def _tank_display_seconds(instance: dict[str, Any], now: int | None = None) -> int:
+    """这条鱼**累计在缸里展出了多久**（秒）。纯函数，不改数据。
+
+    鱼放进缸里时 ``tank_since`` 记时间戳、拿出来时结清进 ``tank_seconds``，
+    所以「放进去一秒又拿出来」拿不到加成（v1.16.0 堵的就是这个）。
+    进过缸就至少记 1 秒：既让「放过的鱼」和「老存档里没这两个字段的鱼」区分开，
+    也顺便防系统时间被往回拨。
+    """
+    now = int(now if now is not None else time.time())
+    total = _safe_int(instance.get("tank_seconds"), 0, 0)
+    since = _safe_int(instance.get("tank_since"), 0, 0)
+    if since > 0:
+        total += max(1, now - since)
+    return max(0, total)
+
 def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
     """解析鱼饵定义。返回 {bait_id: {...}}，一定包含 none（空钩）。
 
@@ -980,6 +995,10 @@ def _new_instance(
         "locked": False,
         # 水族馆展出加成是否已领取（每条鱼终生只能领一次，防止无限叠加）
         "pond_claimed": False,
+        # 水族馆展出时间：tank_since = 这次放进缸的时刻（0 = 不在缸里），
+        # tank_seconds = 历次在缸时长累加。取出加成要「展出够久」才给（v1.16.0）
+        "tank_since": 0,
+        "tank_seconds": 0,
         "source": source,
         "ts": int(time.time()),
     }
@@ -1222,6 +1241,10 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "live_bonus": live_bonus,
         "locked": bool(raw.get("locked")),
         "pond_claimed": bool(raw.get("pond_claimed")),
+        # ⚠️ 这两个字段必须在这里列出来：_repair_instance 是白名单式重建，
+        # 漏掉就会在每次读档时把展出计时清空（= 「放进去再取出来」又能白拿加成）
+        "tank_since": max(0, _safe_int(raw.get("tank_since"), 0, 0)),
+        "tank_seconds": max(0, _safe_int(raw.get("tank_seconds"), 0, 0)),
         "source": raw.get("source")
         if isinstance(raw.get("source"), str)
         else "fishing",
