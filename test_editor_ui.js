@@ -127,8 +127,9 @@ const hookNames = [
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
   "renderPlayerRow",
-  // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色）
-  "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES",
+  // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色；v1.15.1 加旧写法映射）
+  "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES", "ITEM_EFFECT_HINT", "ITEM_EFFECT_ALIASES",
+  "applyEffectKeys",
   // 💬 回复：场景卡片 / 按钮总览 / 常驻预览
   "REPLY_KEYS", "REPLY_SOURCE_LABEL", "REPLY_LAYOUT_ALL", "REPLY_ROW_MAX",
   "clampPerRow", "normalizeButtonStyle", "normalizeReplyButton", "normalizeReplyScene",
@@ -227,6 +228,32 @@ function runAssertions() {
   check(/function applyEffectKeys\(/.test(html) && /ITEM_EFFECT_KEYS = rows/.test(html) &&
     /applyEffectKeys\(config\.effect_keys\)/.test(html),
     "页面会用插件发来的 effect_keys 覆盖兜底清单（效果清单不再写死）", "");
+
+  /* 插件清单里的 aliases（旧写法，例如 quality_up）页面也必须认。
+     站长报过：洗髓丹那行写着 quality_up，插件明明照收，页面却标红「插件不认识的效果键」。 */
+  const aliasPayload = T.ITEM_EFFECT_KEYS
+    .filter(function (kv) { return kv[0] !== "quality_up"; })
+    .map(function (kv) {
+      return {
+        key: kv[0], label: kv[1],
+        aliases: kv[0] === "buff_quality" ? ["quality_up"] : []
+      };
+    });
+  check(T.applyEffectKeys(aliasPayload) === true, "插件清单能被页面接受");
+  check(T.ITEM_EFFECT_KEY_NAMES.indexOf("quality_up") >= 0,
+    "清单里的旧写法也进白名单（不会再误报「插件不认识的效果键」）",
+    T.ITEM_EFFECT_KEY_NAMES.join("/"));
+  check(T.ITEM_EFFECT_ALIASES.quality_up === "buff_quality",
+    "旧写法 -> 正式键名的映射也记下来了");
+  check(T.ITEM_EFFECT_HINT.indexOf("旧写法") >= 0 && T.ITEM_EFFECT_HINT.indexOf("钓手手气") >= 0,
+    "效果提示里写明这是旧写法");
+  const aliasRow = { id: "t_alias", name: "洗髓丹", emoji: "🔮", price: 500, effects: "quality_up=0.30" };
+  check(Object.keys(T.validateRow(T.TAB_BY_ID.items, aliasRow)).length === 0,
+    "写 quality_up 的道具行不报错（插件本来就认）",
+    JSON.stringify(T.validateRow(T.TAB_BY_ID.items, aliasRow)));
+  const unknownRow = { id: "t_unknown", name: "乱写", emoji: "🔮", price: 1, effects: "nope=1" };
+  check(Object.keys(T.validateRow(T.TAB_BY_ID.items, unknownRow)).length > 0,
+    "真不认识的效果键照样报错（没把校验放松）");
 
   const ALLOWED_EFFECTS = T.ITEM_EFFECT_KEY_NAMES;
   const badEffects = [];

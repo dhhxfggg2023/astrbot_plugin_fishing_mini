@@ -64,6 +64,9 @@ class EffectSpec:
             "unit": self.unit,
             "handler": self.handler,
             "source": self.source,
+            # 旧写法（例如 quality_up）：解析器照收，页面也得跟着认，
+            # 否则会误报「插件不认识的效果键」（站长报过）
+            "aliases": aliases_of(self.key),
         }
 
 
@@ -186,14 +189,29 @@ def effect_keys() -> list[str]:
     return list(EFFECTS)
 
 
+def aliases_of(key: str) -> list[str]:
+    """这个键的所有旧写法（没有就是空表）。"""
+    return sorted(a for a, target in EFFECT_ALIASES.items() if target == key)
+
+
+def effect_aliases() -> dict[str, str]:
+    """全部旧写法 -> 正式键名（页面校验用）。"""
+    return dict(EFFECT_ALIASES)
+
+
 def effect_table() -> list[dict[str, Any]]:
-    """页面用的一张表：键 / 中文说明 / 范围 / 来源。"""
+    """页面用的一张表：键 / 中文说明 / 范围 / 来源 / 旧写法。"""
     return [spec.as_dict() for spec in EFFECTS.values()]
 
 
 def effect_hint() -> str:
     """页面「效果」列的表头提示（一行一个键）。"""
-    return "\n".join(f"{spec.key}　{spec.label}" for spec in EFFECTS.values())
+    lines = []
+    for spec in EFFECTS.values():
+        lines.append(f"{spec.key}　{spec.label}")
+        for alias in aliases_of(spec.key):
+            lines.append(f"{alias}　（旧写法，等同于 {spec.key}）")
+    return "\n".join(lines)
 
 
 def sync_to_calc(calc_module: Any) -> tuple[int, int]:

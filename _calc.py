@@ -747,6 +747,8 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # 这批订单是按哪个钓点抽的（"" = 没按钓点）；以及本周期换钓点换过几次
         "order_location": "",
         "order_move_rerolls": 0,
+        # 「原来这家伙是狠角色」——在缸里吃过鱼的鱼种（玩家自己的见闻，靠被吃慢慢攒）
+        "hostiles_seen": [],
         # 正在等玩家决定的随机小插曲：{"id": ..., "ts": ...}
         "event": None,
         # 每日天气 / 鱼市行情（按日期缓存，全天不变）
@@ -1340,6 +1342,14 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         player["order_move_rerolls"] = max(
             0, _safe_int(raw.get("order_move_rerolls"), 0, 0)
         )
+        # 见过它吃鱼（玩家见闻）：只留还认得的鱼种 id，去重、保序
+        seen_raw = raw.get("hostiles_seen")
+        seen: list[str] = []
+        if isinstance(seen_raw, list):
+            for fid in seen_raw:
+                if isinstance(fid, str) and fid in FISH_BY_ID and fid not in seen:
+                    seen.append(fid)
+        player["hostiles_seen"] = seen
         raw_orders = raw.get("orders")
         orders: list[dict[str, Any]] = []
         if isinstance(raw_orders, list):

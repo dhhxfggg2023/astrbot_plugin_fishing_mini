@@ -1204,8 +1204,13 @@ class CommandsMixin:
         lines = [
             f"{_fish_emoji(fish)} {fish['name']}　{self._rarity_name(rarity)}"
             f"　基准价 {_fmt_gold(fish['value'])} 金币",
-            f"　上钩难易：{'要拉线（会跑，手要快）' if interactive else '直接上钩，不用拉线'}",
         ]
+        # 见闻过的狠角色才标注：一开始谁都不知道，被它吃过鱼之后 /钓鱼 查 才看得到
+        if fish["id"] in (player.get("hostiles_seen") or []):
+            lines.append("　⚠️ 狠角色（在你缸里吃过鱼，别跟比它弱的放一块）")
+        lines.append(
+            f"　上钩难易：{'要拉线（会跑，手要快）' if interactive else '直接上钩，不用拉线'}"
+        )
         if fish.get("flavor"):
             lines.append(f"　{fish['flavor']}")
         if homes:
@@ -1558,7 +1563,16 @@ class CommandsMixin:
                 if len(accepted) > 5:
                     lines.append(f"　… 其余 {len(accepted) - 5} 条已放入")
                 # 缸里的相处结果（机制对玩家不可见，只给现象）
-                duel_lines, changed = self._resolve_tank_conflicts(aquarium)
+                duel_lines, changed, caught = self._resolve_tank_conflicts(aquarium)
+                if caught:
+                    # 「原来这家伙是狠角色」—— 当着他的面吃过鱼才算见闻
+                    seen = player.get("hostiles_seen")
+                    if not isinstance(seen, list):
+                        seen = []
+                    for fid in caught:
+                        if fid not in seen:
+                            seen.append(fid)
+                    player["hostiles_seen"] = seen
                 if changed:
                     player["aquarium"] = aquarium
                     await self._save_player(player)
@@ -1688,7 +1702,7 @@ class CommandsMixin:
 
     def _resolve_tank_conflicts(
         self, aquarium: list[dict[str, Any]]
-    ) -> tuple[list[str], bool]:
+    ) -> tuple[list[str], bool, list[str]]:
         """结算水族馆里的「相处结果」：只有狠角色会下嘴，而且**咬得动才吃**。
 
         **刻意不做任何提示**：不告诉玩家哪种鱼凶、也不告诉判定规则，
@@ -1703,9 +1717,12 @@ class CommandsMixin:
           既吃不动对方、也不会反过来被吃掉 —— 相安无事；
         * 两个狠角色碰上，壮的吃弱的。
 
-        返回 (要追加的文案, 是否改动了缸内内容)。
+        返回 ``(要追加的文案, 是否改动了缸内内容, 这次被看破的鱼种 id)``。
+        第三个值 = 当着玩家的面吃过鱼的「凶手」，调用方记进 ``hostiles_seen``：
+        玩家一开始不知道谁是狠角色，**被吃了才认识**，之后 /钓鱼 查 就能看到标注。
         """
         lines: list[str] = []
+        caught: list[str] = []
         changed = False
         try:
             # 每轮最多淘汰一条（去掉一条就重新找下一个狠角色）
@@ -1741,13 +1758,16 @@ class CommandsMixin:
                     aquarium.remove(loser)
                     changed = True
                     acted = True
+                    winner_id = str(winner.get("fish_id") or "")
+                    if winner_id and winner_id not in caught:
+                        caught.append(winner_id)
                     lines.append(self._tank_conflict_line(winner, loser, duel=duel))
                     break
                 if not acted:
                     break
         except Exception as e:  # pragma: no cover
             logger.debug(f"水族馆相处结算失败：{e}")
-        return lines, changed
+        return lines, changed, caught
 
 
 

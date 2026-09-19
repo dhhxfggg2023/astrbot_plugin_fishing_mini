@@ -91,7 +91,19 @@ check(
     {"meat": 2.0, "buff_quality": 0.3, "heal": 5.0},
     "解析：内置键照常、旧写法转正、未知键跳过",
 )
-check(FX.parse_effects("") == {} and FX.parse_effects("乱写") == {}, "空串/乱写都返回空（不炸）")
+check(
+    FX.parse_effects("") == {} and FX.parse_effects("乱写") == {}, "空串/乱写都返回空（不炸）")
+# 旧写法必须出现在页面拿到的清单里，否则页面会对一行完全能用的配置喊
+# 「插件不认识的效果键」（站长报过：洗髓丹那行写着 quality_up）
+check(
+    FX.aliases_of("buff_quality") == ["quality_up"]
+    and FX.effect_aliases() == {"quality_up": "buff_quality"},
+    f"旧写法能反查：{FX.aliases_of('buff_quality')}",
+)
+check(
+    "旧写法" in FX.effect_hint() and "quality_up" in FX.effect_hint(),
+    "效果提示里写明了旧写法（页面 tooltip 用）",
+)
 check(
     all(spec.source == FX.BUILTIN_SOURCE for spec in FX.BUILTIN_EFFECTS),
     "内置键的来源都标成「内置」",
@@ -112,6 +124,14 @@ check(
 check(
     all({"key", "label", "scope", "scope_label", "unit", "source"} <= set(row) for row in _table),
     "每行都带 键/中文说明/范围/单位/来源（页面直接用）",
+)
+check(
+    all("aliases" in row for row in _table),
+    "每行都带 aliases（页面校验旧写法要用，缺了就会误报「不认识的效果键」）",
+)
+check(
+    [row["aliases"] for row in _table if row["key"] == "buff_quality"] == [["quality_up"]],
+    f"buff_quality 那行带着旧写法：{[row['aliases'] for row in _table if row['key'] == 'buff_quality']}",
 )
 check("meat" in FX.effect_hint() and "鱼肉" in FX.effect_hint(), "effect_hint() 是页面 tooltip 的文本")
 

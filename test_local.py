@@ -3165,11 +3165,30 @@ async def main():
         "敌对" not in body and "实力" not in body and "概率" not in body,
         "不给玩家任何机制提示",
     )
+    # ---- 见闻：被吃之前查不到标注，被吃之后 /钓鱼 查 才看得到（v1.15.0）----
+    check(
+        p.get("hostiles_seen") == [hostile["id"]],
+        f"它当着玩家的面吃了鱼 -> 记进见闻 {p.get('hostiles_seen')}",
+    )
+    info = await cmd(plugin, ev, "查", hostile["name"], "")
+    check("⚠️ 狠角色" in text_of(info), f"见闻之后 /钓鱼 查 会标注狠角色 -> {text_of(info).splitlines()[:2]}")
+    check(
+        "吃过鱼" in text_of(info),
+        "标注里说明是「在你缸里吃过鱼」才知道的（不是开局就知道）",
+    )
+    quiet = await cmd(plugin, ev, "查", normal["name"], "")
+    check("狠角色" not in text_of(quiet), "没见过的鱼不会乱标（普通鱼干干净净）")
+    # 见闻要跨读档保留
+    p_reload = await plugin._load_player("89010")
+    check(
+        p_reload.get("hostiles_seen") == [hostile["id"]],
+        "见闻跨读档保留",
+    )
 
     # 两个狠角色同缸：壮的吃弱的（不是随机）
     strong_hunter = mk(hostile["id"], 100, 100, 100, qm=2.0)
     weak_hunter = mk(hostile["id"], 10, 10, 10, qm=0.5)
-    lines, changed = plugin._resolve_tank_conflicts([strong_hunter, weak_hunter])
+    lines, changed, caught = plugin._resolve_tank_conflicts([strong_hunter, weak_hunter])
     check(
         changed
         and len(lines) == 1
@@ -3177,13 +3196,17 @@ async def main():
         and "打了一架" in lines[0],
         f"两条狠角色碰上 -> {lines}",
     )
+    check(
+        caught == [hostile["id"]],
+        f"当着玩家的面吃过鱼的那条被看破 -> {caught}",
+    )
 
     # 两条普通鱼同缸不会出事
     p["aquarium"] = [mk(normal["id"]), mk(normal["id"])]
     p["inventory"] = []
     await plugin._save_player(p)
-    lines, changed = plugin._resolve_tank_conflicts(p["aquarium"])
-    check(not changed and not lines, "普通鱼同缸和平共处")
+    lines, changed, caught = plugin._resolve_tank_conflicts(p["aquarium"])
+    check(not changed and not lines and not caught, "普通鱼同缸和平共处")
 
 
     # =====================================================================

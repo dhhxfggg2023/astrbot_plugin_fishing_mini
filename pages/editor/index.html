@@ -1209,6 +1209,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     ["heal", "预留：回复体力（插件暂未启用）"]
   ];
   var ITEM_EFFECT_KEY_NAMES = ITEM_EFFECT_KEYS.map(function (kv) { return kv[0]; });
+  /** 旧写法 -> 正式键名（插件给的 aliases 会并进来）。只用于提示，**绝不改写站长写的数据** */
+  var ITEM_EFFECT_ALIASES = { quality_up: "buff_quality" };
   var ITEM_EFFECT_HINT = ITEM_EFFECT_KEYS.map(function (kv) {
     return kv[0] + "　" + kv[1];
   }).join("\n");
@@ -1217,14 +1219,17 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
    * 用插件给的清单替换内置清单（v1.13.0）。
    *
    * 插件在 config / scenes 接口里带了 effect_keys：
-   * [{key, label, scope_label, unit, source}]，于是「改 _effects.EFFECTS 或者加一个
+   * [{key, label, scope_label, unit, source, aliases}]，于是「改 _effects.EFFECTS 或者加一个
    * 扩展」页面会自动多出新键 —— 页面不再写死效果清单（写死过，害站长被标红过）。
+   * ``aliases`` 是插件解析器照收的**旧写法**（例如 quality_up = buff_quality）：
+   * 这些也必须认，否则会对着一行完全能用的配置喊「插件不认识的效果键」（站长报过）。
    * 拿不到清单（离线预览 / 老版本插件）就保持内置清单：
    * 宁可不校验，也不能把本来对的行标红。
    */
   function applyEffectKeys(list) {
     if (!Array.isArray(list) || !list.length) return false;
     var rows = [];
+    var aliases = {};
     list.forEach(function (item) {
       var key = toText(item && item.key);
       if (!key) return;
@@ -1234,11 +1239,18 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       if (from && from !== "内置") label += "（来自 " + from + "）";
       else if (unit) label += "（" + unit + "）";
       rows.push([key, label]);
+      (Array.isArray(item && item.aliases) ? item.aliases : []).forEach(function (a) {
+        var alias = toText(a);
+        if (!alias) return;
+        aliases[alias] = key;
+        rows.push([alias, "旧写法，等同于 " + key]);
+      });
     });
     if (!rows.length) return false;
     var oldHint = ITEM_EFFECT_HINT;
     ITEM_EFFECT_KEYS = rows;
     ITEM_EFFECT_KEY_NAMES = rows.map(function (kv) { return kv[0]; });
+    ITEM_EFFECT_ALIASES = aliases;
     ITEM_EFFECT_HINT = rows.map(function (kv) { return kv[0] + "　" + kv[1]; }).join("\n");
     // TABLE_DEFS 是启动时就建好的静态对象，title 已经把旧文本抄走一份 —— 同步回来
     Object.keys(TABLE_DEFS).forEach(function (k) {
