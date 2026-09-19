@@ -281,6 +281,12 @@ body {
   display: none;
 }
 .tab.has-dirty .tab-dirty { display: block; }
+/* 标签上的问题标记：红 = 你改过的行填错了（会拦住保存）；黄 = 没动过的行里的历史问题 */
+.tab .tab-bad {
+  font-size: 11px; line-height: 1; flex: none; display: none;
+}
+.tab .tab-bad.is-block { color: var(--danger); display: block; }
+.tab .tab-bad.is-stale { color: var(--warn); display: block; }
 
 /* ============================== 内容区 ============================== */
 .content {
@@ -718,6 +724,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 .toast .toast-body { min-width: 0; }
 .toast .toast-title { font-weight: 620; margin-bottom: 1px; }
 .toast .toast-text { color: var(--muted); font-size: 12px; word-break: break-word; }
+/* 带动作按钮的提示（「跳到这一格」）：文案和按钮都要能看清 */
+.toast.has-act { max-width: 460px; }
+.toast .toast-act { margin-top: 7px; flex: none; }
 .toast.ok { border-left-color: var(--success); }
 .toast.ok .toast-icon { color: var(--success); }
 .toast.warn { border-left-color: var(--warn); }
@@ -1826,6 +1835,29 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
   /* 回复按钮（button_defs）：场景白名单与样式别名，和插件 _calc.py 里的保持一致 */
   var BUTTON_SCENES = ["cast", "pull", "bag", "location", "story"];
+  /* 上面这份只是**离线兜底**：v1.12.0 起插件有 154 个场景（cast.miss_none 之类），
+     写死的老 5 个会把「💬 回复」页加出来的合法按钮判成红线，整页保存被连带拦住
+     （站长就因此丢了改好的命令别名）。真正可用的场景见 buttonSceneIds()。 */
+  var BUTTON_SCENES_FALLBACK = BUTTON_SCENES;
+  /**
+   * 当前可用的场景 id（小写）。优先用插件 scenes 接口给的全量场景；
+   * 场景表还没拿到（离线预览 / 接口没上线）时返回 null，表示「不校验场景」——
+   * 宁可漏报也不误报：误报会拦住整页保存，代价比漏报大得多。
+   */
+  function buttonSceneIds() {
+    var list = (state.replies && state.replies.scenes) || [];
+    if (!list.length) return null;
+    var out = [], seen = {};
+    function push(v) {
+      var s = String(v === undefined || v === null ? "" : v).trim().toLowerCase();
+      if (!s || seen[s]) return;
+      seen[s] = 1;
+      out.push(s);
+    }
+    list.forEach(function (s) { push(s && s.id); });
+    BUTTON_SCENES_FALLBACK.forEach(push);
+    return out;
+  }
   var BUTTON_STYLE_ALIASES = ["", "default", "默认", "灰", "gray", "grey", "primary", "主要", "蓝", "blue"];
   /** 复合行键的分隔符（只用于内存里的比对，不会写进配置） */
   var KEY_SEP = "\u0001";
@@ -2497,20 +2529,35 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
   }
 
-  function toast(kind, title, text) {
+  /**
+   * 弹提示。``action`` 可选：``{label, fn}`` —— 给「去看第一处」这类跳转留个按钮；
+   * 带动作的提示不自动消失（点掉或点按钮才走），免得站长还没看清就没了。
+   */
+  function toast(kind, title, text, action) {
     var box = document.getElementById("toasts");
     var el = document.createElement("div");
-    el.className = "toast " + (kind || "info");
+    el.className = "toast " + (kind || "info") + (action ? " has-act" : "");
     var icon = { ok: "✅", warn: "⚠️", err: "⛔", info: "ℹ️" }[kind || "info"] || "ℹ️";
     el.innerHTML =
       '<span class="toast-icon">' + icon + "</span>" +
       '<div class="toast-body"><div class="toast-title">' + esc(title) + "</div>" +
-      (text ? '<div class="toast-text">' + esc(text) + "</div>" : "") + "</div>";
+      (text ? '<div class="toast-text">' + esc(text) + "</div>" : "") +
+      (action ? '<button class="btn btn-sm toast-act" type="button">' + esc(action.label) + "</button>" : "") +
+      "</div>";
     box.appendChild(el);
+    if (action) {
+      var act = el.querySelector(".toast-act");
+      if (act && act.addEventListener) {
+        act.addEventListener("click", function () {
+          el.remove();
+          action.fn();
+        });
+      }
+    }
     setTimeout(function () {
       el.classList.add("is-out");
       setTimeout(function () { el.remove(); }, 220);
-    }, 2500);
+    }, action ? 9000 : 2500);
   }
 
   /* 把分布字符串解析成标签数组： "lake:1.0,*:0.15" → [{loc,weight,star,bad}] */
@@ -2622,8 +2669,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
       if (tab.id === "buttons") {
         var raw = String(v === undefined || v === null ? "" : v).trim();
-        if (col.key === "scene" && BUTTON_SCENES.indexOf(raw.toLowerCase()) < 0) {
-          errs[col.key] = "只能是：" + BUTTON_SCENES.join(" / ");
+        if (col.key === "scene") {
+          // 场景表拿到才校验；场景写错插件会静默跳过这排按钮，所以这里值得报，但用词要说清原因
+          var ids = buttonSceneIds();
+          if (ids && ids.indexOf(raw.toLowerCase()) < 0) {
+            errs[col.key] = "插件没有这个场景（当前可选 " + ids.length + " 个，去「💬 回复」页挑）";
+          }
         }
         if (col.key === "label" && !raw) {
           errs[col.key] = "按钮文案不能为空";
@@ -2696,6 +2747,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     return errs;
   }
 
+  /**
+   * 整表体检：这张表里**有没有**填错的行（不分是不是这次改的）。
+   * 注意：v1.12.1 起 doSave 不再拿它当闸门了 —— 历史遗留的红格子不该拦新保存，
+   * 保存只看 problemsInTab(id, true)（这次改过的行）。
+   */
   function tabHasError(tabId) {
     var tab = TAB_BY_ID[tabId];
     if (!tab.columns) return false;
@@ -2704,6 +2760,56 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       if (Object.keys(validateRow(tab, rows[i])).length) return true;
     }
     return false;
+  }
+
+  /**
+   * 某张表里填错的地方，每条 = {tabId,index,key,message}。
+   * onlyDirty=true 时只看「这次真的改过」的行——历史遗留的红格子不该拦新保存。
+   */
+  function problemsInTab(tabId, onlyDirty) {
+    var tab = TAB_BY_ID[tabId];
+    if (!tab || !tab.columns) return [];
+    var dirty = onlyDirty ? diffTab(tabId).dirty : null;
+    var out = [];
+    (state.data[tabId] || []).forEach(function (row, i) {
+      if (dirty && !dirty[i]) return;
+      var errs = validateRow(tab, row);
+      Object.keys(errs).forEach(function (key) {
+        out.push({ tabId: tabId, index: i, key: key, message: errs[key] });
+      });
+    });
+    return out;
+  }
+
+  /** 把一处问题说成人话：「『回复按钮』第 13 行『cast.miss_none』的『场景』：……」 */
+  function problemWhere(p) {
+    var tab = TAB_BY_ID[p.tabId] || { title: p.tabId, columns: [] };
+    var row = (state.data[p.tabId] || [])[p.index] || {};
+    var name = rowKey(tab, row).split(KEY_SEP).filter(Boolean)[0] || "";
+    var col = (tab.columns || []).filter(function (c) { return c.key === p.key; })[0] || {};
+    return "「" + tab.title + "」第 " + (p.index + 1) + " 行" +
+      (name ? "「" + name + "」" : "") + "的「" + (col.label || p.key) + "」：" + p.message;
+  }
+
+  /** 跳到出问题的那一格：切页 → 清掉搜索/筛选 → 展开输入框 → 滚动到眼前并选中 */
+  function gotoProblem(p) {
+    if (!p || !TAB_BY_ID[p.tabId]) return false;
+    state.query = "";
+    state.filter = "";
+    state.sort = "default";
+    state.selected = [];
+    if (state.tab !== p.tabId) switchTab(p.tabId);   // switchTab 会清掉 editing，所以它先跑
+    state.editing = { scope: "cell", index: p.index, key: p.key };
+    render();
+    setTimeout(function () {
+      var el = $('[data-act="cell"][data-index="' + p.index + '"][data-key="' + p.key + '"]') ||
+               $('[data-index="' + p.index + '"]');
+      if (!el) return;
+      if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
+      if (el.focus) el.focus();
+      if (el.select) el.select();
+    }, 50);
+    return true;
   }
   /* ===========================================================================
      7. 过滤 / 排序
@@ -2754,6 +2860,26 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   /* ===========================================================================
      8. 渲染：标签页
      =========================================================================== */
+  /**
+   * 标签页健康度：``bad`` = 这次改过的行里有错（点保存会被拦），
+   * ``stale`` = 没动过的行里的历史错误（只提醒、不拦）。一次 diffTab 通吃，别在渲染里
+   * 反复调用（renderTabs 每敲一个字都会跑）。
+   */
+  function tabHealth(tabIds) {
+    var out = { bad: 0, stale: 0 };
+    (tabIds || []).forEach(function (id) {
+      var tab = TAB_BY_ID[id];
+      if (!tab || !tab.columns) return;
+      var dirty = diffTab(id).dirty;
+      (state.data[id] || []).forEach(function (row, i) {
+        var n = Object.keys(validateRow(tab, row)).length;
+        if (!n) return;
+        if (dirty[i]) out.bad += n; else out.stale += n;
+      });
+    });
+    return out;
+  }
+
   function renderTabs() {
     var nav = document.getElementById("tabs");
     /* 同一个 navGroup（例：命令别名 / 自定义命令）合并成一个入口按钮：
@@ -2790,10 +2916,17 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       }
       var activeId = g.tabs.length > 1 ? g.tabs[0].id : g.tabs[0].id;
       var isActive = g.tabs.some(function (t) { return state.tab === t.id; });
+      var health = tabHealth(g.tabs.map(function (t) { return t.id; }));
+      var badHtml = health.bad
+        ? '<span class="tab-bad is-block" title="你改过的 ' + health.bad + ' 处填错了，点保存会被拦下">⛔</span>'
+        : (health.stale
+          ? '<span class="tab-bad is-stale" title="没动过的行里有 ' + health.stale + ' 处历史问题（不拦保存）">⚠</span>'
+          : '<span class="tab-bad"></span>');
       return '<button class="tab' + (isActive ? " is-active" : "") + (d.count ? " has-dirty" : "") +
         '" role="tab" data-act="tab" data-tab="' + esc(activeId) + '" title="' + esc(g.title) + '">' +
         "<span>" + esc(g.label) + "</span>" +
         '<span class="tab-count">' + n + "</span>" +
+        badHtml +
         '<span class="tab-dirty" title="这个标签有 ' + d.count + ' 处未保存的修改"></span>' +
         "</button>";
     }).join("");
@@ -4945,12 +5078,32 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   }
 
   async function doSave() {
-    var badTabs = TABS.filter(function (t) { return t.columns && tabHasError(t.id); })
-      .map(function (t) { return t.title; });
-    if (badTabs.length) {
-      toast("err", "有内容没填对", badTabs.join("、") + " 里有标红的单元格，先改好再保存");
+    /* 只拦「这次真的改过、而且改错了」的地方。
+       以前是任何一张表里有红格子就整页拒收：站长在「💬 回复」页给新场景加过按钮，
+       那几行的场景键被老白名单误判成红的，于是他改好的命令别名永远存不进去
+       （点了保存只弹一句「有内容没填对」，还不说哪一行）。 */
+    var dirtyTabs = TABS.filter(function (t) { return t.columns && diffTab(t.id).count > 0; });
+    var blocking = [];
+    dirtyTabs.forEach(function (t) {
+      blocking = blocking.concat(problemsInTab(t.id, true));
+    });
+    if (blocking.length) {
+      gotoProblem(blocking[0]);
+      var first = problemWhere(blocking[0]);
+      toast("err", "这次要改的内容里有填错的",
+        first + (blocking.length > 1
+          ? "；另外还有 " + (blocking.length - 1) + " 处，先把这一处改好再点保存"
+          : ""),
+        { label: "跳到这一格", fn: function () { gotoProblem(blocking[0]); } });
       return;
     }
+    /* 没动过的表里的历史红格子：不拦保存，但要说一声（点一下能跳过去看） */
+    var stale = [];
+    TABS.forEach(function (t) {
+      if (!t.columns || dirtyTabs.indexOf(t) >= 0) return;
+      var list = problemsInTab(t.id, false);
+      if (list.length) stale.push({ tabId: t.id, count: list.length, first: list[0] });
+    });
     var btn = document.getElementById("btnSave");
     btn.disabled = true;
     btn.textContent = "⏳ 保存中…";
@@ -4988,6 +5141,13 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       btn.disabled = false;
       btn.innerHTML = "💾 保存并生效";
       render();
+      if (stale.length) {
+        var staleTotal = stale.reduce(function (a, s) { return a + s.count; }, 0);
+        var firstStale = stale[0].first;
+        toast("info", "另有 " + staleTotal + " 处历史问题（没动过，不拦保存）",
+          problemWhere(firstStale) + "；这些行这次没改，等你去改它们时才会拦保存",
+          { label: "去看第一处", fn: function () { gotoProblem(firstStale); } });
+      }
     }
   }
 

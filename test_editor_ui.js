@@ -120,8 +120,9 @@ const hookNames = [
   "sendCommand", "bridgeRequest", "describeError", "resolvePluginBase", "fetchRawConfig",
   "sleep", "waitForStatus", "renderBanner", "downloadSnapshot",
   "refreshSnapshots",
-  // 回复按钮（button_defs）表
-  "rowKey", "isButtonStyle", "BUTTON_SCENES",
+  // 回复按钮（button_defs）表 + v1.12.1「只拦改过的部分」这套定位/跳转
+  "rowKey", "isButtonStyle", "BUTTON_SCENES", "BUTTON_SCENES_FALLBACK", "buttonSceneIds",
+  "tabHasError", "problemsInTab", "problemWhere", "gotoProblem", "doSave", "tabHealth",
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
@@ -454,7 +455,7 @@ function runAssertions() {
     check(["dark", "light"].indexOf(documentStub.documentElement.getAttribute("data-theme")) >= 0,
       "data-theme 被规范成 dark/light", documentStub.documentElement.getAttribute("data-theme"));
     check(T.ENV.isDark === true, "离线默认深色");
-  }).then(channelHelpers).then(repliesPure).then(channelRoundTrip).then(repliesOnline).then(finish);
+  }).then(channelHelpers).then(repliesPure).then(channelRoundTrip).then(repliesOnline).then(saveScope).then(finish);
 }
 
 /* =============================================================================
@@ -1545,7 +1546,280 @@ async function repliesOnline() {
 }
 
 /* =============================================================================
-   [16] 收尾
+   [16] 保存只拦「这次改过的部分」（v1.12.1）
+   现场：站长在「💬 回复」页给 cast.miss_none 这类新场景加了按钮，页面白名单还写着
+         老的 5 个场景 -> 那几行判红 -> doSave 整页拒收 -> 他改好的命令别名一起没了。
+   ============================================================================= */
+
+/** 真实插件场景表的缩样：包含老 5 个 + 只有新版本才有的点号场景。 */
+const REAL_SCENE_IDS = ["cast", "pull", "bag", "location", "story",
+  "cast.hit", "cast.junk", "cast.miss_none", "cast.miss_bait", "cast.miss_deep",
+  "cast.multi_summary", "pull.escape", "store.buy_ok"];
+
+/**
+ * 插件**真实的全部场景键**：从 `_texts.py` 的 `TEXTS` 块里抠出来。
+ * `test_local.py` 第 18 组已经断言 `_calc.SCENE_IDS` 与 `TEXTS` 的键一一对应，
+ * 所以这份清单就是插件真实提供给站长的场景全集（154 个）。
+ */
+const PLUGIN_SCENE_KEYS = (function () {
+  const src = fs.readFileSync(path.join(__dirname, "_texts.py"), "utf8");
+  const block = src.match(/^TEXTS: dict\[str, str\] = \{\n([\s\S]*?)^\}/m);
+  if (!block) return [];
+  const keys = [];
+  block[1].replace(/^ {4}"([a-z0-9_.]+)":/gm, function (m, k) { keys.push(k); return m; });
+  return keys;
+})();
+
+/** 站长的现场：回复页给新场景加过按钮（老白名单会把这 4 行判红）。 */
+const USER_BUTTON_DEFS = [
+  "cast|再来一竿|/钓鱼|default",
+  "cast|看背包|/钓鱼 背包|default",
+  "pull|拉线！|/钓鱼 拉|primary",
+  "story|{label}|/钓鱼 事件 {n}|default",
+  "cast.miss_none|再来一竿|/钓鱼|primary",
+  "cast.miss_bait|再来一竿|/钓鱼|primary",
+  "cast.miss_deep|再来一竿|/钓鱼|primary",
+  "cast.multi_summary|卖光光|/钓鱼 卖光光|default"
+].join("\n");
+
+function realScenesPayload() {
+  return {
+    status: "ok", transport: "plugin-api", scene_total: REAL_SCENE_IDS.length,
+    buttons_per_row_default: 3, buttons_per_row_max: 5,
+    button_styles: [{ value: "default", label: "默认（灰）" }, { value: "primary", label: "主要（蓝）" }],
+    groups: [{
+      id: "all", label: "全部", desc: "",
+      scenes: REAL_SCENE_IDS.map(function (id) {
+        return {
+          id: id, label: id, desc: "", parent: id.split(".")[0], parent_label: id.split(".")[0],
+          source: "none", per_row: 3, dynamic_text: false,
+          default_buttons: [], buttons: [],
+          text: { template: "{原文}", placeholders: ["原文"], samples: { "原文": id },
+                  override: "", preview: id, dynamic: false }
+        };
+      })
+    }]
+  };
+}
+
+/** 读配置回「站长现场」那份，scenes 回真实场景缩样。 */
+function makeSaveScopeSdk(config) {
+  const sdk = {
+    ready() {
+      return new Promise(function (r) {
+        sdk._setContext({ pluginName: "astrbot_plugin_fishing_mini", pageName: "editor" });
+        r();
+      });
+    },
+    getContext() { return {}; }, _setContext() {}, onContext() { return function () {}; },
+    apiGet(endpoint) {
+      capture("get", endpoint, null);
+      if (String(endpoint) === "config") {
+        return Promise.resolve({ status: "ok", metadata: {}, i18n: {}, config: config });
+      }
+      if (String(endpoint) === "scenes") return Promise.resolve(realScenesPayload());
+      return Promise.reject(new Error("unexpected GET " + endpoint));
+    },
+    apiPost(endpoint, body) {
+      capture("post", endpoint, JSON.stringify(body || {}));
+      if (String(endpoint) === "scenes") return Promise.resolve(realScenesPayload());
+      return Promise.resolve({
+        status: "ok", ok: true, message: "已写入内容表：3 张",
+        editor_status: JSON.stringify(FAKE_STATUS)
+      });
+    },
+    upload() { return Promise.reject(new Error("上传通道已废弃")); },
+    download() { return Promise.reject(new Error("not used")); },
+    subscribeSSE() { return Promise.reject(new Error("not used")); }
+  };
+  return sdk;
+}
+
+/** 取「刚弹出来的提示」的文本（toast 会 appendChild 到 #toasts 桩上）。 */
+function newToasts(F, from) {
+  const box = documentStub.getElementById("toasts");
+  return (box.children || []).slice(from).map(function (el) { return String(el.innerHTML || ""); });
+}
+
+async function saveScope() {
+  console.log("\n[16] 保存只拦「这次改过的部分」（v1.12.1 改命令别名存不进去）");
+  const baseCfg = {
+    fish_defs: FAKE_CONFIG.fish_defs, rod_defs: FAKE_CONFIG.rod_defs,
+    bait_defs: FAKE_CONFIG.bait_defs, item_defs: FAKE_CONFIG.item_defs,
+    location_defs: FAKE_CONFIG.location_defs,
+    button_defs: USER_BUTTON_DEFS,
+    command_aliases: "拉|拉线,收,收线\n排行|排行榜,rank,top,榜\n背包|包,bag",
+    custom_commands: "", text_overrides: "", button_layout: "",
+    editor_status: JSON.stringify(FAKE_STATUS)
+  };
+  captured.calls = [];
+  const F = loadPageFromSource(makeSaveScopeSdk(baseCfg)).T;
+  for (let i = 0; i < 80 && (F.state.loading || !F.state.replies.loaded); i++) {
+    await new Promise(function (r) { setTimeout(r, 25); });
+  }
+
+  check(F.ENV.online === true && F.state.replies.scenes.length === REAL_SCENE_IDS.length,
+    "场景表从插件接口读到（" + REAL_SCENE_IDS.length + " 个）",
+    F.state.replies.scenes.length);
+
+  // 1) 白名单不再写死：插件给的每个场景都算合法
+  const ids = F.buttonSceneIds();
+  check(Array.isArray(ids) && ids.length === REAL_SCENE_IDS.length,
+    "buttonSceneIds() = 插件给的全量场景", ids && ids.length);
+  check(ids.indexOf("cast.miss_none") >= 0 && ids.indexOf("cast") >= 0,
+    "新场景（cast.miss_none）和老场景（cast）都在白名单里");
+  check(F.BUTTON_SCENES_FALLBACK.length === 5 && F.BUTTON_SCENES === F.BUTTON_SCENES_FALLBACK,
+    "老 5 个场景降级成「离线兜底」常量，兼容旧引用");
+
+  // 2) 站长那 8 行按钮：一处都不该标红（这就是他丢别名的根因）
+  const btnRows = F.state.data.buttons || [];
+  const btnProblems = F.problemsInTab("buttons", false);
+  check(btnRows.length === 8, "现场那 8 行按钮都解析进表了", btnRows.length);
+  check(btnProblems.length === 0, "8 行按钮没有一处标红（含 4 行新场景）",
+    btnProblems.map(function (p) { return p.key + ":" + p.message; }).join(" | ") || "0 处");
+  // 站长看到的就是渲染出来的红格子：从 HTML 层面再确认一遍
+  const btnHtml = F.renderTableTab(F.TAB_BY_ID.buttons);
+  check(btnHtml.indexOf("cell-bad") < 0 && btnHtml.indexOf("is-bad") < 0,
+    "按钮表渲染出的 HTML 里一格红都没有",
+    btnHtml.indexOf("cell-bad") < 0 ? "干净" : "仍有 cell-bad");
+  check(btnHtml.indexOf("cast.miss_none") > 0 && btnHtml.indexOf("cast.multi_summary") > 0,
+    "那 4 行新场景按钮照样显示在表里（不是被藏起来）");
+
+  // 3) 插件给的每个场景各来一行，都不该判红
+  const everySceneBad = REAL_SCENE_IDS.filter(function (id) {
+    return Object.keys(F.validateRow(F.TAB_BY_ID.buttons,
+      { scene: id, label: "再来一竿", data: "/钓鱼", style: "default" })).length > 0;
+  });
+  check(everySceneBad.length === 0, "插件给的全部场景都通得过校验",
+    everySceneBad.join(",") || REAL_SCENE_IDS.length + "/" + REAL_SCENE_IDS.length);
+
+  // 3b) 拿插件**真实的全部场景**（从 _texts.py 抠出来，和 _calc.SCENE_IDS 一一对应）再验一遍：
+  //     只要它不通过，站长在回复页配的按钮就会在「🔘 按钮（原始文本）」页被误判成红线。
+  check(PLUGIN_SCENE_KEYS.length >= 150,
+    "从 _texts.py 抠到插件真实的场景全集", PLUGIN_SCENE_KEYS.length + " 个");
+  const keepScenesForAll = F.state.replies.scenes;
+  F.state.replies.scenes = PLUGIN_SCENE_KEYS.map(function (id) { return { id: id }; });
+  const idsAll = F.buttonSceneIds() || [];
+  const notAccepted = PLUGIN_SCENE_KEYS.filter(function (id) {
+    return idsAll.indexOf(id.toLowerCase()) < 0;
+  });
+  check(notAccepted.length === 0, "插件真实场景全在页面的可选清单里",
+    notAccepted.join(",") || PLUGIN_SCENE_KEYS.length + "/" + PLUGIN_SCENE_KEYS.length);
+  const realBad = PLUGIN_SCENE_KEYS.filter(function (id) {
+    return Object.keys(F.validateRow(F.TAB_BY_ID.buttons,
+      { scene: id, label: "再来一竿", data: "/钓鱼", style: "default" })).length > 0;
+  });
+  check(realBad.length === 0, "插件真实场景每一行按钮都不判红（v1.12.1 的根因，永久卡住）",
+    realBad.slice(0, 5).join(",") || PLUGIN_SCENE_KEYS.length + "/" + PLUGIN_SCENE_KEYS.length);
+  F.state.replies.scenes = keepScenesForAll;
+
+  // 4) 场景表没拿到时不校验场景（宁可漏报也不误报）
+  const keepScenes = F.state.replies.scenes;
+  F.state.replies.scenes = [];
+  check(F.buttonSceneIds() === null, "场景表读不到时 buttonSceneIds() 返回 null");
+  check(Object.keys(F.validateRow(F.TAB_BY_ID.buttons,
+    { scene: "完全不存在的场景", label: "x", data: "/钓鱼", style: "default" })).indexOf("scene") < 0,
+    "场景表读不到时不报「场景不认识」（不会误伤整页保存）");
+  F.state.replies.scenes = keepScenes;
+
+  // 5) 真正写错的场景仍然报，而且文案说清「插件没有这个场景」
+  const badScene = F.validateRow(F.TAB_BY_ID.buttons,
+    { scene: "cast.typo_scene", label: "再来一竿", data: "/钓鱼", style: "default" });
+  check(/插件没有这个场景/.test(badScene.scene || ""), "写错的场景照旧报错并说明原因", badScene.scene);
+
+  // 6) 改别名 + 表里有一处「没动过的历史红格子」-> 保存照常进行，只额外提醒
+  const staleRow = { scene: "cast.typo_scene", label: "历史遗留", data: "/钓鱼", style: "default" };
+  F.state.data.buttons.push(staleRow);
+  F.state.originals.buttons[F.rowKey(F.TAB_BY_ID.buttons, staleRow)] = JSON.stringify(staleRow);
+  const aliasRow = (F.state.data.aliases || []).filter(function (r) { return r.canonical === "排行"; })[0];
+  check(!!aliasRow, "别名表里有「排行」这一行");
+  aliasRow.aliases = aliasRow.aliases + ",排名";
+  F.state.tab = "aliases";
+
+  let toastFrom = (documentStub.getElementById("toasts").children || []).length;
+  captured.calls = [];
+  await F.doSave();
+  const posts = captured.calls.filter(function (c) { return c.kind === "post" && c.endpoint === "config"; });
+  check(posts.length === 1, "只改别名时保存真的写进去了（以前是 0 次）", posts.length + " 次 POST");
+  const sent = posts.length ? JSON.parse(posts[0].body) : {};
+  check(JSON.stringify(sent).indexOf("排名") >= 0, "载荷里带上了新别名「排名」");
+  const staleToasts = newToasts(F, toastFrom);
+  check(staleToasts.some(function (h) { return h.indexOf("历史问题") >= 0; }),
+    "没动过的历史红格子只做非阻塞提醒", staleToasts.length + " 条提示");
+  check(staleToasts.some(function (h) { return h.indexOf("cast.typo_scene") >= 0; }),
+    "提醒里点名了那处历史问题在哪一行");
+  check(staleToasts.some(function (h) { return h.indexOf("toast-act") >= 0; }),
+    "提醒带「去看第一处」按钮（能跳过去）");
+
+  // 7) 真的改错了 -> 拦下来，但要说清「哪张表第几行哪一列」
+  aliasRow.aliases = "排行|带竖线|的别名";
+  F.state.originals.aliases = {};
+  toastFrom = (documentStub.getElementById("toasts").children || []).length;
+  captured.calls = [];
+  await F.doSave();
+  const blockedPosts = captured.calls.filter(function (c) { return c.kind === "post" && c.endpoint === "config"; });
+  check(blockedPosts.length === 0, "改错的那次被拦下（不发写入请求）", blockedPosts.length + " 次 POST");
+  const blockToasts = newToasts(F, toastFrom);
+  check(blockToasts.some(function (h) { return h.indexOf("别名里不能出现竖线") >= 0; }),
+    "提示里带上具体原因", blockToasts.join(" / ").slice(0, 120));
+  check(blockToasts.some(function (h) { return h.indexOf("第 2 行") >= 0 && h.indexOf("命令别名") >= 0; }),
+    "提示里点名「命令别名 第 2 行」");
+  check(F.state.tab === "aliases" && F.state.editing && F.state.editing.index === 1 &&
+    F.state.editing.key === "aliases",
+    "自动跳到出错的那一格并展开输入框",
+    F.state.tab + " #" + (F.state.editing ? F.state.editing.index + "/" + F.state.editing.key : "无"));
+
+  // 8) 提示文案的可读性 + 跳转会清掉搜索/筛选
+  const where = F.problemWhere({ tabId: "aliases", index: 1, key: "aliases", message: "别名里不能出现竖线（它是字段分隔符）" });
+  check(where.indexOf("「命令别名」第 2 行") === 0 && where.indexOf("「别名") > 0,
+    "问题描述 = 表 + 行号 + 行标识 + 列名", where);
+  F.state.query = "zzz";
+  F.state.filter = "zzz";
+  check(F.gotoProblem({ tabId: "buttons", index: 0, key: "scene" }) === true &&
+    F.state.tab === "buttons" && F.state.query === "" && F.state.filter === "",
+    "跳转会把搜索/筛选清掉（否则目标行可能被过滤掉看不见）");
+  check(F.gotoProblem({ tabId: "不存在的表", index: 0, key: "scene" }) === false,
+    "跳转到不存在的表返回 false（不炸）");
+
+  // 9) 干净数据下不该无中生有地报警
+  F.state.originals.aliases = null;
+  F.state.data.aliases = [];
+  F.state.data.buttons = [];
+  F.state.originals.buttons = {};
+  toastFrom = (documentStub.getElementById("toasts").children || []).length;
+  captured.calls = [];
+  await F.doSave();
+  check(captured.calls.filter(function (c) { return c.kind === "post" && c.endpoint === "config"; }).length === 1,
+    "没有任何改动时保存照常放行");
+  check(!newToasts(F, toastFrom).some(function (h) { return h.indexOf("历史问题") >= 0; }),
+    "没有历史问题时不会瞎提醒");
+
+  // 10) 标签上的问题标记：红=改错的行（会拦保存），黄=历史遗留（不拦）
+  const histRow = { scene: "cast.typo_scene", label: "历史遗留", data: "/钓鱼", style: "default" };
+  F.state.data.buttons.push(histRow);
+  F.state.originals.buttons[F.rowKey(F.TAB_BY_ID.buttons, histRow)] = JSON.stringify(histRow);
+  const h1 = F.tabHealth(["buttons"]);
+  check(h1.stale === 1 && h1.bad === 0, "只有历史问题时记在 stale 上（不拦保存）", JSON.stringify(h1));
+  F.renderTabs();
+  const tabsHtml1 = String(documentStub.getElementById("tabs").innerHTML || "");
+  check(tabsHtml1.indexOf("tab-bad is-stale") > 0 && tabsHtml1.indexOf("tab-bad is-block") < 0,
+    "没改过的表：标签上是黄色 ⚠ 而不是红的");
+
+  histRow.scene = "cast.typo_scene_2";   // 还在改这张表 -> 变成「改过的行有错」
+  const h2 = F.tabHealth(["buttons"]);
+  check(h2.bad === 1 && h2.stale === 0, "改过的行有错时记在 bad 上（会拦保存）", JSON.stringify(h2));
+  F.renderTabs();
+  const tabsHtml2 = String(documentStub.getElementById("tabs").innerHTML || "");
+  check(tabsHtml2.indexOf("tab-bad is-block") > 0, "改错时标签上出现红色 ⛔");
+  check(F.tabHealth(["snapshots"]).bad === 0 && F.tabHealth(["snapshots"]).stale === 0,
+    "存档页这种非表格标签不参与健康度统计（不炸）");
+
+  if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [17] 收尾
    ============================================================================= */
 function finish() {
   console.log("\n" + "=".repeat(62));
