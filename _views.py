@@ -292,6 +292,16 @@ class ViewsMixin:
             return f"约 {hours} 小时后刷新"
         return f"约 {hours} 小时 {rest} 分钟后刷新"
 
+    def _order_head_text(self, player: dict[str, Any]) -> str:
+        """订单列表的表头：这批单是哪个钓点的、还有多久刷新（v1.14.0）。"""
+        wait = self._order_wait_text(player)
+        loc_id = str(player.get("order_location") or "")
+        loc = (self.location_by_id.get(loc_id) if loc_id else None) or {}
+        if not self._order_follow_location() or not loc.get("name"):
+            # 开关关了 / 老存档还没记钓点 -> 老文案逐字不变
+            return f"📋 当前订单（{wait}，过期会换一批）"
+        return f"📋 当前订单（📍{loc['name']}　{wait}，过期或换钓点会换一批）"
+
     @staticmethod
     def _sort_aquarium(aquarium: list[dict[str, Any]]) -> None:
         """把缸里的鱼排成固定顺序（变异 > 个体品质 > 鱼种品质 > 价值）。
@@ -532,7 +542,7 @@ class ViewsMixin:
                     "养成与赚钱",
                     [
                         "　/钓鱼 水族馆　　　　 放/取/卖/领/扩建",
-                        "　/钓鱼 订单　　　　　 订单（不定时刷新，收益更高）",
+                        "　/钓鱼 订单　　　　　 订单（按当前钓点刷新，收益更高）",
                         "　/钓鱼 订单 交 1 2　　批量交单（交过的不再收）",
                         "　/钓鱼 商店 扩容　　　背包扩容",
                         f"　背包上限 {base_cap} 起，不能无限囤货",

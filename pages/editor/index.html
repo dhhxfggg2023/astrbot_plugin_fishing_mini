@@ -1478,6 +1478,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     ["aquarium_bonus", "水族馆加成", "倍", "馆藏收益的倍率"],
     ["order_count", "订单数量", "个", "同时挂几个订单"],
     ["order_reward_mult", "订单奖励倍率", "倍", "提交订单的奖励系数"],
+    ["order_follow_location", "订单跟随当前钓点", "开关", "1 = 开（默认）：只点当前钓点钓得到的鱼，换钓点会跟着换一批；0 = 关：老行为，从全部鱼种里点"],
+    ["order_move_rerolls", "换钓点最多换几批", "批", "每个刷新周期内，换钓点最多能换几批订单；0 = 换钓点也不换单（防来回换图刷单）"],
+    ["order_include_hidden", "订单可点隐藏生物", "开关", "1 = 开（默认）：大肥鱼这种隐藏生物也可能被点单；0 = 关：订单不点它"],
     ["backpack_base", "初始鱼篓容量", "条", "背包一开始能装多少"]
   ];
 
@@ -2023,6 +2026,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { key: "location_codex_gate",   label: "钓点图鉴门槛", value: 0.8,  unit: "比例", desc: "上一个钓点图鉴开到几成才能前往下一个" },
         { key: "item_drop_chance",      label: "杂物概率",     value: 0.14, unit: "概率", desc: "没中鱼时钩上带物件的概率" },
         { key: "level_xp_ratio",        label: "等级曲线底数", value: 1.08, unit: "倍",   desc: "指数曲线底数，越大后期越难升级" },
+        { key: "order_follow_location", label: "订单跟随当前钓点", value: 1, unit: "开关", desc: "1 = 开：只点当前钓点钓得到的鱼，换钓点跟着换一批" },
+        { key: "order_move_rerolls",    label: "换钓点最多换几批", value: 1, unit: "批",  desc: "每个刷新周期内换钓点最多换几批订单；0 = 换图也不换单" },
+        { key: "order_include_hidden",  label: "订单可点隐藏生物", value: 1, unit: "开关", desc: "1 = 开：隐藏生物也可能被点单" },
         { key: "hook_rate_fallback",    label: "上钩率兜底",   value: 0.30, unit: "概率", desc: "鱼饵配置写错时的兜底咬钩率" }
       ],
       aliases: [

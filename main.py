@@ -279,6 +279,11 @@ DEFAULTS: dict[str, Any] = {
     "order_unlock_level": 3,
     "order_refresh_min_hours": 3,
     "order_refresh_max_hours": 6,
+    # 订单只点「当前钓点钓得到的鱼」；换钓点跟着换一批（每个刷新周期最多 order_move_rerolls 次）
+    "order_follow_location": True,
+    "order_move_rerolls": 1,
+    # 隐藏生物（大肥鱼）能不能被点单；默认能 = v1.14.0 之前的行为
+    "order_include_hidden": True,
     # 鱼竿：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级）
     "rod_defs": [
         "bamboo|竹竿|🎋|0|0.00|0.00|1|村口杂货铺送的，能用",
@@ -2348,14 +2353,8 @@ class FishingPlugin(
 
         # 防御性归一化：配置面板给的是真 bool，但手改配置文件可能写成字符串。
         # ⚠️ 不能只用 bool()：Python 里 bool("false") 是 True（非空字符串为真），
-        # 所以字符串必须显式按字面解析。
-        _raw_consume = cfg.get("consume_bait_on_empty")
-        if isinstance(_raw_consume, str):
-            cfg["consume_bait_on_empty"] = _raw_consume.strip().lower() in (
-                "1", "true", "yes", "on", "y", "是", "开",
-            )
-        else:
-            cfg["consume_bait_on_empty"] = bool(_raw_consume)
+        # 所以字符串必须显式按字面解析。统一走 _cfg_bool。
+        cfg["consume_bait_on_empty"] = _cfg_bool(cfg, "consume_bait_on_empty", False)
         cfg["sign_reward"] = max(0, _safe_int(cfg["sign_reward"], 20, 0))
         cfg["sell_discount"] = _clamp(_safe_number(cfg["sell_discount"], 1.0), 0.0, 5.0)
         cfg["enable_group_broadcast"] = bool(cfg["enable_group_broadcast"])
@@ -2407,6 +2406,12 @@ class FishingPlugin(
         )
         cfg["order_unlock_level"] = int(
             _clamp(_safe_int(cfg["order_unlock_level"], 3, 1), 1, MAX_LEVEL)
+        )
+        # 订单跟随钓点（v1.14.0）：只点当前钓点钓得到的鱼 + 换钓点跟着换一批
+        cfg["order_follow_location"] = _cfg_bool(cfg, "order_follow_location", True)
+        cfg["order_include_hidden"] = _cfg_bool(cfg, "order_include_hidden", True)
+        cfg["order_move_rerolls"] = int(
+            _clamp(_safe_int(cfg.get("order_move_rerolls"), 1, 0), 0, 99)
         )
         # 天气 / 行情 / 变异 / 垃圾阈值 / 图鉴奖励 / 鱼塘
         cfg["enable_weather"] = bool(cfg["enable_weather"])

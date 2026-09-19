@@ -246,6 +246,24 @@
     "type": "int",
     "default": 6
   },
+  "order_follow_location": {
+    "invisible": true,
+    "description": "订单是否只点「当前钓点钓得到的鱼」：true（默认）= 站在哪儿就只能被点哪儿的货，换钓点会跟着换一批；false = 老行为，从全部鱼种里点，可能点到你还没解锁的钓点的鱼",
+    "type": "bool",
+    "default": true
+  },
+  "order_move_rerolls": {
+    "invisible": true,
+    "description": "每个刷新周期内，换钓点最多能跟着换几批订单（默认 1）。设 0 = 换钓点也不换单（彻底堵住来回换图刷单）；设大了就等于无限刷",
+    "type": "int",
+    "default": 1
+  },
+  "order_include_hidden": {
+    "invisible": true,
+    "description": "隐藏生物（大肥鱼这种「藏起来的小惊喜」）能不能被点单。true（默认）= 能，和旧版一致；false = 订单不点它（它会占一个订单名额，但极难钓到）",
+    "type": "bool",
+    "default": true
+  },
   "rod_defs": {
     "invisible": true,
     "description": "鱼竿定义。每项格式：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级；旧配置没写这一项时按 1 级）",

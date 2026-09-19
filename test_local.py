@@ -892,6 +892,131 @@ async def main():
         f"新一批还是 {len(p['orders'])} 单（旧的 {len(old_ids)} 单已过期）",
     )
 
+    # ---- 订单跟随钓点（v1.14.0）----
+    print("    ── 订单按当前钓点刷新 ──")
+    loc_plugin = make_plugin()
+    loc_ev = FakeEvent("60010")
+    lp = await loc_plugin._load_player("60010")
+    lv_all = [loc["id"] for loc in mod.LOCATIONS]
+    lp["locations"] = list(lv_all)
+    lp["total_caught"] = mod._level_threshold(20)
+    lp["current_location"] = "novice"
+    await loc_plugin._save_player(lp)
+
+    # 抽 200 批：每一批的鱼都必须是这个钓点能钓到的
+    novice_ids = {f["id"] for f, _w in mod._location_pool("novice")}
+    outside = []
+    for _ in range(200):
+        for o in loc_plugin._roll_orders(20, "novice"):
+            if o["fish_id"] not in novice_ids:
+                outside.append(o["fish_id"])
+    check(
+        not outside,
+        f"按钓点抽 200 批，一条图外的鱼都没有（越界 {len(outside)} 条）",
+    )
+    # 老行为（不传钓点）确实会抽到别的图的鱼 —— 说明这个开关是有作用的
+    global_ids = {o["fish_id"] for _ in range(60) for o in loc_plugin._roll_orders(20)}
+    check(
+        bool(global_ids - novice_ids),
+        f"关掉开关时还是从全鱼池抽（抽到 {len(global_ids - novice_ids)} 种新手村没有的鱼）",
+    )
+    # 订单数量不会被「本图这一档不够」拖少：不够就用同图其它鱼补满
+    for lv in (1, 6, 12, 18, 30):
+        picks = loc_plugin._roll_orders(lv, "novice")
+        in_loc = all(o["fish_id"] in novice_ids for o in picks)
+        check(
+            len(picks) == int(loc_plugin.cfg["order_count"]) and in_loc,
+            f"Lv{lv} 在新手村照样 {len(picks)} 单、且都在本图",
+        )
+
+    # 换钓点：订单跟着换一批，并记录这批单属于哪个钓点
+    await cmd(loc_plugin, loc_ev, "订单", "", "")
+    lp = await loc_plugin._load_player("60010")
+    check(
+        lp["order_location"] == "novice" and lp["order_move_rerolls"] == 0,
+        f"订单记住是哪个钓点的 -> {lp.get('order_location')}",
+    )
+    before_ids = [o["fish_id"] for o in lp["orders"]]
+    lp["locations"] = list(lv_all)
+    await loc_plugin._save_player(lp)
+    out = await cmd(loc_plugin, loc_ev, "钓点", "去", "城中运河")
+    lp = await loc_plugin._load_player("60010")
+    canal_ids = {f["id"] for f, _w in mod._location_pool("canal")}
+    check(
+        lp["order_location"] == "canal"
+        and all(o["fish_id"] in canal_ids for o in lp["orders"]),
+        f"换到城中运河后订单整批换成这儿的鱼（{len(lp['orders'])} 单）",
+    )
+    check(
+        any("订单已换成" in x for x in out),
+        "前往时明说订单换了（不偷偷换）",
+    )
+    check(
+        lp["order_move_rerolls"] == 1,
+        f"换钓点换单计数 +1 -> {lp['order_move_rerolls']}",
+    )
+    # 上限：配置默认 1，所以本周期内再换图就不再换单（堵住来回换图刷单）
+    moved_ids = [o["fish_id"] for o in lp["orders"]]
+    lp["locations"] = list(lv_all)
+    await loc_plugin._save_player(lp)
+    await cmd(loc_plugin, loc_ev, "钓点", "去", "山间湖泊")
+    lp = await loc_plugin._load_player("60010")
+    check(
+        lp["current_location"] == "lake"
+        and lp["order_location"] == "canal"
+        and [o["fish_id"] for o in lp["orders"]] == moved_ids,
+        "本周期换单次数用完后，再换图也不换单（防刷单）",
+    )
+    # 列表头会说清楚「这批是哪个钓点的」，人在别处时额外提醒一句
+    lp_head = await cmd(loc_plugin, loc_ev, "订单", "", "")
+    check(
+        "📍城中运河" in text_of(lp_head) and "你人在" in text_of(lp_head),
+        "订单列表标明这批单属于哪个钓点，人不在那儿会提醒",
+    )
+    # 到点刷新会把「换单次数」清零（新周期重新给一次）
+    lp = await loc_plugin._load_player("60010")
+    lp["order_next_ts"] = int(time.time()) - 1
+    await loc_plugin._save_player(lp)
+    await cmd(loc_plugin, loc_ev, "订单", "", "")
+    lp = await loc_plugin._load_player("60010")
+    check(
+        lp["order_location"] == "lake" and lp["order_move_rerolls"] == 0,
+        f"到点刷新后订单跟到当前钓点、计数清零 -> {lp['order_location']}/{lp['order_move_rerolls']}",
+    )
+
+    # 关掉开关 = 老行为（全鱼池抽、不记钓点、表头也回到老文案）
+    off_plugin = make_plugin({**dict(_CFG), "order_follow_location": False})
+    op = await off_plugin._load_player("60011")
+    op["total_caught"] = mod._level_threshold(20)
+    off_plugin._ensure_orders(op)
+    check(
+        op["order_location"] == ""
+        and off_plugin._order_head_text(op) == f"📋 当前订单（{off_plugin._order_wait_text(op)}，过期会换一批）",
+        "关掉「订单跟随钓点」后完全回到老行为（不记钓点、表头照旧）",
+    )
+    # 隐藏生物开关：关掉后首选池里没有它（开着时有）
+    hid = set(mod.HIDDEN_EVERYWHERE)
+    on_pool = [f["id"] for f in loc_plugin._order_pools(18, "novice")[0]]
+    nohid_plugin = make_plugin({**dict(_CFG), "order_include_hidden": False})
+    off_pool = [f["id"] for f in nohid_plugin._order_pools(18, "novice")[0]]
+    check(
+        bool(hid & set(on_pool)) and not (hid & set(off_pool)),
+        f"隐藏生物开关生效：开着 {sorted(hid & set(on_pool))} / 关掉 {sorted(hid & set(off_pool))}",
+    )
+    # 换单次数设 0 = 换钓点也不换单
+    zero_plugin = make_plugin({**dict(_CFG), "order_move_rerolls": 0})
+    zp = await zero_plugin._load_player("60012")
+    zp["total_caught"] = mod._level_threshold(20)
+    zp["current_location"] = "novice"
+    zero_plugin._ensure_orders(zp)
+    keep = [o["fish_id"] for o in zp["orders"]]
+    zp["current_location"] = "canal"
+    check(
+        zero_plugin._ensure_orders(zp) is False
+        and [o["fish_id"] for o in zp["orders"]] == keep,
+        "order_move_rerolls = 0 时换钓点也不换单",
+    )
+
     # =====================================================================
     print("\n[8] 赠送金币 / 给鱼：功能已彻底删除")
     plugin = make_plugin()
@@ -4653,11 +4778,12 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 103,
+        len(_schema) == 106,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
-        f" + v1.13.0 的 button_style_mode/button_default_style）",
+        f" + v1.13.0 的 button_style_mode/button_default_style"
+        f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -4665,7 +4791,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 100, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 103, f"其余 {len(_hidden)} 项全部 invisible")
     check(
         all(k in mod.DEFAULTS for k in _visible),
         "3 条救生索都在 DEFAULTS 里（不是凭空写的）",

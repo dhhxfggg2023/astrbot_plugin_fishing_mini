@@ -370,6 +370,34 @@ def _cfg_str(cfg: dict[str, Any], key: str) -> str:
         return ",".join(str(item) for item in value)
     return "" if value is None else str(value)
 
+#: 字符串里哪些写法算「开」（手改配置文件 / 编辑器页面填 1 都要认）
+_TRUE_WORDS: frozenset[str] = frozenset(
+    {"1", "true", "yes", "on", "y", "是", "开", "打开", "启用"}
+)
+
+def _cfg_bool(cfg: dict[str, Any], key: str, default: bool = False) -> bool:
+    """取布尔配置。
+
+    ⚠️ 不能直接 ``bool(value)``：Python 里 ``bool("false")`` 是 True，
+    手改配置写成字符串时会把「关」当成「开」。字符串一律按字面判断，
+    数字按 0/非 0 判断，认不出的（None / 空串 / 乱写）回退 ``default``。
+    """
+    value = cfg.get(key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return default
+        if text in _TRUE_WORDS:
+            return True
+        if text in ("0", "false", "no", "off", "n", "否", "关", "关闭", "禁用"):
+            return False
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
 def _norm_pairs(raw: str) -> list[tuple[str, str]]:
     """把 ``a:1,b:2`` 切成 (键, 值)，兼容全角逗号/冒号/分号与多余空格。"""
     text = (
@@ -716,6 +744,9 @@ def _default_player(user_id: str) -> dict[str, Any]:
         "order_date": "",
         "orders": [],
         "order_next_ts": 0,
+        # 这批订单是按哪个钓点抽的（"" = 没按钓点）；以及本周期换钓点换过几次
+        "order_location": "",
+        "order_move_rerolls": 0,
         # 正在等玩家决定的随机小插曲：{"id": ..., "ts": ...}
         "event": None,
         # 每日天气 / 鱼市行情（按日期缓存，全天不变）
@@ -1303,6 +1334,12 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         player["order_date"] = order_date if isinstance(order_date, str) else ""
         # 刷新时间戳必须保留：丢了会导致每次读档都换一批订单（交单永远失败）
         player["order_next_ts"] = _safe_int(raw.get("order_next_ts"), 0, 0)
+        # 这批订单是按哪个钓点抽的（空 = 老存档 / 开关关着）；以及本周期换过几次
+        order_location = raw.get("order_location", "")
+        player["order_location"] = order_location if isinstance(order_location, str) else ""
+        player["order_move_rerolls"] = max(
+            0, _safe_int(raw.get("order_move_rerolls"), 0, 0)
+        )
         raw_orders = raw.get("orders")
         orders: list[dict[str, Any]] = []
         if isinstance(raw_orders, list):

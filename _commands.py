@@ -148,23 +148,69 @@ class CommandsMixin:
                 result = rarities
         return result
 
-    def _roll_orders(self, level: int) -> list[dict[str, Any]]:
-        """生成一批订单。越贵的鱼要得越少。"""
+    def _order_follow_location(self) -> bool:
+        """订单是否跟着当前钓点走（配置开关，默认开）。"""
+        return bool(self.cfg.get("order_follow_location", True))
+
+    def _order_include_hidden(self) -> bool:
+        """订单能不能点「隐藏生物」（默认能，= v1.14.0 之前的行为）。"""
+        return bool(self.cfg.get("order_include_hidden", True))
+
+    def _order_move_limit(self) -> int:
+        """每个刷新周期内，换钓点最多能换几批订单（0 = 换钓点也不换单，防刷单）。"""
+        return max(0, _safe_int(self.cfg.get("order_move_rerolls"), 1, 0))
+
+    def _order_pools(
+        self, level: int, location_id: str | None
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """订单抽签池，返回 ``(首选池, 补充池)``（v1.14.0：默认只从**当前钓点**抽）。
+
+        * 给了 ``location_id`` -> 候选 = 这个钓点的鱼（`_location_pool`）。
+          首选 = 等级品质档内的（贵、奖励高），补充 = 同图其它品质的
+          —— 本图这一档不够时就拿同图的鱼补满，**绝不跨图**，
+          所以「站在哪儿就只能被点哪儿的货」永远成立。
+        * ``location_id=None`` -> 老行为：首选 = 全鱼池里等级品质档内的鱼，
+          补充池为空（老版本也只从品质档里抽）。
+        * 隐藏生物（大肥鱼这类「藏起来的小惊喜」）默认照样能点，由
+          ``order_include_hidden`` 决定；关掉后只有在一只都不剩时才放它进来。
+        """
         rarities = set(self._order_rarities(level))
-        candidates = [f for f in FISH_POOL if f["rarity"] in rarities]
-        if not candidates:
-            candidates = list(FISH_POOL)
-        # 同一批订单不出现重复鱼种
-        unique: list[dict[str, Any]] = []
-        seen_ids: set[str] = set()
-        for fish in candidates:
-            if fish["id"] in seen_ids:
-                continue
-            seen_ids.add(fish["id"])
-            unique.append(fish)
-        candidates = unique or candidates
-        count = min(int(self.cfg["order_count"]), len(candidates))
-        picked = random.sample(candidates, count)
+        pool: list[dict[str, Any]] = []
+        if location_id:
+            seen: set[str] = set()
+            for fish, _weight in _location_pool(location_id):
+                if fish["id"] in seen:
+                    continue
+                seen.add(fish["id"])
+                pool.append(fish)
+        if not pool:
+            pool = list(FISH_POOL)
+        if not self._order_include_hidden():
+            visible = [f for f in pool if f["id"] not in HIDDEN_EVERYWHERE]
+            if visible:
+                pool = visible
+        preferred = [f for f in pool if f["rarity"] in rarities]
+        if not preferred:
+            # 这个钓点整档都不匹配（站长自配的图才可能）-> 全用本图的鱼
+            return pool, []
+        if not location_id:
+            return preferred, []
+        extra = [f for f in pool if f["rarity"] not in rarities]
+        return preferred, extra
+
+    def _roll_orders(
+        self, level: int, location_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """生成一批订单。越贵的鱼要得越少。
+
+        ``location_id`` = 按这个钓点抽鱼；``None`` = 不按钓点（老行为，全鱼池）。
+        """
+        preferred, extra = self._order_pools(level, location_id)
+        total = len(preferred) + len(extra)
+        count = min(int(self.cfg["order_count"]), total)
+        picked = random.sample(preferred, min(count, len(preferred)))
+        if len(picked) < count:  # 本图这一档不够 -> 用同图其它品质补满
+            picked += random.sample(extra, count - len(picked))
 
         mult = float(self.cfg["order_reward_mult"])
         orders: list[dict[str, Any]] = []
@@ -197,20 +243,45 @@ class CommandsMixin:
         return now + random.randint(low * 3600, high * 3600)
 
 
-    def _ensure_orders(self, player: dict[str, Any]) -> bool:
-        """确保当前这批订单已生成（不定时刷新）。
+    def _order_location_or_none(self, player: dict[str, Any]) -> str | None:
+        """这批订单该按哪个钓点抽；``None`` = 不按钓点（开关关了）。"""
+        if not self._order_follow_location():
+            return None
+        return str(player.get("current_location") or DEFAULT_LOCATION)
 
-        刷新规则：到了 `order_next_ts` 就换一批新的，没做完的旧单直接过期。
+    def _ensure_orders(self, player: dict[str, Any]) -> bool:
+        """确保当前这批订单是「对的」：没过期，而且跟当前钓点对得上（v1.14.0）。
+
+        刷新规则：
+        * 还没订单 / 到 `order_next_ts` 了 -> 换一批新的（老规则，没动）；
+        * 开着「订单跟随钓点」但订单是别的钓点的 -> 也换一批，让点单只点脚下
+          钓得到的鱼；换钓点**不重置**刷新倒计时，而且每个刷新周期最多换
+          `order_move_rerolls` 次（默认 1），所以来回换图刷不出无限批订单。
+
         返回 True 表示数据有变化需要保存。
         """
         now = int(time.time())
         next_ts = _safe_int(player.get("order_next_ts"), 0, 0)
         has_orders = bool(player.get("orders"))
-        if has_orders and next_ts > now:
+        location = self._order_location_or_none(player)
+        # 到点（或第一次）刷新：跟钓点无关，照旧换一批，并把「换钓点次数」清零。
+        # 没到点但订单是别的钓点的：也算要换，但要受 order_move_rerolls 限制。
+        expired = (not has_orders) or next_ts <= now
+        moved = (
+            (not expired)
+            and location is not None
+            and str(player.get("order_location") or "") != location
+        )
+        if not expired and not moved:
             return False
-        player["orders"] = self._roll_orders(_player_level(player))
+        rerolls = _safe_int(player.get("order_move_rerolls"), 0, 0)
+        if moved and rerolls >= self._order_move_limit():
+            return False
+        player["orders"] = self._roll_orders(_player_level(player), location)
         player["order_next_ts"] = self._next_order_ts(now)
         player["order_date"] = self._today_text()  # 只用于展示「这是哪天接的单」
+        player["order_location"] = location or ""
+        player["order_move_rerolls"] = (rerolls + 1) if moved else 0
         return True
 
     async def _cmd_orders(
@@ -330,10 +401,19 @@ class CommandsMixin:
                 if isinstance(fid, str):
                     held[fid] = held.get(fid, 0) + 1
 
-            lines = [
-                f"📋 当前订单（{self._order_wait_text(player)}，"
-                f"过期会换一批）"
-            ]
+            lines = [self._order_head_text(player)]
+            if self._order_follow_location():
+                batch_loc = str(player.get("order_location") or "")
+                here = str(player.get("current_location") or DEFAULT_LOCATION)
+                if batch_loc and batch_loc != here:
+                    batch_name = (self.location_by_id.get(batch_loc) or {}).get(
+                        "name", batch_loc
+                    )
+                    lines.append(
+                        f"⚠️ 这批是「{batch_name}」的单，你人在"
+                        f"「{self._location_label(player)}」"
+                        "（回去交，或等它刷新）"
+                    )
             for i, order in enumerate(orders, start=1):
                 fish = FISH_BY_ID.get(order.get("fish_id", ""))
                 if fish is None:
@@ -391,11 +471,18 @@ class CommandsMixin:
                         yield _r
                     return
                 player["current_location"] = target["id"]
+                # 订单跟着钓点走：换地图后点单只会点这儿的鱼（开关关了就什么都不做）
+                had_orders = bool(player.get("orders"))
+                orders_swapped = had_orders and self._ensure_orders(player)
                 saved = await self._save_player(player)
                 lines = [
                     f"🚶 前往 {target['emoji']}{target['name']}　"
                     f"价值×{target['value_mult']:.2f}"
                 ]
+                if orders_swapped:
+                    lines.append(
+                        f"📋 订单已换成「{target['name']}」的（旧单作废，鱼还在背包）"
+                    )
                 if not saved:
                     lines.append("⚠️ 保存失败")
                 async for _r in self._say_msg(event, "location.moved", event.plain_result("\n".join(lines))):
@@ -458,6 +545,11 @@ class CommandsMixin:
                     f"　价值×{target['value_mult']:.2f}　"
                     f"💰 余额 {_fmt_gold(player['gold'])}",
                 ]
+                # 订单跟着钓点走（同「前往」）
+                if bool(player.get("orders")) and self._ensure_orders(player):
+                    lines.append(
+                        f"📋 订单已换成「{target['name']}」的（旧单作废，鱼还在背包）"
+                    )
                 saved = await self._save_with_notices(player, lines)
                 async for _r in self._say_msg(event, "location.unlock_go", event.plain_result("\n".join(lines))):
                     yield _r
