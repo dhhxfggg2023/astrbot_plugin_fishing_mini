@@ -127,7 +127,22 @@ const hookNames = [
   "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
   "renderPlayerRow",
   // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色）
-  "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES"
+  "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES",
+  // 💬 回复：场景卡片 / 按钮总览 / 常驻预览
+  "REPLY_KEYS", "REPLY_SOURCE_LABEL", "REPLY_LAYOUT_ALL", "REPLY_ROW_MAX",
+  "clampPerRow", "normalizeButtonStyle", "normalizeReplyButton", "normalizeReplyScene",
+  "normalizeReplyPayload", "replyKVLine", "serializeReplyLines", "parseTextOverrides",
+  "serializeTextOverrides", "parseButtonLayout", "serializeButtonLayout", "mergeButtonDefs",
+  "mergeTextOverrides", "mergeButtonLayout", "templatePlaceholders", "unknownPlaceholders",
+  "renderTemplateText", "renderTemplateHtml", "templateIssues", "templateWarnings",
+  "insertPlaceholder", "applyCommandPrefix", "validateReplyButton", "replyPreviewModel",
+  "renderReplyPreview", "renderRepliesTab", "renderReplyCard", "renderReplyOverview",
+  "renderReplyPreviewPanel", "renderReplyPlaceholderChips", "loadReplies", "saveReplies",
+  "replyTextsNow", "replyTouchedKeys", "replyPayloadFor", "replySceneDraft", "replySceneById",
+  "replyTextBaseline", "replyDirtyCount", "replyEffectivePerRow", "replyGlobalPerRow",
+  "replyFallbackPayload", "applyButtonsTextToTable", "markRepliesSaved", "replyOverviewRows",
+  "previewModelFor", "replyBadButtons", "refreshReplyLive", "replyRowMax", "knownPlaceholderNames",
+  "replyFilterScenes", "replyVisibleGroups", "renderReplyMain", "replyStatsHtml"
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -163,7 +178,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 15, "标签页数量 = 15（12 + 玩家 + 命令别名 + 自定义命令）",
+  check(Object.keys(T.TAB_BY_ID).length === 16, "标签页数量 = 16（12 + 玩家 + 命令别名 + 自定义命令 + 💬 回复）",
     Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个", (T.state.data.locations || []).length);
@@ -226,9 +241,12 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 14,
-    "14 个标签入口都有条目数徽标（12 原有 + 玩家 + 命令组）",
+  check(tabsHtml.split("tab-count").length - 1 === 15,
+    "15 个标签入口都有条目数徽标（12 原有 + 玩家 + 命令组 + 💬 回复）",
     tabsHtml.split("tab-count").length - 1);
+  check(tabsHtml.indexOf('data-tab="replies"') > 0, "标签栏里有「💬 回复」入口");
+  check(T.TAB_BY_ID.buttons.label.indexOf("原始文本") > 0,
+    "原来的「🔘 按钮」已降级改名成「🔘 按钮（原始文本）」", T.TAB_BY_ID.buttons.label);
   check(tabsHtml.split("⌨️ 命令").length - 1 === 1 && /\u2328\ufe0f 命令/.test(tabsHtml),
     "「命令」只占一个入口按钮（两张表在页内切换）");
   check(tabsHtml.indexOf('data-tab="players"') > 0, "标签栏里有「👤 玩家」入口");
@@ -326,6 +344,12 @@ function runAssertions() {
           "玩家页渲染出可改金币的表格", out.length + " 字符");
         check(out.indexOf("p:mode") >= 0 && out.indexOf("存档内玩家") >= 0 && out.indexOf("实时玩家") >= 0,
           "玩家页有「实时 / 存档内」两种模式");
+      } else if (t.kind === "replies") {
+        const out = T.renderRepliesTab(t);
+        check(out.indexOf("rp-split") >= 0 && out.indexOf("场景卡片") >= 0 && out.indexOf("按钮总览") >= 0,
+          "「💬 回复」渲染出卡片视图 + 二级切换", out.length + " 字符");
+        check(out.indexOf("rp-side") >= 0 && out.indexOf("👁️ 预览") >= 0,
+          "「💬 回复」右侧有常驻预览面板");
       } else if (t.navGroup) {
         const out = T.renderTableTab(t);
         check(out.length > 400 && out.indexOf("<table") >= 0, "「" + t.label + "」渲染出表格", out.length + " 字符");
@@ -430,7 +454,7 @@ function runAssertions() {
     check(["dark", "light"].indexOf(documentStub.documentElement.getAttribute("data-theme")) >= 0,
       "data-theme 被规范成 dark/light", documentStub.documentElement.getAttribute("data-theme"));
     check(T.ENV.isDark === true, "离线默认深色");
-  }).then(channelHelpers).then(channelRoundTrip).then(finish);
+  }).then(channelHelpers).then(repliesPure).then(channelRoundTrip).then(repliesOnline).then(finish);
 }
 
 /* =============================================================================
@@ -651,7 +675,369 @@ async function channelHelpers() {
 }
 
 /* =============================================================================
-   [13] 数据通道的真实往返：假 SDK（apiGet/apiPost 到插件注册的相对路径）
+   [13] 💬 回复页：三份配置文本 / 占位符 / 预览联动（全部是纯函数，不碰 DOM）
+   ============================================================================= */
+async function repliesPure() {
+  console.log("\n[13] 💬 回复：场景列表与三份配置文本");
+  check(T.REPLY_KEYS.join(",") === "button_defs,text_overrides,button_layout",
+    "保存回复配置的三个键固定", T.REPLY_KEYS.join(","));
+  check(T.REPLY_SOURCE_LABEL.config === "配置" && T.REPLY_SOURCE_LABEL.inherit === "继承" &&
+    T.REPLY_SOURCE_LABEL["default"] === "默认" && T.REPLY_SOURCE_LABEL.none === "无按钮",
+    "四种按钮来源都有中文标签");
+
+  const scenes = T.state.replies.scenes;
+  check(scenes.length === 6 && T.state.replies.groups.length === 3,
+    "离线演示 6 个场景 / 3 组（首屏就能看到卡片）",
+    scenes.length + " 个场景 / " + T.state.replies.groups.length + " 组");
+  check(scenes[0].id === "cast.hit" && scenes[0].source === "config" && scenes[0].buttons.length === 2,
+    "第一个场景 cast.hit：来源=配置、2 个按钮");
+  check(scenes[0].buttons[0].style === "primary" && scenes[0].buttons[0].label === "🎣 再来一竿",
+    "按钮三元组 [文案, 指令, 1] 被规范成 {label,data,style=primary}",
+    JSON.stringify(scenes[0].buttons[0]));
+  check(T.state.replies.scenes.filter(function (s) { return s.source === "inherit"; }).length === 1 &&
+    T.state.replies.scenes.filter(function (s) { return s.source === "none"; }).length === 1,
+    "继承 / 无按钮的来源状态都在演示数据里");
+
+  /* ---- text_overrides：解析与序列化往返 ---- */
+  console.log("  ── text_overrides / button_layout 往返 ──");
+  const ovText = "cast.hit|🎣 {原文}\nstory.prompt|🎭 换个说法";
+  const ovMap = T.parseTextOverrides(ovText);
+  check(Object.keys(ovMap).join(",") === "cast.hit,story.prompt",
+    "text_overrides 解析成 场景 -> 模板", JSON.stringify(ovMap));
+  check(T.serializeTextOverrides(ovMap) === ovText, "text_overrides 往返不漂",
+    JSON.stringify(T.serializeTextOverrides(ovMap)));
+  check(Object.keys(T.parseTextOverrides("没有竖线的行\n# 注释\n|空场景")).length === 0,
+    "缺竖线 / 空场景 / 注释行都被跳过");
+  check(T.parseTextOverrides("CAST.HIT|x")["cast.hit"] === "x", "场景 id 大小写归一");
+  check(T.serializeTextOverrides({ "cast.hit": "A|B" }) === "cast.hit|A B",
+    "模板里的竖线会被洗掉（它是字段分隔符）");
+  check(T.serializeTextOverrides({ b: "2", a: "1" }, ["a", "b"]) === "a|1\nb|2",
+    "按场景顺序输出（配置里读起来跟界面一致）");
+  check(T.serializeTextOverrides({ a: "x", b: "  " }) === "a|x",
+    "空覆盖不写成空行");
+
+  /* ---- button_layout：解析与序列化往返 ---- */
+  const layout = T.parseButtonLayout("*|3\nstory.prompt|1\nbad|abc\nzero|0\nbig|9");
+  check(Object.keys(layout).join(",") === "*,story.prompt",
+    "button_layout 只认 1~5 的整数（abc/0/9 被丢掉）", JSON.stringify(layout));
+  check(T.serializeButtonLayout({ "story.prompt": 1, "*": 3 }) === "*|3\nstory.prompt|1",
+    "button_layout 序列化时 * 排在最前面（全局默认）");
+  const layoutBack = T.parseButtonLayout(T.serializeButtonLayout(layout));
+  check(layoutBack["*"] === 3 && layoutBack["story.prompt"] === 1, "button_layout 往返不漂");
+
+  /* ---- button_defs：只动改过的场景 ---- */
+  console.log("  ── button_defs 合并（没改的一行都不碰） ──");
+  const rawLines = [
+    "# 这里是我的备注",
+    "cast.hit|🎣 再来一竿|/钓鱼|primary",
+    "cast.hit|🎒 背包|/钓鱼 背包|default",
+    "story.prompt|{label}|/钓鱼 事件 {n}|default",
+    "半行没有竖线"
+  ];
+  const merged = T.mergeButtonDefs(rawLines, {
+    "cast.hit": [{ scene: "cast.hit", label: "再钓一竿", data: "/钓鱼", style: "default" }],
+    "cast.done": [{ scene: "cast.done", label: "去背包", data: "/钓鱼 背包", style: "default" }]
+  });
+  check(merged[0] === "# 这里是我的备注", "注释行原样保留");
+  check(merged.filter(function (l) { return l.indexOf("cast.hit|") === 0; }).length === 1 &&
+    merged.indexOf("cast.hit|再钓一竿|/钓鱼|default") === 1,
+    "改过的场景整段替换（两行变一行，位置不动）", merged.join(" ⏎ "));
+  check(merged.indexOf("story.prompt|{label}|/钓鱼 事件 {n}|default") > 0,
+    "没改过的场景一个字都不动（占位符也保留）");
+  check(merged[merged.length - 1] === "cast.done|去背包|/钓鱼 背包|default",
+    "原来没有的场景追加到末尾", merged[merged.length - 1]);
+  check(merged.indexOf("半行没有竖线") > 0, "解析不了的行也保留（绝不丢配置）");
+  check(T.mergeButtonDefs(rawLines, { "cast.hit": [] })
+    .every(function (l) { return l.indexOf("cast.hit|") !== 0; }),
+    "把场景的按钮清空 = 那两行都没了（回退到继承/默认）");
+
+  /* ---- text_overrides / button_layout 的合并 ---- */
+  const sceneList = [
+    { id: "a", text: { template: "T-a" } },
+    { id: "b", text: { template: "T-b" } },
+    { id: "c", text: { template: "T-c" } }
+  ];
+  const mo = T.mergeTextOverrides({ a: "旧A", b: "旧B" }, sceneList, { a: "新A", b: "T-b", c: "   " });
+  check(mo.a === "新A", "改过的场景写新覆盖");
+  check(mo.b === undefined, "填回原模板 = 删掉这条覆盖（不留垃圾行）");
+  check(mo.c === undefined, "空文案不写覆盖");
+  check(T.mergeTextOverrides({ x: "不动" }, sceneList, {}).x === "不动", "没碰过的场景的覆盖保留");
+  const ml = T.mergeButtonLayout({ "*": 3, "story.prompt": 1 }, { "story.prompt": "2", "cast.hit": "" });
+  check(ml["*"] === 3 && ml["story.prompt"] === 2 && ml["cast.hit"] === undefined,
+    "布局合并：改了的写、空的删、全局默认保留", JSON.stringify(ml));
+
+  /* ---- 占位符替换 / 未知占位符 ---- */
+  console.log("  ── 占位符：替换、未知高亮、{原文} 警告 ──");
+  const samples = { "原文": "🐟 鲤鱼", "鱼名": "鲤鱼" };
+  check(T.templatePlaceholders("🎣 {原文}｜{鱼名}｜{原文}").join(",") === "原文,鱼名",
+    "占位符按出现顺序去重");
+  check(T.renderTemplateText("🎣 {原文}", samples) === "🎣 🐟 鲤鱼",
+    "已知占位符被示例值替换", T.renderTemplateText("🎣 {原文}", samples));
+  check(T.renderTemplateText("🎣 {没有这个}", samples) === "🎣 {没有这个}",
+    "未知占位符原样留着（看得见才改得掉）");
+  check(T.unknownPlaceholders("🎣 {原文}{鱼名}{金币}", samples).join(",") === "金币",
+    "未知占位符判断函数只挑出 samples 里没有的");
+  check(T.unknownPlaceholders("🎣 {原文}{鱼名}{金币}", samples, ["原文", "鱼名", "金币"]).length === 0,
+    "场景声明过的占位符就算没有示例值也不算未知（插件认它）");
+  const hlHtml = T.renderTemplateHtml("🎣 {原文}{金币}", samples);
+  check(hlHtml.indexOf("rp-ph-bad") > 0 && hlHtml.indexOf("{金币}") > 0,
+    "未知占位符在预览里被醒目标记（会写坏的情况）");
+  check(hlHtml.indexOf("rp-sampled") > 0 && hlHtml.indexOf("🐟 鲤鱼") > 0,
+    "已知占位符渲染成示例值");
+  check(T.renderTemplateHtml("🎣 {鱼名}", samples, ["鱼名"]).indexOf("rp-ph-bad") < 0,
+    "声明过但没有示例值的占位符不会被标成错误");
+  check(T.insertPlaceholder("🎣 {原文}", "鱼名", 7, 7) === "🎣 {原文}{鱼名}",
+    "点占位符 -> 插到光标处", T.insertPlaceholder("🎣 {原文}", "鱼名", 7, 7));
+  check(T.insertPlaceholder("{原文} 了", "鱼名", 0, 4) === "{鱼名} 了",
+    "有选中内容时替换选中的那段");
+  check(T.insertPlaceholder("", "原文") === "{原文}", "空模板直接插入");
+
+  /* ---- 按钮校验 + 批量改前缀 ---- */
+  check(Object.keys(T.validateReplyButton({ label: "看背包", data: "/钓鱼 背包", style: "primary" })).length === 0,
+    "合法按钮草稿校验通过");
+  check(T.validateReplyButton({ label: "", data: "/钓鱼 背包" }).label &&
+    T.validateReplyButton({ label: "看背包", data: "" }).data &&
+    T.validateReplyButton({ label: "看背包", data: "背包" }).data &&
+    T.validateReplyButton({ label: "看背包", data: "/钓鱼 背包", style: "红色" }).style,
+    "空文案 / 空指令 / 指令没有 / 开头 / 样式乱写都会被标红");
+  check(T.validateReplyButton({ label: "看背包", data: "/钓鱼 背包", style: "" }).style === undefined,
+    "样式留空 = 默认，不算错");
+  check(T.applyCommandPrefix("/钓鱼 背包", "/钓鱼") === "/钓鱼 背包", "前缀没变时指令不变");
+  check(T.applyCommandPrefix("/钓鱼 背包", "/fish") === "/fish 背包", "批量改前缀只换第一段");
+  check(T.applyCommandPrefix("背包", "/钓鱼") === "/钓鱼 背包", "没有前缀的指令会被补上前缀");
+  check(T.applyCommandPrefix("/钓鱼 背包", "  ") === "/钓鱼 背包", "前缀为空时原样返回（不会把指令写坏）");
+
+  const dynScene = { id: "x", dynamic_text: true, text: { samples: samples, placeholders: ["原文", "鱼名"] } };
+  const w1 = T.templateWarnings("🎣 你钓到了鱼！", dynScene);
+  check(w1.some(function (s) { return s.indexOf("必须保留 {原文}") > 0; }),
+    "dynamic_text 且模板缺 {原文} -> 警告会说明插件会忽略这次覆盖", w1.join(" | "));
+  check(!T.templateWarnings("🎣 {原文}", dynScene).some(function (s) { return s.indexOf("必须保留") > 0; }),
+    "保留了 {原文} 就不警告");
+  check(T.templateWarnings("🎣 {原文} {金币}", dynScene).some(function (s) { return s.indexOf("金币") > 0; }),
+    "未知占位符也进警告文案");
+  check(T.templateWarnings("", dynScene).some(function (s) { return s.indexOf("空的") > 0; }),
+    "空文案有专门提示");
+  const staticScene = { id: "y", dynamic_text: false, text: { samples: {}, placeholders: [] } };
+  check(T.templateWarnings("随便写什么都行", staticScene).length === 0,
+    "dynamic_text=false 的模板可以任意改写（不报警）");
+  check(T.templateIssues("x", {}, true).missingOriginal === true &&
+    T.templateIssues("x", {}, false).missingOriginal === false,
+    "templateIssues 的 {原文} 判断只看 dynamic_text");
+
+  /* ---- 卡片 ↔ 预览 三者联动 ---- */
+  console.log("  ── 卡片 ↔ 预览联动（改文案 / 加减按钮 / 群聊单聊） ──");
+  const hit = T.replySceneById("cast.hit");
+  const dHit = T.replySceneDraft("cast.hit");
+  const m0 = T.previewModelFor(hit);
+  check(m0.text.indexOf("🐟 鲤鱼") > 0 && m0.buttons.length === 2,
+    "预览模型：文案用示例值渲染，按钮 2 个", m0.text);
+  dHit.text = "✨ 恭喜！{原文}";
+  dHit.textTouched = true;
+  const m1 = T.previewModelFor(hit);
+  check(m1.text !== m0.text && m1.text.indexOf("✨ 恭喜！") === 0,
+    "改文案后预览文字跟着变（卡片↔预览联动）", m1.text);
+  dHit.buttons.push({ label: "看图鉴", data: "/钓鱼 图鉴", style: "default" });
+  const m2 = T.previewModelFor(hit);
+  check(m2.buttons.length === 3, "加按钮后预览里的按钮数 2 -> 3");
+  dHit.buttons.pop();
+  check(T.previewModelFor(hit).buttons.length === 2, "删按钮后预览里的按钮数又回到 2");
+
+  const gModel = T.replyPreviewModel(hit, { mode: "group" });
+  const pModel = T.replyPreviewModel(hit, { mode: "private" });
+  check(gModel.hint !== pModel.hint && gModel.hint.indexOf("群聊") === 0 && pModel.hint.indexOf("单聊") === 0,
+    "群聊 / 单聊的点击提示不一样", gModel.hint + " ｜ " + pModel.hint);
+  check(gModel.hint.indexOf("不会自动发送") > 0 && pModel.hint.indexOf("直接") > 0,
+    "群里点按钮只填输入框、单聊才会自动发送");
+  check(gModel.modeLabel === "群聊" && pModel.modeLabel === "单聊" &&
+    gModel.chatName !== pModel.chatName, "预览里的会话名跟着模式走");
+
+  const prevHtml = T.renderReplyPreview(T.previewModelFor(hit));
+  check(prevHtml.indexOf("rp-bubble") > 0 && prevHtml.indexOf("rp-grid") > 0,
+    "预览 HTML 有气泡 + 按钮网格");
+  check(prevHtml.indexOf("grid-template-columns:repeat(3") > 0,
+    "按钮网格按「每行几个」排（cast.hit 是 3）");
+  check(prevHtml.indexOf("✨ 恭喜！") > 0, "预览用的是卡片里正在编辑的文案");
+  check(T.renderReplyPreview(gModel).indexOf("群聊") > 0 &&
+    T.renderReplyPreview(pModel).indexOf("单聊") > 0,
+    "切群聊/单聊 -> 预览 HTML 里的提示跟着换");
+  check(T.renderReplyPreview(T.previewModelFor(T.replySceneById("cast.done")))
+    .indexOf("没有任何按钮") > 0, "没有按钮的场景预览里会说明白");
+
+  dHit.perRow = "2";
+  dHit.layoutTouched = true;
+  check(T.replyEffectivePerRow(hit) === 2, "场景的「每行几个」覆盖生效");
+  check(T.renderReplyPreview(T.previewModelFor(hit)).indexOf("repeat(2") > 0,
+    "预览网格跟着变成每行 2 个");
+  dHit.perRow = "";
+  dHit.layoutTouched = false;
+  check(T.replyEffectivePerRow(hit) === 3, "清掉覆盖后回到插件给的 3 个");
+
+  /* ---- 卡片 HTML ---- */
+  console.log("  ── 卡片 / 总览渲染 ──");
+  dHit.text = "🎣 {原文}";
+  const card = T.renderReplyCard(hit);
+  check(card.indexOf("cast.hit") > 0 && card.indexOf("来源：配置") > 0,
+    "卡片上有场景 id 与来源徽标（配置）");
+  check(card.indexOf('data-act="rp:text"') > 0 && card.indexOf("🎣 {原文}") > 0,
+    "卡片里能直接改文案模板");
+  check(card.indexOf('data-act="rp:btnLabel"') > 0 && card.indexOf('data-act="rp:btnData"') > 0 &&
+    card.indexOf('data-act="rp:btnDel"') > 0 && card.indexOf('data-act="rp:btnUp"') > 0 &&
+    card.indexOf('data-act="rp:btnDown"') > 0,
+    "卡片里的按钮能改文案/指令/排序/删除");
+  check(card.indexOf('data-act="rp:perRow"') > 0 && card.indexOf('data-act="rp:saveCard"') > 0,
+    "卡片上有「每行 N 个」覆盖与「只保存这张」");
+  const noneCard = T.renderReplyCard(T.replySceneById("cast.done"));
+  check(noneCard.indexOf('data-act="rp:btnAdd"') > 0 && noneCard.indexOf("来源：无按钮") > 0,
+    "没有按钮的场景也能一键加按钮，来源写着「无按钮」");
+  const inheritCard = T.renderReplyCard(T.replySceneById("cast.miss"));
+  check(inheritCard.indexOf("来源：继承自 cast") > 0, "继承来的按钮在徽标里标出父场景（继承自 cast）");
+  const chips = T.renderReplyPlaceholderChips(hit, "🎣 {原文} {鱼名} {金币}");
+  check(chips.indexOf('data-act="rp:ph"') > 0 && chips.indexOf("{鱼名}") > 0,
+    "占位符提示可点击插入");
+  check(chips.indexOf("is-bad") > 0 && chips.indexOf("{金币}") > 0,
+    "模板里出现未声明的占位符会被标红");
+
+  const overview = T.renderReplyOverview();
+  check(overview.indexOf('data-act="rp:layoutAll"') > 0 && overview.indexOf("全局设置") > 0,
+    "按钮总览顶部有全局设置（* 每行几个）");
+  check(overview.indexOf('data-act="rp:batch"') > 0 && overview.indexOf("批量改指令前缀") > 0,
+    "按钮总览有批量改样式 / 改前缀 / 删除");
+  check(overview.indexOf("cast.hit") > 0 && overview.indexOf("🎣 再来一竿") > 0,
+    "总览把所有场景的按钮列成一张表");
+
+  /* ---- 154 个场景时的可用性：搜索 + 分组折叠 + 局部刷新 ---- */
+  console.log("  ── 场景搜索 / 分组折叠 / 大场景量冒烟 ──");
+  check(T.replyFilterScenes(scenes, "").length === 6, "搜索词为空 -> 全部场景");
+  check(T.replyFilterScenes(scenes, "cast.hit").map(function (s) { return s.id; }).join(",") === "cast.hit",
+    "按场景 id 搜索");
+  check(T.replyFilterScenes(scenes, "空钩").length === 1, "按场景名称搜索（中文）");
+  check(T.replyFilterScenes(scenes, "咬钩").length === 2, "按分组名搜索（咬钩与拉线）");
+  check(T.replyFilterScenes(scenes, "绝对不存在zzz").length === 0, "搜不到就是空");
+  T.state.replies.query = "cast";
+  check(T.replyVisibleGroups().length === 1 && T.replyVisibleGroups()[0].scenes.length === 3,
+    "筛过之后只剩命中的分组");
+  const filteredMain = T.renderReplyMain();
+  check(filteredMain.indexOf("cast.miss") > 0 && filteredMain.indexOf("story.prompt") < 0,
+    "筛选后卡片列表只剩命中的场景");
+  check(T.replyStatsHtml().indexOf("<b>3</b> / 6") > 0, "工具栏计数显示「筛出 3 / 共 6」");
+  T.state.replies.query = "";
+  T.state.replies.collapsed = { cast: true };
+  const collapsedMain = T.renderReplyMain();
+  check(collapsedMain.indexOf("▸") > 0 && collapsedMain.indexOf('data-scene="cast.hit"') < 0 &&
+    collapsedMain.indexOf("story.prompt") > 0,
+    "收起分组后这一组的卡片不再渲染（其他组照常）");
+  check(collapsedMain.indexOf("3 个场景") > 0, "分组标题上写着这一组有几个场景");
+  T.state.replies.collapsed = {};
+
+  // 24 组 × 7 个场景 = 168 个场景（比线上的 154 个还多一点）：渲染不能炸、也得筛得动
+  const bigGroups = [];
+  for (let gi = 1; gi <= 24; gi++) {
+    const list = [];
+    for (let si = 1; si <= 7; si++) {
+      list.push({
+        id: "g" + gi + ".s" + si, label: "场景 " + gi + "-" + si, desc: "第 " + gi + " 组的第 " + si + " 个场景",
+        parent: "g" + gi, parent_label: "g" + gi, source: si === 1 ? "config" : (si === 2 ? "inherit" : "default"),
+        per_row: si, dynamic_text: true,
+        buttons: [["按钮 A" + si, "/钓鱼 帮助", 1], ["按钮 B" + si, "/钓鱼 背包", 0]],
+        text: {
+          template: "🎣 {原文}", placeholders: ["原文"], samples: { "原文": "示例 " + gi + "-" + si },
+          override: "", preview: "示例 " + gi + "-" + si, dynamic: true
+        }
+      });
+    }
+    bigGroups.push({ id: "g" + gi, label: "第 " + gi + " 组", desc: "", scenes: list });
+  }
+  const bigPayload = T.normalizeReplyPayload({
+    transport: "plugin-api", buttons_per_row_default: 3, buttons_per_row_max: 5, groups: bigGroups
+  });
+  const savedScenes = T.state.replies.scenes;
+  const savedGroups = T.state.replies.groups;
+  const savedDrafts = T.state.replies.drafts;
+  T.state.replies.scenes = bigPayload.scenes;
+  T.state.replies.groups = bigPayload.groups;
+  T.state.replies.drafts = {};
+  T.state.replies.collapsed = {};
+  T.state.replies.query = "";
+  const bigHtml = T.renderRepliesTab(T.TAB_BY_ID.replies);
+  check(bigPayload.scenes.length === 168 && T.state.replies.groups.length === 24,
+    "构造出 168 个场景 / 24 组（跟线上 154 个同量级）", bigPayload.scenes.length);
+  check(bigHtml.indexOf('data-scene="g24.s7"') > 0 && bigHtml.indexOf('data-scene="g1.s1"') > 0 &&
+    bigHtml.indexOf("rp-phone") > 0,
+    "168 个场景一次渲染不炸（首尾卡片 + 预览都在）", bigHtml.length + " 字符");
+  check(T.replyFilterScenes(bigPayload.scenes, "24-7").length === 1 &&
+    T.replyFilterScenes(bigPayload.scenes, "g13").length === 7,
+    "大列表里按 id / 名称筛得动");
+  T.state.replies.query = "24-7";
+  const bigFiltered = T.renderReplyMain();
+  check(bigFiltered.indexOf("g24.s7") > 0 && bigFiltered.indexOf("g24.s6") < 0 &&
+    bigFiltered.length < bigHtml.length / 10,
+    "筛出 1 个场景时只渲染那一张卡", bigFiltered.length + " 字符");
+  check(T.clampPerRow("5", 0, bigPayload.perRowMax) === 5 &&
+    T.clampPerRow("6", 0, bigPayload.perRowMax) === 0 &&
+    T.parseButtonLayout("x|9", bigPayload.perRowMax).x === undefined,
+    "接口给的上限（buttons_per_row_max=5）真的会拿来卡住 6");
+  T.state.replies.scenes = savedScenes;
+  T.state.replies.groups = savedGroups;
+  T.state.replies.drafts = savedDrafts;
+  T.state.replies.query = "";
+  T.state.replies.collapsed = {};
+  check(T.state.replies.scenes.length === 6, "大场景量冒烟后状态被还原（后面的断言不受影响）");
+
+  /* ---- 只提交变化的那几项 ---- */
+  console.log("  ── 保存 payload：只提交真的变了的项 ──");
+  T.state.replies.drafts = {};
+  check(T.replyDirtyCount() === 0, "清掉草稿后未保存数为 0");
+  check(Object.keys(T.replyPayloadFor(null)).length === 0,
+    "什么都没改 -> 一个键都不提交（不会把别的项覆盖成空）",
+    JSON.stringify(T.replyPayloadFor(null)));
+
+  const dOnlyText = T.replySceneDraft("cast.hit");
+  dOnlyText.text = "🎣 {原文}（改过）";
+  dOnlyText.textTouched = true;
+  const pText = T.replyPayloadFor(null);
+  check(Object.keys(pText).join(",") === "text_overrides",
+    "只改文案 -> 只提交 text_overrides", Object.keys(pText).join(","));
+  check(pText.text_overrides.indexOf("cast.hit|🎣 {原文}（改过）") === 0,
+    "text_overrides 里就是改过的那条", pText.text_overrides);
+  check(Object.keys(T.replyPayloadFor("cast.miss")).length === 0,
+    "「只保存这张卡片」时不会带上别的场景的改动");
+  const emptySave = await T.saveReplies("cast.miss");
+  check(emptySave.ok === false && emptySave.empty === true,
+    "没改动的卡片不会被提交（有专门提示）", emptySave.message);
+  const offlineSave = await T.saveReplies(null);
+  check(offlineSave.ok === false && /离线预览/.test(offlineSave.message),
+    "离线模式下保存回复配置被拦下（不假装成功）", offlineSave.message);
+
+  const dBtn = T.replySceneDraft("cast.done");
+  dBtn.buttons.push({ label: "🎣 再来一竿", data: "/钓鱼", style: "primary" });
+  dBtn.buttonsTouched = true;
+  const dClear = T.replySceneDraft("cast.miss");
+  dClear.buttons = [];
+  dClear.buttonsTouched = true;
+  T.state.replies.layoutAllTouched = true;
+  T.state.replies.layoutAllDraft = "4";
+  const pAll = T.replyPayloadFor(null);
+  check(Object.keys(pAll).sort().join(",") === "button_defs,button_layout,text_overrides",
+    "按钮 + 文案 + 布局都改了 -> 三份文本一起提交", Object.keys(pAll).join(","));
+  check(pAll.button_defs.indexOf("cast.done|🎣 再来一竿|/钓鱼|primary") > 0,
+    "新按钮写进了 button_defs", pAll.button_defs);
+  check(pAll.button_defs.indexOf("cast.miss") < 0, "清空的场景在 button_defs 里不再有行");
+  check(pAll.button_defs.indexOf("story|{label}|/钓鱼 事件 {n}|default") > 0,
+    "没改过的场景行原样保留（含 {label} 占位符）");
+  check(pAll.button_layout.indexOf("*|4") === 0, "全局每行几个写进 button_layout", pAll.button_layout);
+  check(pAll.text_overrides.indexOf("cast.hit|🎣 {原文}（改过）") === 0,
+    "文案覆盖与按钮改动互不影响");
+
+  T.markRepliesSaved(pAll);
+  check(T.replyDirtyCount() === 0 && Object.keys(T.replyPayloadFor(null)).length === 0,
+    "保存成功后草稿清零、再保存不会重复提交");
+  check((T.state.data.buttons || []).some(function (r) { return r.scene === "cast.done"; }),
+    "原始按钮表被同步（避免 save_content 把回复页的改动写回旧值）");
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [14] 数据通道的真实往返：假 SDK（apiGet/apiPost 到插件注册的相对路径）
    ============================================================================= */
 const captured = {
   calls: [], context: null, failPost: false, statusReads: 0, phase: "before"
@@ -776,6 +1162,10 @@ const FAKE_CONFIG = {
   bait_defs: ["none|空钩|🪝|0|0|0|1,1,1,1,1|1||免费", "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|2||万用饵"],
   item_defs: ["feed_basic|普通饲料|🌾|20|打基础|meat=2;spirit=1"],
   location_defs: ["novice|新手村|🏡|1|0|1.00|村口小池塘"],
+  button_defs: "cast.hit|🎣 再来一竿|/钓鱼|primary\ncast.hit|🎒 背包|/钓鱼 背包|default\n" +
+    "# 保留注释\nstory.prompt|{label}|/钓鱼 事件 {n}|default",
+  text_overrides: "",
+  button_layout: "*|3",
   stamina_max: 25,
   multi_cast_max: 15,
   fish_value_mult: 1.0,
@@ -795,7 +1185,7 @@ function FAKE_CONFIG_AFTER() {
 }
 
 async function channelRoundTrip() {
-  console.log("\n[13] 数据通道：真实往返（假 AstrBotPluginPage）");
+  console.log("\n[14] 数据通道：真实往返（假 AstrBotPluginPage）");
   captured.uploads = [];
   captured.probeFailures = 0;
   global.window.AstrBotPluginPage = makeFakeSdk();
@@ -968,12 +1358,194 @@ async function channelRoundTrip() {
     && snapGoldEnv.action === "snapshot_gold" && snapGoldEnv.name === "2026-09-18_1820.json"
     && snapGoldEnv.user_id === "10001" && snapGoldEnv.gold === 6600 && snapGoldEnv.confirm === true,
     "改存档内金币的指令正确（带快照名 + 玩家 + 金币 + confirm）", JSON.stringify(snapGoldEnv));
+
+  /* ---- 💬 回复：scenes 端点读不到时的只读兜底（不白屏、不抛异常） ---- */
+  console.log("  ── 💬 回复：scenes 读不到 -> 只读兜底 ──");
+  check(F.state.replies.loaded === true && F.state.replies.readonly === true,
+    "scenes 读不到 -> 进入只读兜底模式（页面照常渲染）");
+  check(/scenes/.test(F.state.replies.error) && F.state.replies.error.length > 10,
+    "失败原因写进页面状态（给用户看的中文提示）", F.state.replies.error);
+  check(F.state.replies.scenes.length === 2 && F.state.replies.scenes[0].id === "cast.hit" &&
+    F.state.replies.scenes[0].buttons.length === 2,
+    "退回用 config 里的 button_defs 只读展示",
+    F.state.replies.scenes.map(function (s) { return s.id + ":" + s.buttons.length; }).join(" "));
+  const fallbackHtml = F.renderRepliesTab(F.TAB_BY_ID.replies);
+  check(fallbackHtml.indexOf("读不到「回复场景」接口") > 0 && fallbackHtml.indexOf("🔄 重试") > 0,
+    "页面上有中文错误提示 + 重试按钮");
+  check(fallbackHtml.indexOf("只读") > 0 && fallbackHtml.indexOf('data-act="rp:saveCard"') < 0,
+    "兜底视图标明只读（没有「只保存这张」这类改写入侵）");
+  const roSave = await F.saveReplies(null);
+  check(roSave.ok === false && /没有改动/.test(roSave.message),
+    "只读兜底时没有改动 -> 保存直接说「没有改动」", roSave.message);
+  const roDraft = F.replySceneDraft("cast.hit");
+  roDraft.text = "改一改试试";
+  roDraft.textTouched = true;
+  const roSave2 = await F.saveReplies(null);
+  check(roSave2.ok === false && /只读/.test(roSave2.message),
+    "只读模式下保存被拦下并说明原因（不静默失败）", roSave2.message);
+  roDraft.textTouched = false;
   if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
   return Promise.resolve();
 }
 
 /* =============================================================================
-   [14] 收尾
+   [15] 💬 回复：真实的 scenes 往返（假 SDK 提供 scenes 路由）
+   ============================================================================= */
+const FAKE_SCENES = {
+  status: "ok", transport: "plugin-api", scene_total: 3,
+  buttons_per_row_default: 3, buttons_per_row_max: 5,
+  button_styles: [{ value: "default", label: "默认（灰）" }, { value: "primary", label: "主要（蓝）" }],
+  groups: [
+    {
+      id: "cast", label: "🎣 下竿", desc: "抛竿与连钓的所有回复",
+      scenes: [
+        {
+          id: "cast.hit", label: "钓到鱼的结果", desc: "单竿钓上鱼之后那条消息",
+          parent: "cast", parent_label: "cast", source: "config", per_row: 3, dynamic_text: true,
+          default_buttons: [["🎣 再来一竿", "/钓鱼", 1]],
+          buttons: [["🎣 再来一竿", "/钓鱼", 1], ["🎒 背包", "/钓鱼 背包", 1]],
+          text: {
+            template: "🎣 {原文}", placeholders: ["原文", "鱼名"],
+            samples: { "原文": "🎣 🐟 鲤鱼　⚪普通　120 金币", "鱼名": "鲤鱼" },
+            override: "", preview: "🎣 🐟 鲤鱼　⚪普通　120 金币", dynamic: true
+          }
+        },
+        {
+          id: "cast.none", label: "没钓到 / 空钩", desc: "", parent: "cast", parent_label: "cast",
+          source: "none", per_row: 0, dynamic_text: true,
+          default_buttons: [], buttons: [],
+          text: {
+            template: "{原文}", placeholders: ["原文"],
+            samples: { "原文": "💨 这一竿空了" }, override: "",
+            preview: "💨 这一竿空了", dynamic: true
+          }
+        }
+      ]
+    },
+    {
+      id: "story", label: "🎭 随机插曲", desc: "", scenes: [
+        {
+          id: "story.prompt", label: "插曲选项", desc: "", parent: "story", parent_label: "story",
+          source: "default", per_row: 1, dynamic_text: false,
+          default_buttons: [["{label}", "/钓鱼 事件 {n}", 0]],
+          buttons: [["{label}", "/钓鱼 事件 {n}", 0]],
+          text: {
+            template: "🎭 {原文}", placeholders: ["原文", "label", "n"],
+            samples: { "原文": "遇到一只猫" }, override: "",
+            preview: "🎭 遇到一只猫", dynamic: false
+          }
+        }
+      ]
+    }
+  ]
+};
+
+/** 会回 scenes 的假 SDK（其余行为跟 makeFakeSdk 一样）。 */
+function makeScenesSdk() {
+  const sdk = makeFakeSdk();
+  const baseGet = sdk.apiGet;
+  const basePost = sdk.apiPost;
+  sdk.apiGet = function (endpoint) {
+    if (String(endpoint) === "scenes") {
+      capture("get", endpoint, null);
+      return Promise.resolve(JSON.parse(JSON.stringify(FAKE_SCENES)));
+    }
+    return baseGet.call(sdk, endpoint);
+  };
+  sdk.apiPost = function (endpoint, body) {
+    if (body && body.action === "save_replies") {
+      capture("post", endpoint, JSON.stringify(body));
+      return Promise.resolve({
+        status: "ok", ok: true,
+        message: "已写回回复配置（" + Object.keys(body.payload || {}).join(" / ") + "）",
+        editor_status: JSON.stringify(FAKE_STATUS)
+      });
+    }
+    return basePost.call(sdk, endpoint, body);
+  };
+  return sdk;
+}
+
+async function repliesOnline() {
+  console.log("\n[15] 💬 回复：真实的 scenes 往返（假 SDK）");
+  captured.calls = [];
+  captured.phase = "before";
+  global.window.AstrBotPluginPage = makeScenesSdk();
+  const fresh = loadPageFromSource(makeScenesSdk());
+  const F = fresh.T;
+  for (let i = 0; i < 60 && (F.state.loading || !F.state.replies.loaded); i++) {
+    await new Promise(function (r) { setTimeout(r, 25); });
+  }
+  check(F.ENV.online === true && F.state.replies.readonly === false && !F.state.replies.error,
+    "scenes 通了 -> 在线可编辑（不走只读兜底）", F.state.replies.error || "无错误");
+  check(F.state.replies.scenes.length === 3 && F.state.replies.groups.length === 2,
+    "读到 3 个场景 / 2 组", F.state.replies.scenes.map(function (s) { return s.id; }).join(","));
+  check(F.state.replies.scenes[1].id === "cast.none" && F.state.replies.scenes[1].source === "none" &&
+    F.state.replies.scenes[1].buttons.length === 0,
+    "没有按钮的场景读得到（来源=无按钮）");
+  check(F.state.replies.scenes[2].source === "default" &&
+    F.state.replies.scenes[2].buttons[0].style === "default" &&
+    F.state.replies.scenes[2].buttons[0].data === "/钓鱼 事件 {n}",
+    "出厂默认按钮的原样保留（数字样式 0 -> default）");
+  check(F.state.replies.perRowDefault === 3 && F.state.replies.perRowMax === 5 &&
+    F.state.replies.buttonStyles.length === 2 &&
+    F.state.replies.buttonStyles[0].value === "default",
+    "全局每行几个 / 上限 / 样式选项都来自接口",
+    F.state.replies.perRowDefault + " / " + F.state.replies.perRowMax);
+  check(F.state.replies.original.button_defs.indexOf("# 保留注释") >= 0 &&
+    F.state.replies.originalLayout["*"] === 3,
+    "原始 button_defs / button_layout 都读到了（判断「哪几项变了」的基线）");
+  check(F.templateWarnings("🎭 {原文} {label} {n}", F.state.replies.scenes[2]).length === 0 &&
+    F.unknownPlaceholders("🎭 {原文} {label} {n}",
+      F.state.replies.scenes[2].text.samples,
+      F.state.replies.scenes[2].text.placeholders).length === 0,
+    "{label}/{n} 这种「声明了但没示例值」的占位符不算写坏（插件认）");
+
+  const tabHtml = F.renderRepliesTab(F.TAB_BY_ID.replies);
+  check(tabHtml.indexOf("cast.hit") > 0 && tabHtml.indexOf("🎣 再来一竿") > 0 &&
+    tabHtml.indexOf("rp-bubble") > 0, "卡片 + 常驻预览都渲染出来了");
+  check(tabHtml.indexOf("来源：无按钮") > 0 && tabHtml.indexOf("来源：默认") > 0,
+    "来源徽标按接口给的 source 显示");
+  check(tabHtml.indexOf("群聊：点按钮只会把指令填进输入框") > 0, "预览里写清了群聊点按钮的行为");
+
+  const d = F.replySceneDraft("cast.hit");
+  d.text = "🐟 {原文}";
+  d.textTouched = true;
+  const dn = F.replySceneDraft("cast.none");
+  dn.buttons.push({ label: "🎣 再来一竿", data: "/钓鱼", style: "primary" });
+  dn.buttonsTouched = true;
+  dn.perRow = "2";
+  dn.layoutTouched = true;
+
+  captured.calls = [];
+  const res = await F.saveReplies(null);
+  check(res.ok === true, "保存成功（插件同步写回）", res.message);
+  const post = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  check(!!post && post.endpoint === "config", "save_replies POST 到插件注册的 config", post && post.endpoint);
+  const env = JSON.parse(post.body);
+  check(env.action === "save_replies", "指令名是 save_replies", env.action);
+  check(Object.keys(env.payload).sort().join(",") === "button_defs,button_layout,text_overrides",
+    "三份文本都在 payload 里一起提交", Object.keys(env.payload).join(","));
+  check(env.payload.button_defs.indexOf("# 保留注释") >= 0, "注释行原样保留");
+  check(env.payload.button_defs.indexOf("cast.none|🎣 再来一竿|/钓鱼|primary") > 0,
+    "新加的按钮写进了 button_defs", env.payload.button_defs);
+  check(env.payload.button_defs.indexOf("story.prompt|{label}|/钓鱼 事件 {n}|default") > 0,
+    "没改过的场景一个字都不动");
+  check(env.payload.text_overrides === "cast.hit|🐟 {原文}",
+    "text_overrides 只有改过的那条", env.payload.text_overrides);
+  check(env.payload.button_layout.indexOf("*|3") === 0 &&
+    env.payload.button_layout.indexOf("cast.none|2") > 0,
+    "button_layout = 全局默认 + 这个场景的覆盖行", env.payload.button_layout);
+  check(F.replyDirtyCount() === 0 && Object.keys(F.replyPayloadFor(null)).length === 0,
+    "保存成功后草稿清零、再点保存不会重复提交");
+  check((F.state.data.buttons || []).some(function (r) { return r.scene === "cast.none"; }),
+    "原始按钮表被同步成保存后的内容");
+  if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [16] 收尾
    ============================================================================= */
 function finish() {
   console.log("\n" + "=".repeat(62));

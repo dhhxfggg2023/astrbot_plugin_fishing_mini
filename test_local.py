@@ -4653,9 +4653,10 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 99,
+        len(_schema) == 101,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
-        f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count）",
+        f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
+        f" + v1.12.0 的 text_overrides/button_layout）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -4663,7 +4664,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 96, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 98, f"其余 {len(_hidden)} 项全部 invisible")
     check(
         all(k in mod.DEFAULTS for k in _visible),
         "3 条救生索都在 DEFAULTS 里（不是凭空写的）",
@@ -5071,6 +5072,59 @@ async def main():
     check("装饰 2/3" in view, f"水族馆视图显示装饰位 -> {[x for x in view.splitlines() if '装饰' in x][:1]}")
     check("剩" in view, "视图显示剩余小时")
 
+    # --- 装饰的「数字参数 = 一次摆几个」（v1.12.0：以前数字被当成喂鱼的栏位号）---
+    p3 = await plugin_r._load_player("96003")
+    p3["items"]["coral_deco"] = 3
+    await plugin_r._save_player(p3)
+    ev3 = FakeEvent("96003")
+    out = text_of(await cmd(plugin_r, ev3, "用", "珊瑚造景", "3"))
+    p3 = await plugin_r._load_player("96003")
+    check(len(p3["decorations"]) == 3, f"一次摆 3 个 -> {len(p3['decorations'])} 个装饰位")
+    check(mod._safe_int(p3["items"].get("coral_deco"), 0, 0) == 0, "一次摆 3 个消耗 3 个道具")
+    check("×3" in out, f"回复写明摆了几个 -> {out.splitlines()[0] if out else ''}")
+    check(
+        all(d["expire_ts"] - d["ts"] == 72 * 3600 for d in p3["decorations"]),
+        "每个装饰各记自己的到期时间",
+    )
+    check(
+        abs(mod.CALC._decoration_bonus(p3) - 0.60) < 1e-9,
+        f"一次摆 3 个 → 产出 +60% -> {mod.CALC._decoration_bonus(p3):.2f}",
+    )
+
+    # 装饰位不够：只摆能摆的，并如实提示
+    p4 = await plugin_r._load_player("96004")
+    p4["items"]["coral_deco"] = 5
+    p4["decorations"] = [
+        {"id": "coral_deco", "rate": 0.2, "ts": int(time.time()),
+         "expire_ts": int(time.time()) + 3600}
+        for _ in range(2)
+    ]
+    await plugin_r._save_player(p4)
+    out = text_of(await cmd(plugin_r, FakeEvent("96004"), "用", "珊瑚造景", "3"))
+    p4 = await plugin_r._load_player("96004")
+    check(len(p4["decorations"]) == 3, f"装饰位不够时只摆满为止 -> {len(p4['decorations'])}/3")
+    check("装饰位只剩 1 个" in out, f"提示装饰位不够 -> {out.splitlines()[1] if len(out.splitlines()) > 1 else out}")
+    check(mod._safe_int(p4["items"].get("coral_deco"), 0, 0) == 4, "只消耗实际摆上去的数量")
+
+    # 库存不够：同理
+    p5 = await plugin_r._load_player("96005")
+    p5["items"]["coral_deco"] = 2
+    await plugin_r._save_player(p5)
+    out = text_of(await cmd(plugin_r, FakeEvent("96005"), "用", "珊瑚造景", "5"))
+    p5 = await plugin_r._load_player("96005")
+    check(len(p5["decorations"]) == 2, f"库存不够时摆完库存 -> {len(p5['decorations'])}")
+    check("库存只有 2 个" in out, "提示库存不够")
+    check(mod._safe_int(p5["items"].get("coral_deco"), 0, 0) == 0, "库存清空")
+
+    # 不带数字 = 只摆 1 个（装饰没有「全缸」语义）
+    p6 = await plugin_r._load_player("96006")
+    p6["items"]["coral_deco"] = 3
+    await plugin_r._save_player(p6)
+    await cmd(plugin_r, FakeEvent("96006"), "用", "珊瑚造景", "")
+    p6 = await plugin_r._load_player("96006")
+    check(len(p6["decorations"]) == 1, f"不带数字只摆 1 个 -> {len(p6['decorations'])}")
+    check(mod._safe_int(p6["items"].get("coral_deco"), 0, 0) == 2, "不带数字只消耗 1 个")
+
     # --- 装饰加成真的作用到「领收益」上 ---
     plugin_d2 = make_plugin()
     ev_d2 = FakeEvent("96002")
@@ -5131,7 +5185,9 @@ async def main():
     )
 
     # --- 锦鲤玉佩：持续 20 竿 ---
-    plugin_j = make_plugin()
+    # 关掉彩蛋：彩蛋里的「吉利的鱼鳞」会给 luck_charges，随机命中会让下面
+    # 「手气一竿即清」的断言偶发变红（这是测试的确定性要求，不是玩法改动）
+    plugin_j = make_plugin(dict(_CFG, easter_egg_chance=0.0))
     ev_j = FakeEvent("96004")
     p4 = await plugin_j._load_player("96004")
     p4["items"]["lucky_jade"] = 1
@@ -5179,6 +5235,316 @@ async def main():
         len(broken["decorations"]) == 1,
         f"装饰列表里的坏条目被丢掉 -> {broken['decorations']}",
     )
+
+    # =====================================================================
+    print("\n[18] 回复场景全覆盖：每条回复都能配按钮/文案 + 护栏断言（v1.12.0）")
+
+    # --- (1) 场景表 ↔ 文案表 一一对应：少一个就说明有人新增回复忘了登记 ---
+    _scene_ids = tuple(mod.SCENE_IDS)
+    _text_keys = tuple(mod.TEXT_LIB.TEXT_KEYS)
+    check(len(set(_scene_ids)) == len(_scene_ids), f"场景 id 不重复（{len(_scene_ids)} 个）")
+    check(
+        len(_scene_ids) >= 150,
+        f"回复场景表覆盖全部出口 -> {len(_scene_ids)} 个场景",
+    )
+    check(
+        sorted(_scene_ids) == sorted(_text_keys),
+        "场景键 ↔ 文案键一一对应（缺："
+        + "、".join(sorted(set(_scene_ids) - set(_text_keys)))
+        + "；多："
+        + "、".join(sorted(set(_text_keys) - set(_scene_ids)))
+        + "）",
+    )
+    check(
+        sorted(mod.SCENE_GROUP) == sorted(_scene_ids),
+        "每个场景都登记了分组与说明",
+    )
+
+    # --- (2) 场景表自身的一致性 ---
+    _group_ids = {row[0] for row in mod.SCENE_GROUPS}
+    _bad_group = [s for s in _scene_ids if mod.SCENE_GROUP.get(s) not in _group_ids]
+    check(not _bad_group, f"场景分组都在 SCENE_GROUPS 里（坏的：{_bad_group}）")
+    _bad_parent = [
+        s for s, p in mod.SCENE_PARENT.items() if p not in set(_scene_ids) or p == s
+    ]
+    check(not _bad_parent, f"继承关系合法（坏的：{_bad_parent}）")
+    check(
+        sorted(mod.SCENE_PARENT)
+        == sorted(["cast.hit", "cast.junk", "help.page", "location.list", "bag.list",
+                   "pull.hook", "story.prompt"]),
+        f"只有从老场景拆出来的 7 个场景有父场景 -> {sorted(mod.SCENE_PARENT)}",
+    )
+    _per_row_bad = [s for s in _scene_ids if not 1 <= mod.CALC.scene_rows_per_row(s) <= 5]
+    check(not _per_row_bad, f"每行个数都在 1~5（坏的：{_per_row_bad}）")
+
+    # --- (3) 护栏：代码里的回复出口必须登记场景 ---
+    # 规则：`event.plain_result(...)` 只能出现在 self._say / _say_msg / _push 这些
+    # 统一出口里（或 _interactions.py 内部的几个通用出口函数）。以后有人写
+    # `yield event.plain_result("新文案")` 就会在这里变红，提示他登记场景键。
+    import ast as _ast
+
+    _GENERIC_OUTLETS = {
+        ("_interactions.py", "_say"),
+        ("_interactions.py", "_say_msg"),
+        ("_interactions.py", "_push"),
+        ("_interactions.py", "_reply"),
+    }
+    _bare_exits: list[str] = []
+    _used_scenes: set[str] = set()
+    _unknown_scene_args: list[str] = []
+    _wrapped_count = 0
+    _say_count = 0
+    for _fname in ("main.py", "_engine.py", "_commands.py", "_interactions.py"):
+        _src = (PLUGIN_DIR / _fname).read_text(encoding="utf-8")
+        _tree = _ast.parse(_src)
+        _wrapped = set()
+        # 收集「被统一出口包起来」的 plain_result，并记下用到的场景
+        for _node in _ast.walk(_tree):
+            if not isinstance(_node, _ast.Call):
+                continue
+            _attr = _node.func.attr if isinstance(_node.func, _ast.Attribute) else ""
+            if _attr in ("_say", "_say_msg", "_push") and len(_node.args) >= 3:
+                _scene_node = _node.args[2] if _attr == "_say" else _node.args[1]
+                if isinstance(_scene_node, _ast.Constant) and isinstance(_scene_node.value, str):
+                    _used_scenes.add(_scene_node.value)
+                    if _attr == "_say":
+                        _say_count += 1
+                    if _scene_node.value not in set(_scene_ids):
+                        _unknown_scene_args.append(f"{_fname}:{_node.lineno} -> {_scene_node.value}")
+                _msg_node = _node.args[1] if _attr == "_say" else _node.args[2]
+                for _sub in _ast.walk(_msg_node):
+                    if (
+                        isinstance(_sub, _ast.Call)
+                        and getattr(_sub.func, "attr", "") == "plain_result"
+                    ):
+                        _wrapped.add(id(_sub))
+                        _wrapped_count += 1
+        # 其余 plain_result 必须落在通用出口函数里
+        def _walk_exits(node, func):
+            for child in _ast.iter_child_nodes(node):
+                if isinstance(child, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+                    _walk_exits(child, child.name)
+                    continue
+                if (
+                    isinstance(child, _ast.Call)
+                    and getattr(child.func, "attr", "") == "plain_result"
+                    and id(child) not in _wrapped
+                    and (_fname, func) not in _GENERIC_OUTLETS
+                ):
+                    _bare_exits.append(f"{_fname}:{child.lineno}（{func}）")
+                _walk_exits(child, func)
+
+        _walk_exits(_tree, "<module>")
+        # 场景表里每个场景都得在代码里出现过（否则就是没人用的死场景）
+    check(
+        not _bare_exits,
+        "所有回复都走了带场景的统一出口（未登记："
+        + "、".join(_bare_exits[:5])
+        + "）",
+    )
+    check(
+        not _unknown_scene_args,
+        "代码里用到的场景键都在场景表里（野键：" + "、".join(_unknown_scene_args[:5]) + "）",
+    )
+    check(_wrapped_count + _say_count >= 145, f"带场景的回复出口 {_wrapped_count + _say_count} 处（≥145）")
+    _src_all = "".join(
+        (PLUGIN_DIR / f).read_text(encoding="utf-8")
+        for f in ("main.py", "_engine.py", "_commands.py", "_interactions.py", "_views.py")
+    )
+    _dead = [s for s in _scene_ids if f'"{s}"' not in _src_all]
+    check(not _dead, f"没有「登记了却没人用」的死场景（{_dead}）")
+
+    # --- (4) 等价性：默认配置下的按钮与历史版本逐字一致 ---
+    _p0 = make_plugin()
+    _builtin = mod._builtin_buttons()
+    check(
+        sorted(_builtin) == ["bag", "cast", "location", "pull", "story"],
+        f"内置按钮仍然只有老 5 个场景 -> {sorted(_builtin)}",
+    )
+    check(
+        [len(_builtin[k]) for k in ("cast", "pull", "bag", "location", "story")]
+        == [5, 1, 3, 3, 1],
+        "内置按钮数量与 v1.11 一致（cast 5 / pull 1 / bag 3 / location 3 / story 1）",
+    )
+    check(
+        [len(r) for r in _p0._scene_rows("cast.hit")] == [3, 2],
+        f"cast.hit 继承 cast -> 3+2 两行 {[len(r) for r in _p0._scene_rows('cast.hit')]}",
+    )
+    check(
+        [b["render_data"]["label"] for b in _p0._scene_rows("cast.hit")[0]]
+        == ["再来一竿", "看背包", "今日"],
+        "cast.hit 的按钮文案与顺序不变",
+    )
+    check(
+        _p0._scene_rows("help.page") == _p0._scene_rows("cast.hit"),
+        "帮助页继承 cast（老行为：帮助也带那 5 个按钮）",
+    )
+    check([len(r) for r in _p0._scene_rows("pull.hook")] == [1], "pull.hook 1 个按钮")
+    check(
+        _p0._scene_rows("pull.hook")[0][0]["action"]["data"] == "/钓鱼 拉",
+        "pull.hook 仍然是「拉线！」按钮",
+    )
+    check([len(r) for r in _p0._scene_rows("bag.list")] == [3], "bag.list 一行 3 个")
+    check([len(r) for r in _p0._scene_rows("location.list")] == [3], "location.list 一行 3 个")
+    for _scene in ("cast.miss_none", "cast.miss_bait", "shop.list", "bag.empty",
+                   "item.used", "system.error", "stamina.view", "broadcast.catch"):
+        check(_p0._scene_rows(_scene) == [], f"{_scene} 默认没有按钮（新增场景不动老行为）")
+    _event_def = {"choices": [{"label": "打开看看"}, {"label": "走开"}]}
+    _erows = _p0._event_rows(_event_def)
+    check(
+        len(_erows) == 2
+        and _erows[0][0]["render_data"]["label"] == "打开看看"
+        and _erows[1][0]["action"]["data"] == "/钓鱼 事件 2",
+        "story 模板仍然按选项逐个生成按钮",
+    )
+    check(mod.CALC.scene_rows_per_row("story") == 1, "story 仍默认每行 1 个")
+    check(mod.CALC.scene_rows_per_row("cast.hit") == 3, "其它场景仍默认每行 3 个")
+
+    # --- (5) 站长只配了新场景 / 父子各配了一半 ---
+    _p1 = make_plugin(dict(_CFG, button_defs="bag.list|卖光光|/钓鱼 卖光光|default"))
+    check(
+        [len(r) for r in _p1._scene_rows("cast.hit")] == [3, 2],
+        "只配了新场景时，老场景仍然回退内置（升级不丢按钮）",
+    )
+    check([len(r) for r in _p1._scene_rows("bag.list")] == [1], "新场景用站长配的按钮")
+    check(_p1._scene_rows("bag.empty") == [], "没配的兄弟场景没有按钮")
+    _p2 = make_plugin(
+        dict(
+            _CFG,
+            button_defs="cast|A|/钓鱼|default\ncast.hit|B|/钓鱼 背包|primary",
+        )
+    )
+    check(
+        _p2._scene_rows("cast.hit")[0][0]["render_data"]["label"] == "B",
+        "子场景优先用自己的按钮",
+    )
+    check(
+        _p2._scene_rows("cast.junk")[0][0]["render_data"]["label"] == "A",
+        "其它子场景仍继承父场景",
+    )
+    _p3 = make_plugin(
+        dict(
+            _CFG,
+            button_defs=(
+                "cast|A|/钓鱼|default\ncast|B|/钓鱼 背包|default\ncast|C|/钓鱼 今日|default"
+            ),
+            button_layout="*|2",
+        )
+    )
+    check(
+        [len(r) for r in _p3._scene_rows("cast.hit")] == [2, 1],
+        f"button_layout 生效（每行 2 个）-> {[len(r) for r in _p3._scene_rows('cast.hit')]}",
+    )
+    check(mod.CALC.scene_rows_per_row("story") == 1, "button_layout 没写 story 时保持 1")
+    make_plugin()  # 恢复默认排布（BUTTONS_PER_ROW 是模块级共享的）
+
+    # --- (6) button_layout 解析 ---
+    check(mod.CALC._parse_button_layout("*|2") == {"*": 2}, "解析全局每行个数")
+    check(
+        mod.CALC._parse_button_layout("cast|0\ncast|9\ncast|3") == {"cast": 3},
+        "越界（0 / 9）的排布行被跳过",
+    )
+    check(mod.CALC._parse_button_layout("不存在的场景|2") == {}, "未知场景的排布行被跳过")
+    check(mod.CALC._parse_button_layout("cast") == {}, "缺竖线的排布行被跳过")
+
+    # --- (7) 文案覆盖（text_overrides）语义 ---
+    _lib = mod.TEXT_LIB
+    check(_lib.render_scene("cast.miss_none", "原文", None, {}) == "原文", "没写覆盖就用原文")
+    check(
+        _lib.render_scene("cast.miss_none", "原文", None, {"cast.miss_none": "🪝 {原文}！"})
+        == "🪝 原文！",
+        "静态场景可以整段改写（{原文} 是原句）",
+    )
+    check(
+        _lib.render_scene("cast.miss_none", "原文", None, {"cast.miss_none": "🪝 静悄悄"})
+        == "🪝 静悄悄",
+        "静态场景不写 {原文} 就是完全替换",
+    )
+    check(
+        _lib.render_scene("bag.list", "背包内容", None, {"bag.list": "只有这句"}) == "背包内容",
+        "动态文本的模板丢了 {原文} → 当没写（不会把列表整段吃掉）",
+    )
+    check(
+        _lib.render_scene("bag.list", "背包内容", None, {"bag.list": "{原文}　✅"})
+        == "背包内容　✅",
+        "动态文本带 {原文} → 正常渲染",
+    )
+    check(_lib.parse_overrides("不存在的场景|x") == {}, "未知场景键被跳过")
+    check(_lib.parse_overrides("cast.hit|{没有这个占位符}") == {}, "未登记的占位符被跳过")
+    check(
+        _lib.parse_overrides("cast.hit|🎣 恭喜 {鱼名}") == {"cast.hit": "🎣 恭喜 {鱼名}"},
+        "登记过的占位符可用",
+    )
+    check(
+        _lib.parse_overrides("# 注释行\n\nitem.empty|🎒 一件道具都没有")
+        == {"item.empty": "🎒 一件道具都没有"},
+        "注释行与空行不算坏行",
+    )
+    check(
+        _lib.render_scene("cast.hit", "原文", {"鱼名": "鲤鱼"}, {"cast.hit": "🎣 恭喜 {鱼名}"})
+        == "🎣 恭喜 鲤鱼",
+        "占位符代入",
+    )
+    check(
+        _lib.render_scene("cast.hit", "原文", None, {"cast.hit": "🎣 恭喜 {鱼名}"}) == "原文",
+        "占位符没取到值 → 回退原文（玩家不会看到 {鱼名}）",
+    )
+
+    # --- (8) 文案覆盖真的作用到玩家看到的回复上（含父场景继承）---
+    _p4 = make_plugin(
+        dict(_CFG, text_overrides="item.empty|🎒 一件道具都没有\ncast|🎣 {原文}")
+    )
+    _ev4 = FakeEvent("97001")
+    _out = text_of(await cmd(_p4, _ev4, "用", ""))
+    check("一件道具都没有" in _out, f"静态场景整段替换生效 -> {_out}")
+    _out2 = text_of(await cmd(_p4, _ev4, "帮助", ""))
+    check(_out2.startswith("🎣 🎣 帮助"), f"父场景覆盖作用到子场景 -> {_out2.splitlines()[0]}")
+    _p5 = make_plugin()
+    _out3 = text_of(await cmd(_p5, FakeEvent("97002"), "用", ""))
+    check("没有道具" in _out3, f"默认配置下文案一字未变 -> {_out3}")
+
+    # --- (9) 编辑器「💬 回复」页的数据（scenes 端点）---
+    _scene_payload = _p5._editor_scene_payload()
+    check(_scene_payload["status"] == "ok", "scenes 端点返回 ok")
+    check(_scene_payload["scene_total"] == len(_scene_ids), "scenes 端点覆盖全部场景")
+    check(
+        sum(len(g["scenes"]) for g in _scene_payload["groups"]) == len(_scene_ids),
+        "分组里没有丢场景",
+    )
+    _flat = {s["id"]: s for g in _scene_payload["groups"] for s in g["scenes"]}
+    check(set(_flat) == set(_scene_ids), "卡片 id 与场景表一致")
+    _hit = _flat["cast.hit"]
+    check(_hit["source"] == "inherit" and _hit["parent"] == "cast", "卡片标出「继承自 cast」")
+    check(_hit["text"]["template"] and _hit["text"]["preview"], "卡片带文案模板与预览")
+    check("鱼名" in _hit["text"]["placeholders"], "卡片带占位符清单")
+    check(_flat["bag.empty"]["source"] == "none", "默认没按钮的场景标成 none")
+    check(_flat["bag.empty"]["buttons"] == [], "默认没按钮的场景按钮为空")
+    check(
+        _flat["cast.hit"]["default_buttons"] and _flat["cast.hit"]["buttons"],
+        "卡片同时给出出厂默认与生效按钮",
+    )
+
+    # --- (10) 保存通道：三份文本一起提交 ---
+    _p6 = make_plugin()
+    _ok, _msg = await _p6._editor_save_replies(
+        {
+            "button_defs": "cast.hit|再来一竿|/钓鱼|default",
+            "text_overrides": "cast.miss_none|🪝 静悄悄",
+            "button_layout": "*|2",
+        }
+    )
+    check(_ok, f"save_replies 成功 -> {_msg}")
+    check(
+        mod.BUTTONS.get("cast.hit") == [("再来一竿", "/钓鱼", 1)],
+        "保存后按钮立刻生效",
+    )
+    check(mod.TEXT_OVERRIDES.get("cast.miss_none") == "🪝 静悄悄", "保存后文案立刻生效")
+    check(mod.CALC.scene_rows_per_row("cast.hit") == 2, "保存后排布立刻生效")
+    _ok2, _msg2 = await _p6._editor_save_replies({"不认识的键": "x"})
+    check(not _ok2, f"save_replies 拒绝不认识的键 -> {_msg2}")
+    _ok3, _msg3 = await _p6._editor_save_replies({})
+    check(not _ok3, f"save_replies 拒绝空请求 -> {_msg3}")
+    make_plugin()  # 恢复默认（模块级共享表）
 
     # =====================================================================
     print("\n" + "=" * 62)

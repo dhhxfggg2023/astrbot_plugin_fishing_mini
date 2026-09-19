@@ -116,6 +116,8 @@ COMMANDS: Any = _load_sibling("_commands", "astrbot_fishing_commands")
 INTERACTIONS: Any = _load_sibling("_interactions", "astrbot_fishing_interactions")
 ENGINE: Any = _load_sibling("_engine", "astrbot_fishing_engine")
 EDITOR_BRIDGE: Any = _load_sibling("_editor_bridge", "astrbot_fishing_editor_bridge")
+#: 文案表（text_overrides 的默认值与渲染规则）；加载失败时下面的兜底会顶上
+TEXT_LIB: Any = _load_sibling("_texts", "astrbot_fishing_texts")
 
 
 class _MissingMixin:
@@ -237,6 +239,10 @@ DEFAULTS: dict[str, Any] = {
     "easter_egg_defs": "",
     # 回复里那些按钮（QQ 官方内联键盘）：一行一个按钮，场景|文案|指令|样式
     "button_defs": "",
+    # 每条回复的文案模板：一行一条，场景|模板（{原文} = 代码原本拼好的那段文字）
+    "text_overrides": "",
+    # 按钮排布：一行一条，场景|每行几个（* = 其余所有场景的默认值）
+    "button_layout": "",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
     # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
@@ -422,6 +428,9 @@ DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
         # 命令别名 / 自定义命令也是「站长自己写的内容」，同样不许被升级覆盖
         "command_aliases",
         "custom_commands",
+        # 按钮排布与回复文案同理：站长改过的排版/文案不能被升级重置
+        "button_layout",
+        "text_overrides",
     }
 )
 
@@ -763,6 +772,45 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
                 rows[scene] = list(items)
     BUTTONS.clear()
     BUTTONS.update(rows)
+
+
+def _apply_button_layout(cfg: dict[str, Any]) -> None:
+    """用配置接管按钮排布（每行几个）；留空或写坏就用内置默认。
+
+    dict 是**就地更新**的：拆分出去的 _views.py 引用的是同一个对象，
+    所以改完立刻生效，不需要重新注入全局。
+    """
+    layout = dict(CALC.BUILTIN_BUTTONS_PER_ROW)
+    raw = _cfg_str(cfg, "button_layout").strip()
+    if raw:
+        parsed = CALC._parse_button_layout(
+            raw, warn=lambda msg: _tunable_warn("button_layout", msg)
+        )
+        for scene, number in parsed.items():
+            layout[scene] = number
+    BUTTONS_PER_ROW.clear()
+    BUTTONS_PER_ROW.update(layout)
+
+
+#: 生效的文案覆盖（场景 id -> 模板）；就地更新，_views.py 看到的是同一份
+TEXT_OVERRIDES: dict[str, str] = {}
+
+
+def _apply_text_overrides(cfg: dict[str, Any]) -> None:
+    """用配置接管回复文案（text_overrides）：``场景|模板``。
+
+    留空 = 全部用插件内置文案（所以默认行为与没这个功能时逐字一致）；
+    未知场景 / 占位符写错的行由解析器跳过并告警，绝不会把 ``{占位符}`` 发给玩家。
+    """
+    TEXT_OVERRIDES.clear()
+    raw = _cfg_str(cfg, "text_overrides").strip()
+    if not raw or TEXT_LIB is None:
+        if raw and TEXT_LIB is None:
+            _tunable_warn("text_overrides", "文案模块 _texts.py 未加载，已全部用内置文案")
+        return
+    TEXT_OVERRIDES.update(
+        TEXT_LIB.parse_overrides(raw, warn=lambda msg: _tunable_warn("text_overrides", msg))
+    )
 
 
 def _command_reserved_words(cfg: dict[str, Any]) -> set[str]:
@@ -1841,10 +1889,11 @@ def safe_handler(func):
         except Exception as e:
             logger.error(f"钓鱼插件 {func.__name__} 异常: {e}", exc_info=True)
             try:
-                yield event.plain_result(
-                    "😵 操作没有成功（已记录到日志）\n"
-                    "　可以再试一次；如果一直失败，请把这条消息发给管理员"
-                )
+                async for _r in self._say_msg(event, "system.error", event.plain_result(
+                        "😵 操作没有成功（已记录到日志）\n"
+                        "　可以再试一次；如果一直失败，请把这条消息发给管理员"
+                    )):
+                    yield _r
             except Exception:
                 logger.error("回复失败消息时再次异常，已忽略。", exc_info=True)
 
@@ -2029,6 +2078,8 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
     _apply_fish_defs(cfg)
     _apply_content_tables(cfg)
     _apply_button_defs(cfg)
+    _apply_button_layout(cfg)
+    _apply_text_overrides(cfg)
     _apply_command_config(cfg)
 
 
@@ -3367,7 +3418,8 @@ class FishingPlugin(
             lines.append("🎉 " + "；".join(new_ach))
         if not saved:
             lines.append("⚠️ 保存失败")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "sell.result", event.plain_result("\n".join(lines))):
+            yield _r
 
 
 
@@ -3566,19 +3618,21 @@ class FishingPlugin(
         # ---- 拉线（互动）----
         if key in PULL_WORDS:
             if self._resolve_pull(event):
-                yield event.plain_result("✅ 收到，正在收线…")
+                async for _r in self._say_msg(event, "pull.confirm", event.plain_result("✅ 收到，正在收线…")):
+                    yield _r
                 return
-            yield event.plain_result(
-                "🤔 现在没有鱼咬钩。直接发 /钓鱼 下竿，"
-                "等提示「咬钩了」再发 /钓鱼 拉"
-            )
+            async for _r in self._say_msg(event, "pull.none", event.plain_result(
+                    "🤔 现在没有鱼咬钩。直接发 /钓鱼 下竿，"
+                    "等提示「咬钩了」再发 /钓鱼 拉"
+                )):
+                yield _r
             return
 
         # ---- 帮助（分页：/钓鱼 帮助 2）----
         if key in ("帮助", "help", "?", "？", "菜单", "指令"):
             help_text = self._help_text(_to_int(after_sub, 1))
             first = True
-            async for reply in self._say(event, help_text, self._cast_rows()):
+            async for reply in self._say(event, help_text, "help.page"):
                 yield self._with_at(event, reply) if first else reply
                 first = False
             return
@@ -3599,7 +3653,8 @@ class FishingPlugin(
         if a1.isdigit():
             times = _to_int(a1, 0)
             if times <= 0:
-                yield event.plain_result("🤔 连钓次数要写正整数，例如 /钓鱼 10")
+                async for _r in self._say_msg(event, "cast.multi_bad_times", event.plain_result("🤔 连钓次数要写正整数，例如 /钓鱼 10")):
+                    yield _r
                 return
             if times == 1:
                 first = True
@@ -3693,11 +3748,12 @@ class FishingPlugin(
                 async for result in self._run_custom_command(event, user_id, key):
                     yield result
                 return
-            yield event.plain_result(
-                f"🤔 不认识「{a1}」这个用法\n"
-                f"　发 /钓鱼 帮助 1 看全部指令（共 7 页）\n"
-                f"　最常用：/钓鱼 下竿 ｜ /钓鱼 背包 ｜ /钓鱼 卖 ｜ /钓鱼 今日"
-            )
+            async for _r in self._say_msg(event, "help.unknown", event.plain_result(
+                    f"🤔 不认识「{a1}」这个用法\n"
+                    f"　发 /钓鱼 帮助 1 看全部指令（共 7 页）\n"
+                    f"　最常用：/钓鱼 下竿 ｜ /钓鱼 背包 ｜ /钓鱼 卖 ｜ /钓鱼 今日"
+                )):
+                yield _r
             return
         first = True
         async for result in handler:
@@ -3748,7 +3804,8 @@ class FishingPlugin(
         if action == "发送":
             player = await self._load_player(user_id)
             text = CALC._fill_custom_text(body, self._custom_text_values(player, event))
-            yield self._with_at(event, event.plain_result(text))
+            async for _r in self._say_msg(event, "custom.send", event.plain_result(text)):
+                yield self._with_at(event, _r)
             return
         if action != "执行":
             return
@@ -4063,7 +4120,10 @@ ORDER_ACTIONS = ("提交", "交")
 SIBLING_MODULES: tuple[Any, ...] = tuple(
     module
     for module in (
-        CALC, DATA_ADMIN, VIEWS, COMMANDS, INTERACTIONS, ENGINE, EDITOR_BRIDGE
+        CALC, DATA_ADMIN, VIEWS, COMMANDS, INTERACTIONS, ENGINE, EDITOR_BRIDGE,
+        # 存档模块也接进注入链：它内部的告警/调试日志要靠注入进来的 logger
+        # 才能进 AstrBot 日志（拿不到就静默降级，不影响存档功能）
+        BACKUP_MODULE,
     )
     if module is not None
 )

@@ -735,10 +735,75 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   to { opacity: 0; transform: translateX(14px); }
 }
 
+/* ====================== 💬 回复（场景卡片 + 常驻预览 + 按钮总览） ====================== */
+.rp-split { display: flex; gap: var(--sp-4); align-items: flex-start; }
+.rp-main { flex: 1 1 auto; min-width: 0; }
+.rp-side { flex: 0 0 330px; width: 330px; position: sticky; top: 104px; }
+
+.rp-group { margin-bottom: var(--sp-4); }
+.rp-group-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; padding: 0 2px var(--sp-2); }
+.rp-group-head h3 { margin: 0; font-size: 13px; font-weight: 620; }
+.rp-group-head .hint { font-size: 11.5px; color: var(--muted); }
+
+.rp-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); margin-bottom: var(--sp-3); overflow: hidden; }
+.rp-card.is-focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.rp-card-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; padding: 8px 10px; background: var(--sunken); border-bottom: 1px solid var(--border-soft); cursor: pointer; }
+.rp-card-head:hover { background: var(--hover); }
+.rp-card-title { font-weight: 620; }
+.rp-card-id { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.rp-card-desc { font-size: 11.5px; color: var(--muted); }
+.rp-card-head .spacer { margin-left: auto; }
+.rp-body { padding: 10px; display: flex; flex-direction: column; gap: 9px; }
+.rp-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rp-row > .rp-label { flex: none; min-width: 58px; font-size: 11.5px; color: var(--muted); font-weight: 550; }
+.rp-text { width: 100%; min-height: 52px; resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--fg); background: var(--sunken); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 8px; }
+.rp-text:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+.rp-text.is-bad { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.rp-ph { cursor: pointer; font-family: var(--mono); font-size: 11.5px; border: 1px dashed var(--border); border-radius: 999px; padding: 1px 8px; background: var(--sunken); color: var(--muted); }
+.rp-ph:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.rp-ph.is-bad { border-color: var(--danger); color: var(--danger); }
+.rp-btns-edit { display: flex; flex-direction: column; gap: 6px; }
+.rp-btn-edit { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 5px 6px; background: var(--sunken); }
+.rp-btn-edit .cell-input { background: var(--card); }
+.rp-btn-edit .idx { font-family: var(--mono); font-size: 11px; color: var(--faint); width: 16px; text-align: right; }
+.rp-btn-edit .arrow-to { color: var(--faint); font-size: 11.5px; }
+.rp-move { display: flex; gap: 2px; margin-left: auto; }
+.rp-src { flex: none; font-size: 11px; border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
+.rp-src.src-config { color: var(--success); border-color: var(--success); background: var(--success-soft); }
+.rp-src.src-inherit { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
+.rp-src.src-default { color: var(--purple); border-color: var(--purple); background: var(--purple-soft); }
+.rp-src.src-none { border-style: dashed; }
+.rp-warn { font-size: 11.5px; border-radius: var(--radius-sm); padding: 5px 8px; }
+.rp-warn.is-warn { color: var(--warn); background: var(--warn-soft); border: 1px solid var(--warn); }
+.rp-warn.is-danger { color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger); }
+.rp-warn ul { margin: 0; padding-left: 16px; }
+
+/* 预览：QQ 消息气泡的样子 */
+.rp-phone { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--sunken); padding: 10px; }
+.rp-phone-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint); margin-bottom: 8px; flex-wrap: wrap; }
+.rp-phone-head .spacer { margin-left: auto; }
+.rp-msg { display: flex; gap: 8px; }
+.rp-avatar { flex: none; width: 30px; height: 30px; border-radius: 8px; background: var(--primary-soft); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 15px; }
+.rp-msg-body { min-width: 0; flex: 1 1 auto; }
+.rp-nick { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.rp-bubble { background: var(--card); border: 1px solid var(--border-soft); border-radius: 3px 10px 10px 10px; padding: 7px 9px; font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.rp-bubble .rp-sampled { background: var(--primary-soft); color: var(--primary); border-radius: 3px; padding: 0 2px; }
+.rp-bubble .rp-decl { background: var(--sunken); color: var(--muted); border: 1px dashed var(--border); border-radius: 3px; padding: 0 2px; font-family: var(--mono); font-size: 11.5px; }
+.rp-bubble .rp-ph-bad { background: var(--danger-soft); color: var(--danger); border: 1px dashed var(--danger); border-radius: 3px; padding: 0 2px; font-family: var(--mono); font-size: 11.5px; }
+.rp-grid { display: grid; gap: 6px; margin-top: 7px; }
+.rp-btn { text-align: center; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 4px; font-size: 11.5px; background: var(--card); color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-btn.is-primary { color: var(--primary); border-color: var(--primary); background: var(--primary-soft); }
+.rp-btn.is-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.rp-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.rp-mode { display: flex; gap: 6px; align-items: center; }
+.rp-table-wrap { overflow: auto; max-height: calc(100vh - 400px); }
+
 /* ============================== 响应式 ============================== */
 @media (max-width: 1100px) {
   .toolbar { gap: 6px; }
   .field.search { min-width: 190px; }
+  .rp-split { flex-direction: column; }
+  .rp-side { flex: 1 1 auto; width: 100%; position: static; }
 }
 @media (max-width: 820px) {
   .content { padding: var(--sp-3) var(--sp-3) 72px; }
@@ -1920,7 +1985,116 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       { id: "s2", kind: "daily",  note: "每日自动存档",       time: "2026-09-18 04:00", players: 35, size: "130 KB" },
       { id: "s3", kind: "auto",   note: "按时存档（6 小时）", time: "2026-09-17 22:00", players: 34, size: "128 KB" },
       { id: "s4", kind: "daily",  note: "",                   time: "2026-09-17 04:00", players: 33, size: "126 KB" }
-    ]
+    ],
+    /* 离线预览用的「回复场景」（在线时由插件的 GET scenes 接口给真实数据） */
+    replies: {
+      status: "ok",
+      transport: "demo",
+      buttons_per_row_default: 3,
+      buttons_per_row_max: 5,
+      button_styles: [
+        { value: "default", label: "默认（灰）" },
+        { value: "primary", label: "主要（蓝）" }
+      ],
+      groups: [
+        {
+          id: "cast",
+          label: "🎣 下竿",
+          desc: "抛竿与连钓的所有回复",
+          scenes: [
+            {
+              id: "cast.hit", label: "钓到鱼的结果",
+              desc: "单竿钓上鱼之后那条消息", parent: "cast", parent_label: "cast",
+              source: "config", per_row: 3, dynamic_text: true,
+              default_buttons: [["🎣 再来一竿", "/钓鱼", 1], ["🎒 背包", "/钓鱼 背包", 1]],
+              buttons: [["🎣 再来一竿", "/钓鱼", 1], ["🎒 背包", "/钓鱼 背包", 1]],
+              text: {
+                template: "🎣 {原文}", placeholders: ["原文", "鱼名"],
+                samples: { "原文": "🎣 🐟 鲤鱼　⚪普通　120 金币", "鱼名": "鲤鱼" },
+                override: "", preview: "🎣 🐟 鲤鱼　⚪普通　120 金币", dynamic: true
+              }
+            },
+            {
+              id: "cast.miss", label: "没钓到 / 空钩",
+              desc: "空竿、脱钩、体力不够时的回复", parent: "cast", parent_label: "cast",
+              source: "inherit", per_row: 3, dynamic_text: true,
+              default_buttons: [],
+              buttons: [["🎣 再来一竿", "/钓鱼", 1], ["🎒 背包", "/钓鱼 背包", 1]],
+              text: {
+                template: "{原文}", placeholders: ["原文"],
+                samples: { "原文": "💨 这一竿空了，什么也没钓上来" },
+                override: "", preview: "💨 这一竿空了，什么也没钓上来", dynamic: true
+              }
+            },
+            {
+              id: "cast.done", label: "连钓结束的总结",
+              desc: "一次多条钓完之后的那条总结", parent: "cast", parent_label: "cast",
+              source: "none", per_row: 0, dynamic_text: true,
+              default_buttons: [],
+              buttons: [],
+              text: {
+                template: "{原文}", placeholders: ["原文"],
+                samples: { "原文": "🎣 连钓 5 竿：鲤鱼 ×2、鲫鱼 ×1" },
+                override: "", preview: "🎣 连钓 5 竿：鲤鱼 ×2、鲫鱼 ×1", dynamic: true
+              }
+            }
+          ]
+        },
+        {
+          id: "pull",
+          label: "🐟 咬钩与拉线",
+          desc: "鱼咬钩、拉线成功或跑掉时的回复",
+          scenes: [
+            {
+              id: "pull.hook", label: "鱼咬钩了",
+              desc: "提示玩家点「拉线」的那条消息", parent: "pull", parent_label: "pull",
+              source: "config", per_row: 1, dynamic_text: true,
+              default_buttons: [["拉线！", "/钓鱼 拉", 1]],
+              buttons: [["拉线！", "/钓鱼 拉", 1]],
+              text: {
+                template: "{原文}", placeholders: ["原文"],
+                samples: { "原文": "❗ 有鱼咬钩了！快拉线" },
+                override: "", preview: "❗ 有鱼咬钩了！快拉线", dynamic: true
+              }
+            },
+            {
+              id: "pull.escape", label: "鱼跑掉了",
+              desc: "拉线失败或超过窗口时间", parent: "pull", parent_label: "pull",
+              source: "default", per_row: 0, dynamic_text: true,
+              default_buttons: [["再试一次", "/钓鱼", 0]],
+              buttons: [["再试一次", "/钓鱼", 0]],
+              text: {
+                template: "{原文}", placeholders: ["原文"],
+                samples: { "原文": "💔 手一滑，鱼跑了" },
+                override: "", preview: "💔 手一滑，鱼跑了", dynamic: true
+              }
+            }
+          ]
+        },
+        {
+          id: "story",
+          label: "🎭 随机插曲",
+          desc: "随机事件里让玩家选一个选项",
+          scenes: [
+            {
+              id: "story.prompt", label: "插曲选项",
+              desc: "代码给每个选项生成一个按钮（文案里可写 {label} 和 {n}）",
+              parent: "story", parent_label: "story",
+              source: "default", per_row: 1, dynamic_text: false,
+              default_buttons: [["{label}", "/钓鱼 事件 {n}", 0]],
+              buttons: [["{label}", "/钓鱼 事件 {n}", 0]],
+              text: {
+                template: "🎭 你遇到了一只蹲在岸边的小猫，要怎么做？",
+                placeholders: [],
+                samples: {},
+                override: "🎭 岸边有只小猫盯着你的鱼篓……",
+                preview: "🎭 岸边有只小猫盯着你的鱼篓……", dynamic: false
+              }
+            }
+          ]
+        }
+      ]
+    }
   };
 
   var KIND_LABEL = { manual: "手动", daily: "每日", auto: "按时" };
@@ -2128,10 +2302,17 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       }
     },
     {
+      id: "replies",
+      label: "💬 回复",
+      title: "回复场景",
+      kind: "replies",
+      hint: "按指令分组的场景卡片：改文案、加减按钮、看预览"
+    },
+    {
       id: "buttons",
-      label: "🔘 按钮",
+      label: "🔘 按钮（原始文本）",
       title: "回复按钮",
-      hint: "QQ 官方机器人回复下面那排按钮：场景写 cast/pull/bag/location/story，点击后发送必须写本插件指令（/钓鱼 …），样式写 default（灰）或 primary（蓝）",
+      hint: "button_defs 的原始文本编辑入口（场景写 cast/pull/bag/location/story，点击后发送必须写本插件指令（/钓鱼 …），样式写 default（灰）或 primary（蓝））",
       keyFields: ["scene", "label", "data"],
       sortOptions: [["default", "默认顺序"], ["scene", "按场景"], ["labelAsc", "按文案"]],
       columns: [
@@ -2143,7 +2324,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       makeRow: function () {
         return { scene: "cast", label: "新按钮", data: "/钓鱼 帮助", style: "default" };
       },
-      notice: "场景：cast=抛竿结果的下方、pull=咬钩要拉线时、bag=背包、location=钓点、story=随机插曲（文案里可写 {label} 和 {n}）。同一场景的多行就是多个按钮，顺序即显示顺序；每行摆几个由代码决定（cast/bag/location/pull 每行 3 个，story 每个选项一行）。文案超过 10 字会被 QQ 截断；写了插件不认识的指令（死按钮）会被自动跳过。"
+      notice: "这是 button_defs 的原始文本入口（日常改用「💬 回复」页的场景卡片更省事：那里有预览、占位符提示和按钮排序）。场景：cast=抛竿结果的下方、pull=咬钩要拉线时、bag=背包、location=钓点、story=随机插曲（文案里可写 {label} 和 {n}）。同一场景的多行就是多个按钮，顺序即显示顺序；每行摆几个由代码决定（cast/bag/location/pull 每行 3 个，story 每个选项一行）。文案超过 10 字会被 QQ 截断；写了插件不认识的指令（死按钮）会被自动跳过。"
     },
     {
       id: "numbers",
@@ -2256,7 +2437,38 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     snapshotPlayers: [],        // 该存档里的玩家
     snapshotPlayersError: "",
     goldEdit: null,             // { user_id, value } 正在改的金币
-    goldConfirm: null           // { user_id, value, mode } 二次确认中
+    goldConfirm: null,          // { user_id, value, mode } 二次确认中
+    /* ---- 💬 回复页（场景卡片 / 按钮总览 / 预览）---- */
+    replies: {
+      loaded: false,            // 场景列表是否已经拿到（拿到之前显示骨架/错误）
+      loading: false,
+      error: "",                // 读 scenes 失败的原因（页面上显示 + 重试按钮）
+      readonly: false,          // 端点半读不到时退回「config 里的 button_defs 只读展示」
+      source: "",               // demo / plugin-api / config
+      groups: [],               // [{id,label,desc,scenes:[...]}]
+      scenes: [],               // 拍平后的场景列表（卡片与总览都按这个顺序）
+      perRowDefault: 3,         // 插件给的全局「每行几个」
+      perRowMax: 5,             // 插件给的一行上限（buttons_per_row_max）
+      buttonStyles: [],         // [{value,label}] 样式下拉的选项（全局属性）
+      defaultStyle: "default",  // 新加按钮用的默认样式（全局属性）
+      view: "cards",            // cards = 场景卡片 / overview = 按钮总览
+      focus: "",                // 当前聚焦的场景（预览面板跟着它）
+      previewOpen: true,        // 预览面板是否展开（常驻 + 可折叠）
+      chatMode: "group",        // 预览的群聊 / 单聊
+      query: "",                // 卡片视图的搜索词（154 个场景不筛一下没法用）
+      collapsed: {},            // 分组 id -> true（收起）
+      drafts: {},               // 场景 id -> { text, buttons, perRow, textTouched, buttonsTouched, layoutTouched }
+      sel: {},                  // 按钮总览里勾选的行（key = 场景#序号）
+      batch: null,              // 总览里的批量操作：style / prefix / delete
+      batchValue: "",
+      layoutAllDraft: "",       // 全局每行几个的草稿
+      layoutAllTouched: false,
+      original: { button_defs: "", text_overrides: "", button_layout: "" },
+      originalLines: [],        // 原始 button_defs 的行（合并时原样保留）
+      originalOverrides: {},    // 原始 text_overrides（解析后）
+      originalLayout: {},       // 原始 button_layout（解析后）
+      sceneRow: {}              // 插件给每个场景的 per_row（只用于显示兜底，不写回配置）
+    }
   };
 
   /* ===========================================================================
@@ -2370,6 +2582,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       if (t.kind) return;   // 存档页 / 玩家页不是「表格类」标签，不参与未保存统计
       n += diffTab(t.id).count;
     });
+    n += replyDirtyCount();  // 💬 回复页的草稿（文案 / 按钮 / 每行几个）
     return n;
   }
 
@@ -2572,6 +2785,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         var t0 = g.tabs[0];
         if (t0.kind === "snapshots") { n = (state.snapshots || []).length; }
         else if (t0.kind === "players") { n = (state.playersList || []).length; }
+        else if (t0.kind === "replies") { n = (state.replies.scenes || []).length; d = { count: replyDirtyCount() }; }
         else { d = diffTab(t0.id); n = d.total; }
       }
       var activeId = g.tabs.length > 1 ? g.tabs[0].id : g.tabs[0].id;
@@ -3144,6 +3358,1295 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   }
 
   /* ===========================================================================
+     10c. 💬 回复：场景卡片 / 按钮总览 / 常驻预览
+
+     数据来自插件注册的 GET「scenes」接口：它把所有「回复场景」按指令分组列出来，
+     每个场景带文案模板（占位符 + 示例值）、当前生效的按钮、出厂默认按钮、
+     按钮来源（config / inherit / default / none）与每行几个。
+
+     站长改的东西最终写回三份「一行一条、竖线分隔」的配置文本：
+       button_defs     场景|按钮文案|点击后发送|样式
+       text_overrides  场景|文案模板
+       button_layout   场景|每行几个（* 是全局默认）
+     所以这一节的模型是「原始文本 + 草稿」：改的时候只动草稿，
+     保存时按「跟原文比真的变了没有」只提交变化的那几项（绝不把没改的项写空）。
+
+     这一节前半部分是**不碰 DOM 的纯函数**（测试直接 eval 它们），
+     后半部分才是渲染、事件与请求。
+     =========================================================================== */
+
+  /** 保存回复配置时用到的三个配置键（顺序即提交顺序） */
+  var REPLY_KEYS = ["button_defs", "text_overrides", "button_layout"];
+  /** button_layout 里的「全局默认」行：*|3 */
+  var REPLY_LAYOUT_ALL = "*";
+  /** QQ 官方按钮一行最多 5 个 */
+  var REPLY_ROW_MAX = 5;
+  var REPLY_SOURCE_LABEL = { config: "配置", inherit: "继承", default: "默认", none: "无按钮" };
+  /** 旧按钮表里的场景名（只用于兜底展示时给个中文名） */
+  var REPLY_SCENE_LABEL = {
+    cast: "抛竿结果", pull: "咬钩拉线", bag: "背包", location: "钓点", story: "随机插曲"
+  };
+  var REPLY_DEMO_SAMPLE = "……";
+
+  /** 每行几个按钮：1~max 的整数，其它一律算「没设置」（返回 fallback）。 */
+  function clampPerRow(v, fallback, max) {
+    var top = Number(max);
+    if (!isFinite(top) || top < 1) top = REPLY_ROW_MAX;
+    var n = Number(v);
+    if (!isFinite(n) || Math.floor(n) !== n || n < 1 || n > top) {
+      return fallback === undefined ? 0 : fallback;
+    }
+    return n;
+  }
+
+  /** 插件回来的样式可能是 1/0 这样的数字标记，也可能是 default/primary 字符串。 */
+  function normalizeButtonStyle(v) {
+    var s = toText(v).trim();
+    if (s === "") return "default";
+    if (/^\d+$/.test(s)) {
+      var n = Number(s);
+      if (n === 0) return "default";
+      if (n === 1) return "primary";
+    }
+    var low = s.toLowerCase();
+    if (BUTTON_STYLE_ALIASES.indexOf(low) >= 0) {
+      return (low === "primary" || low === "主要" || low === "蓝" || low === "blue") ? "primary" : "default";
+    }
+    return low;   // 其它（例如 2~255 的官方颜色号）原样留着
+  }
+
+  /** 插件回来的按钮可能是 ["文案","指令",1]，也可能是 {label,data,style}。 */
+  function normalizeReplyButton(raw) {
+    var label = "", data = "", style = "default";
+    if (Array.isArray(raw)) {
+      label = toText(raw[0]);
+      data = toText(raw[1]);
+      style = normalizeButtonStyle(raw[2]);
+    } else if (raw && typeof raw === "object") {
+      label = toText(raw.label);
+      data = toText(raw.data !== undefined ? raw.data : raw.command);
+      style = normalizeButtonStyle(raw.style);
+    } else {
+      label = toText(raw);
+    }
+    return { label: label.trim(), data: data.trim(), style: style };
+  }
+
+  /** GET scenes 里的一个场景 -> 页面内部模型（字段一律补齐，后面就不用到处判空）。 */
+  function normalizeReplyScene(raw, group) {
+    var r = raw && typeof raw === "object" ? raw : {};
+    var t = r.text && typeof r.text === "object" ? r.text : {};
+    var samples = {};
+    var rawSamples = t.samples && typeof t.samples === "object" ? t.samples : {};
+    Object.keys(rawSamples).forEach(function (k) { samples[k] = toText(rawSamples[k]); });
+    var places = Array.isArray(t.placeholders)
+      ? t.placeholders.map(function (x) { return toText(x); }).filter(Boolean)
+      : Object.keys(samples);
+    var source = toText(r.source).trim().toLowerCase();
+    var id = toText(r.id).trim().toLowerCase();
+    return {
+      id: id,
+      label: toText(r.label) || id,
+      desc: toText(r.desc),
+      parent: toText(r.parent).trim().toLowerCase(),
+      parent_label: toText(r.parent_label) || toText(r.parent),
+      source: REPLY_SOURCE_LABEL[source] ? source : "none",
+      per_row: clampPerRow(r.per_row, 0, REPLY_ROW_MAX),
+      dynamic_text: !!r.dynamic_text,
+      default_buttons: (Array.isArray(r.default_buttons) ? r.default_buttons : []).map(normalizeReplyButton),
+      buttons: (Array.isArray(r.buttons) ? r.buttons : []).map(normalizeReplyButton),
+      text: {
+        template: toText(t.template),
+        placeholders: places,
+        samples: samples,
+        override: toText(t.override),
+        preview: toText(t.preview),
+        dynamic: t.dynamic === undefined ? !!r.dynamic_text : !!t.dynamic
+      },
+      group_id: group ? group.id : "",
+      group_label: group ? group.label : "",
+      group_desc: group ? group.desc : ""
+    };
+  }
+
+  /** GET scenes 的整个响应 -> {groups, scenes, perRowDefault, buttonStyles}。 */
+  function normalizeReplyPayload(res) {
+    var r = res && typeof res === "object" ? res : {};
+    var groups = (Array.isArray(r.groups) ? r.groups : []).map(function (g, gi) {
+      var gg = {
+        id: toText(g && g.id) || ("g" + (gi + 1)),
+        label: toText(g && g.label) || toText(g && g.id) || ("第 " + (gi + 1) + " 组"),
+        desc: toText(g && g.desc),
+        scenes: []
+      };
+      gg.scenes = (Array.isArray(g && g.scenes) ? g.scenes : []).map(function (s) {
+        return normalizeReplyScene(s, gg);
+      });
+      return gg;
+    });
+    var styles = (Array.isArray(r.button_styles) ? r.button_styles : []).map(function (s) {
+      return {
+        value: toText(s && s.value),
+        label: toText(s && s.label) || toText(s && s.value) || "默认（灰）"
+      };
+    });
+    if (!styles.length) {
+      styles = [{ value: "default", label: "默认（灰）" }, { value: "primary", label: "主要（蓝）" }];
+    }
+    var scenes = [];
+    groups.forEach(function (g) { g.scenes.forEach(function (s) { scenes.push(s); }); });
+    return {
+      transport: toText(r.transport),
+      perRowDefault: clampPerRow(r.buttons_per_row_default, 3) || 3,
+      perRowMax: clampPerRow(r.buttons_per_row_max, REPLY_ROW_MAX) || REPLY_ROW_MAX,
+      buttonStyles: styles,
+      groups: groups,
+      scenes: scenes
+    };
+  }
+
+  /** 「场景|值」这样的一行（只在第一个竖线处切，值里可以再出现竖线）。 */
+  function replyKVLine(line) {
+    var s = toText(line);
+    var at = s.indexOf(SEP);
+    if (at < 0) return null;
+    var key = s.slice(0, at).trim();
+    if (!key) return null;
+    return { key: key, value: s.slice(at + 1).trim() };
+  }
+
+  /** 按给定顺序把 {键:值} 排成 [键,值] 列表（未知的键排在后面）。 */
+  function serializeReplyLines(map, order) {
+    var out = [];
+    var seen = {};
+    (order || []).forEach(function (k) {
+      if (Object.prototype.hasOwnProperty.call(map, k) && !seen[k]) {
+        seen[k] = 1;
+        out.push([k, map[k]]);
+      }
+    });
+    Object.keys(map || {}).forEach(function (k) {
+      if (!seen[k]) { seen[k] = 1; out.push([k, map[k]]); }
+    });
+    return out;
+  }
+
+  /* ---- text_overrides：一行一条「场景|文案模板」 ---- */
+  function parseTextOverrides(raw) {
+    var out = {};
+    toText(raw).split("\n").forEach(function (raw2) {
+      var s = toText(raw2).trim();
+      if (!s || s.charAt(0) === "#") return;
+      var kv = replyKVLine(s);
+      if (!kv) return;
+      out[kv.key.toLowerCase()] = kv.value;
+    });
+    return out;
+  }
+  function serializeTextOverrides(map, order) {
+    return serializeReplyLines(map || {}, order)
+      .filter(function (kv) { return toText(kv[1]).trim() !== ""; })
+      .map(function (kv) { return cell(kv[0]) + SEP + cell(kv[1]); })
+      .join("\n");
+  }
+
+  /* ---- button_layout：一行一条「场景|每行几个」，* 是全局默认 ---- */
+  function parseButtonLayout(raw, max) {
+    var out = {};
+    toText(raw).split("\n").forEach(function (raw2) {
+      var s = toText(raw2).trim();
+      if (!s || s.charAt(0) === "#") return;
+      var kv = replyKVLine(s);
+      if (!kv) return;
+      var n = clampPerRow(kv.value, 0, max);
+      if (!n) return;
+      out[kv.key === REPLY_LAYOUT_ALL ? REPLY_LAYOUT_ALL : kv.key.toLowerCase()] = n;
+    });
+    return out;
+  }
+  function serializeButtonLayout(map, order, max) {
+    var out = [];
+    var all = clampPerRow((map || {})[REPLY_LAYOUT_ALL], 0, max);
+    if (all) out.push(REPLY_LAYOUT_ALL + SEP + all);
+    serializeReplyLines(map || {}, order).forEach(function (kv) {
+      if (kv[0] === REPLY_LAYOUT_ALL) return;
+      var n = clampPerRow(kv[1], 0, max);
+      if (n) out.push(cell(kv[0]) + SEP + n);
+    });
+    return out.join("\n");
+  }
+
+  /**
+   * 把「用户改过的场景」合并回原始 button_defs 文本：
+   *  - 没改过的行**原样保留**（注释、老格式、别的场景都不动，避免误伤）
+   *  - 改过的场景：整段替换成草稿里的按钮（空数组 = 这个场景不再有自己的按钮）
+   *  - 原来没有的场景：追加到末尾
+   */
+  function mergeButtonDefs(originalLines, edits) {
+    var edited = edits || {};
+    var out = [];
+    var done = {};
+    (originalLines || []).forEach(function (line) {
+      var s = toText(line).trim();
+      var scene = "";
+      if (s && s.charAt(0) !== "#") {
+        var row = null;
+        try { row = TABLE_DEFS.buttons.parse(s); } catch (e) { row = null; }
+        if (row) scene = row.scene;
+      }
+      if (scene && Object.prototype.hasOwnProperty.call(edited, scene)) {
+        if (done[scene]) return;      // 同一场景的后续行跟着一起被替换掉
+        done[scene] = 1;
+        (edited[scene] || []).forEach(function (r) {
+          out.push(TABLE_DEFS.buttons.serialize(r));
+        });
+        return;
+      }
+      out.push(toText(line));
+    });
+    Object.keys(edited).forEach(function (scene) {
+      if (done[scene]) return;
+      (edited[scene] || []).forEach(function (r) {
+        out.push(TABLE_DEFS.buttons.serialize(r));
+      });
+    });
+    return out;
+  }
+
+  /**
+   * text_overrides 的合并：
+   *  - 没碰过的场景保留原来的覆盖
+   *  - 碰过的场景：非空且跟 template 不同才写；与 template 相同 / 空串 = 删掉这条覆盖
+   */
+  function mergeTextOverrides(originalMap, scenes, drafts) {
+    var out = {};
+    Object.keys(originalMap || {}).forEach(function (k) { out[k] = originalMap[k]; });
+    (scenes || []).forEach(function (s) {
+      if (!Object.prototype.hasOwnProperty.call(drafts || {}, s.id)) return;
+      var v = toText(drafts[s.id]).trim();
+      if (v && v !== toText(s.text && s.text.template)) out[s.id] = v;
+      else delete out[s.id];
+    });
+    return out;
+  }
+
+  /** button_layout 的合并：改了才写，空值 / 非法值 = 删掉这一行。 */
+  function mergeButtonLayout(originalMap, drafts) {
+    var out = {};
+    Object.keys(originalMap || {}).forEach(function (k) { out[k] = originalMap[k]; });
+    Object.keys(drafts || {}).forEach(function (k) {
+      var n = clampPerRow(drafts[k], 0, replyRowMax());
+      if (n) out[k] = n; else delete out[k];
+    });
+    return out;
+  }
+
+  /* ---- 文案模板：占位符替换 / 未知占位符判断 ---- */
+
+  /** 模板里出现的占位符名（按出现顺序去重）。 */
+  function templatePlaceholders(tpl) {
+    var out = [];
+    var re = /\{([^{}]+)\}/g;
+    var s = toText(tpl);
+    var m;
+    while ((m = re.exec(s))) {
+      if (out.indexOf(m[1]) < 0) out.push(m[1]);
+    }
+    return out;
+  }
+
+  /** 模板里「插件不认识」的占位符 —— declared 是场景声明的清单（插件按它校验）。 */
+  function unknownPlaceholders(tpl, samples, declared) {
+    var map = samples || {};
+    var list = Array.isArray(declared) ? declared.map(toText) : [];
+    return templatePlaceholders(tpl).filter(function (n) {
+      if (Object.prototype.hasOwnProperty.call(map, n)) return false;
+      return list.indexOf(n) < 0;
+    });
+  }
+
+  /** 场景声明的占位符 ∪ 有示例值的占位符（"插件认识"的集合）。 */
+  function knownPlaceholderNames(scene) {
+    var t = (scene && scene.text) || {};
+    var out = Array.isArray(t.placeholders) ? t.placeholders.map(toText) : [];
+    Object.keys(t.samples || {}).forEach(function (k) {
+      if (out.indexOf(k) < 0) out.push(k);
+    });
+    return out;
+  }
+
+  /** 用示例值替换已知占位符（没有示例值的保持原样），得到预览用的纯文本。 */
+  function renderTemplateText(tpl, samples) {
+    var map = samples || {};
+    return toText(tpl).replace(/\{([^{}]+)\}/g, function (all, name) {
+      return Object.prototype.hasOwnProperty.call(map, name) ? toText(map[name]) : all;
+    });
+  }
+
+  /**
+   * 预览气泡用的 HTML：
+   *   有示例值的占位符 -> 标蓝显示示例值
+   *   场景声明过、但没有示例值 -> 中性显示 {名字}（插件认它，不算写坏）
+   *   谁都不认识 -> 用醒目标记圈出来（这行会被插件忽略）
+   */
+  function renderTemplateHtml(tpl, samples, declared) {
+    var map = samples || {};
+    var list = Array.isArray(declared) ? declared.map(toText) : [];
+    return toText(tpl).split(/(\{[^{}]+\})/).map(function (piece) {
+      var m = /^\{([^{}]+)\}$/.exec(piece);
+      if (!m) return esc(piece);
+      var name = m[1];
+      if (Object.prototype.hasOwnProperty.call(map, name)) {
+        return '<span class="rp-sampled" title="占位符 {' + esc(name) + '}">' +
+          esc(map[name]) + "</span>";
+      }
+      if (list.indexOf(name) >= 0) {
+        return '<span class="rp-decl" title="占位符 {' + esc(name) +
+          "}：插件认，但这里没有示例值，预览里保持原样\">" + esc(piece) + "</span>";
+      }
+      return '<mark class="rp-ph-bad" title="插件不认识的占位符：{' + esc(name) +
+        '}（不会被替换，这行会被插件忽略）">' + esc(piece) + "</mark>";
+    }).join("");
+  }
+
+  /** 模板体检：哪些占位符不认识、dynamic_text 时代码要的 {原文} 在不在。 */
+  function templateIssues(tpl, samples, dynamicText, declared) {
+    var names = templatePlaceholders(tpl);
+    var unknown = unknownPlaceholders(tpl, samples, declared);
+    var hasOriginal = names.indexOf("原文") >= 0;
+    return {
+      names: names,
+      unknown: unknown,
+      hasOriginal: hasOriginal,
+      missingOriginal: !!dynamicText && !hasOriginal,
+      empty: toText(tpl).trim() === ""
+    };
+  }
+
+  /** 模板体检 -> 中文警告（页面直接显示这几句）。 */
+  function templateWarnings(tpl, scene) {
+    var s = scene && typeof scene === "object" ? scene : {};
+    var samples = (s.text && s.text.samples) || {};
+    var declared = knownPlaceholderNames(s);
+    var issues = templateIssues(tpl, samples, !!s.dynamic_text, declared);
+    var out = [];
+    if (issues.empty) out.push("文案是空的：保存后这条回复会没有内容。");
+    if (issues.unknown.length) {
+      out.push("插件不认识的占位符：" + issues.unknown.join(" / ") +
+        "（不会被替换，这一行覆盖会被插件忽略）。这个场景可以用：" +
+        (declared.join(" / ") || "（没有声明任何占位符）"));
+    }
+    if (issues.missingOriginal) {
+      out.push("这条回复的文字是代码拼出来的，模板里必须保留 {原文}，否则插件会忽略这次覆盖。");
+    }
+    return out;
+  }
+
+  /** 点击占位符：插到光标处（有选中就替换选中的那段）。 */
+  function insertPlaceholder(value, name, start, end) {
+    var s = toText(value);
+    var token = "{" + toText(name) + "}";
+    var a = (start === undefined || start === null || Number(start) < 0)
+      ? s.length : Math.min(Number(start), s.length);
+    var b = (end === undefined || end === null || Number(end) < a)
+      ? a : Math.min(Number(end), s.length);
+    return s.slice(0, a) + token + s.slice(b);
+  }
+
+  /** 批量改指令前缀：把指令的第一段（/钓鱼）换成新的前缀。 */
+  function applyCommandPrefix(data, prefix) {
+    var s = toText(data).trim();
+    var p = toText(prefix).trim();
+    if (!p) return s;
+    var m = /^\/\S+/.exec(s);
+    if (m) return p + s.slice(m[0].length);
+    return s ? (p + " " + s) : p;
+  }
+
+  /** 按钮草稿的校验（场景 id 由 scenes 接口说了算，这里只管文案/指令/样式）。 */
+  function validateReplyButton(row) {
+    var errs = {};
+    var r = row || {};
+    var label = toText(r.label).trim();
+    var data = toText(r.data).trim();
+    var style = toText(r.style).trim();
+    if (!label) errs.label = "按钮文案不能为空";
+    if (!data) errs.data = "要写点击后发送的指令，例如 /钓鱼 背包";
+    else if (data.charAt(0) !== "/") errs.data = "指令要以 / 开头，例如 /钓鱼 背包";
+    if (style && !isButtonStyle(style)) errs.style = "写 default / primary，或 0-255 的数字";
+    return errs;
+  }
+
+  /**
+   * 预览模型：把「这一条回复」在 QQ 里长什么样算成一个纯对象。
+   * 群聊点按钮 = 只把指令填进输入框；单聊点按钮 = 直接发送。
+   */
+  function replyPreviewModel(scene, opts) {
+    var s = scene && typeof scene === "object" ? scene : {};
+    var o = opts || {};
+    var samples = (s.text && s.text.samples) || {};
+    var tpl = o.text === undefined
+      ? (toText(s.text && s.text.override) || toText(s.text && s.text.template))
+      : toText(o.text);
+    var buttons = (Array.isArray(o.buttons) ? o.buttons : (s.buttons || [])).map(normalizeReplyButton);
+    var mode = o.mode === "private" ? "private" : "group";
+    var perRow = clampPerRow(o.perRow, 0) || clampPerRow(o.perRowDefault, 0) ||
+      clampPerRow(s.per_row, 0) || 3;
+    return {
+      sceneId: toText(s.id),
+      sceneLabel: toText(s.label),
+      mode: mode,
+      modeLabel: mode === "group" ? "群聊" : "单聊",
+      chatName: mode === "group" ? "群聊 · 示例群聊" : "单聊 · 钓鱼佬",
+      nick: mode === "group" ? "钓鱼佬" : "机器人",
+      hint: mode === "group"
+        ? "群聊：点按钮只会把指令填进输入框，不会自动发送（还得按一次发送）"
+        : "单聊：点按钮会直接把指令发出去",
+      perRow: perRow,
+      text: renderTemplateText(tpl, samples),
+      textHtml: renderTemplateHtml(tpl, samples, knownPlaceholderNames(s)),
+      buttons: buttons,
+      warnings: templateWarnings(tpl, s)
+    };
+  }
+
+  /** 预览模型 -> HTML（昵称 + 气泡 + 按钮网格 + 群聊/单聊提示）。 */
+  function renderReplyPreview(model) {
+    var m = model || {};
+    var mode = m.mode === "private" ? "private" : "group";
+    var buttons = m.buttons || [];
+    var cols = clampPerRow(m.perRow, 3) || 3;
+    var html = '<div class="rp-phone">';
+    html += '<div class="rp-phone-head">' +
+      "<span>" + (mode === "group" ? "👥" : "👤") + " " + esc(m.modeLabel || (mode === "group" ? "群聊" : "单聊")) + "</span>" +
+      '<span class="faint">' + esc(m.chatName || "") + "</span>" +
+      '<span class="spacer"></span><span class="faint">实时预览</span></div>';
+    html += '<div class="rp-msg"><div class="rp-avatar">🎣</div><div class="rp-msg-body">' +
+      '<div class="rp-nick">' + esc(m.nick || "机器人") + "</div>" +
+      '<div class="rp-bubble">' + (m.textHtml || "") + "</div>";
+    if (buttons.length) {
+      html += '<div class="rp-grid" style="grid-template-columns:repeat(' + cols + ',minmax(0,1fr))">' +
+        buttons.map(function (b) {
+          var bad = Object.keys(validateReplyButton(b)).length > 0;
+          return '<div class="rp-btn' + (b.style === "primary" ? " is-primary" : "") +
+            (bad ? " is-bad" : "") + '" title="' + esc(b.data) + '">' + esc(b.label) + "</div>";
+        }).join("") + "</div>";
+    } else {
+      html += '<div class="rp-hint">这条回复下面没有任何按钮</div>';
+    }
+    html += '<div class="rp-hint">' + esc(m.hint || "") + "</div>";
+    html += "</div></div></div>";
+    return html;
+  }
+
+  /* ---- 场景 / 草稿的取用（改的都先落在 state.replies.drafts 里） ---- */
+  function replySceneById(id) {
+    var list = state.replies.scenes || [];
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].id === id) return list[i];
+    }
+    return null;
+  }
+
+  /** 场景文案的「载入时基线」：有覆盖用覆盖，否则用模板。 */
+  function replyTextBaseline(scene) {
+    return toText(scene && scene.text && scene.text.override) ||
+      toText(scene && scene.text && scene.text.template);
+  }
+
+  function replySceneDraft(id) {
+    var map = state.replies.drafts;
+    if (!map[id]) {
+      var s = replySceneById(id);
+      map[id] = {
+        text: s ? replyTextBaseline(s) : "",
+        buttons: s ? s.buttons.map(function (b) {
+          return { label: b.label, data: b.data, style: b.style };
+        }) : [],
+        perRow: "",
+        textTouched: false,
+        buttonsTouched: false,
+        layoutTouched: false
+      };
+    }
+    return map[id];
+  }
+
+  /** 全局默认「每行几个」：草稿优先，其次配置里的 *，最后插件给的默认值。 */
+  function replyGlobalPerRow() {
+    if (state.replies.layoutAllTouched) {
+      return clampPerRow(state.replies.layoutAllDraft, 0, replyRowMax());
+    }
+    return clampPerRow((state.replies.originalLayout || {})[REPLY_LAYOUT_ALL], 0, replyRowMax());
+  }
+
+  /** 插件说的「一行最多几个」（接口给 buttons_per_row_max，没给就按 5）。 */
+  function replyRowMax() {
+    var n = Number(state.replies.perRowMax);
+    return (isFinite(n) && n >= 1 && n <= 99) ? Math.floor(n) : REPLY_ROW_MAX;
+  }
+
+  /** 某个场景实际用几个一行：场景覆盖 > 全局 > 插件给这个场景的默认 > 兜底 3。 */
+  function replyEffectivePerRow(scene) {
+    var d = scene ? state.replies.drafts[scene.id] : null;
+    var max = replyRowMax();
+    if (d && d.layoutTouched) {
+      var n = clampPerRow(d.perRow, 0, max);
+      if (n) return n;
+    }
+    var own = clampPerRow((state.replies.originalLayout || {})[scene ? scene.id : ""], 0, max);
+    var sceneRow = clampPerRow((state.replies.sceneRow || {})[scene ? scene.id : ""], 0, max);
+    return own || replyGlobalPerRow() || sceneRow || state.replies.perRowDefault || 3;
+  }
+
+  /** 有未保存改动的场景数（文案 / 按钮 / 每行几个 各算一处）。 */
+  function replyDirtyCount() {
+    var n = 0;
+    var drafts = state.replies.drafts || {};
+    Object.keys(drafts).forEach(function (id) {
+      var d = drafts[id];
+      if (d.buttonsTouched) n++;
+      if (d.textTouched) n++;
+      if (d.layoutTouched) n++;
+    });
+    if (state.replies.layoutAllTouched) n++;
+    return n;
+  }
+
+  /** 草稿里填得不完整的按钮（保存时会被跳过，页面上要说清楚）。 */
+  function replyBadButtons(buttons) {
+    return (buttons || []).filter(function (b) {
+      return Object.keys(validateReplyButton(b)).length > 0;
+    });
+  }
+
+  function replySelKey(sceneId, i) { return sceneId + "#" + i; }
+  function replySelCount() {
+    var sel = state.replies.sel || {};
+    return Object.keys(sel).filter(function (k) { return !!sel[k]; }).length;
+  }
+
+  /** 按钮总览的行（跨全部场景，顺序 = 场景顺序 + 按钮顺序）。 */
+  function replyOverviewRows() {
+    var rows = [];
+    (state.replies.scenes || []).forEach(function (s) {
+      replySceneDraft(s.id).buttons.forEach(function (b, i) {
+        rows.push({
+          key: replySelKey(s.id, i), scene_id: s.id, scene_label: s.label,
+          source: s.source, i: i, button: b
+        });
+      });
+    });
+    return rows;
+  }
+
+  /** 场景搜索：id / 名称 / 说明 / 父场景 / 分组都能搜（154 个场景时不然找不着）。 */
+  function replyFilterScenes(scenes, query) {
+    var q = toText(query).trim().toLowerCase();
+    var list = (scenes || []).slice();
+    if (!q) return list;
+    return list.filter(function (s) {
+      return [s.id, s.label, s.desc, s.parent_label, s.group_label]
+        .join(" ").toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
+  /** 卡片视图要显示的分组（按搜索词过滤，空分组不显示）。 */
+  function replyVisibleGroups() {
+    var q = state.replies.query;
+    return (state.replies.groups || []).map(function (g) {
+      return { group: g, scenes: replyFilterScenes(g.scenes, q) };
+    }).filter(function (item) { return item.scenes.length > 0; });
+  }
+
+  /** 这次要提交哪几个配置键（跟着「碰过的场景」走，没碰的绝不写）。 */
+  function replyTouchedKeys(scope) {
+    var keys = {};
+    var drafts = state.replies.drafts || {};
+    Object.keys(drafts).forEach(function (id) {
+      if (scope && id !== scope) return;
+      var d = drafts[id];
+      if (d.buttonsTouched) keys.button_defs = true;
+      if (d.textTouched) keys.text_overrides = true;
+      if (d.layoutTouched) keys.button_layout = true;
+    });
+    if (!scope && state.replies.layoutAllTouched) keys.button_layout = true;
+    return keys;
+  }
+
+  /** 用当前草稿算出三份配置文本（不改任何状态，纯计算）。 */
+  function replyTextsNow() {
+    var r = state.replies;
+    var scenes = r.scenes || [];
+    var order = scenes.map(function (s) { return s.id; });
+    var edits = {};
+    var textDrafts = {};
+    var layoutDrafts = {};
+    scenes.forEach(function (s) {
+      var d = r.drafts[s.id];
+      if (!d) return;
+      if (d.buttonsTouched) {
+        edits[s.id] = d.buttons.filter(function (b) {
+          return toText(b.label).trim() !== "" && toText(b.data).trim() !== "";
+        }).map(function (b) {
+          return { scene: s.id, label: b.label, data: b.data, style: toText(b.style) || "default" };
+        });
+      }
+      if (d.textTouched) textDrafts[s.id] = d.text;
+      if (d.layoutTouched) layoutDrafts[s.id] = d.perRow;
+    });
+    if (r.layoutAllTouched) layoutDrafts[REPLY_LAYOUT_ALL] = r.layoutAllDraft;
+
+    var merged = mergeButtonDefs(r.originalLines || [], edits);
+    var overrides = mergeTextOverrides(r.originalOverrides || {}, scenes, textDrafts);
+    var layout = mergeButtonLayout(r.originalLayout || {}, layoutDrafts);
+    return {
+      texts: {
+        button_defs: merged.join("\n"),
+        text_overrides: serializeTextOverrides(overrides, order),
+        button_layout: serializeButtonLayout(layout, order, replyRowMax())
+      },
+      merged: merged,
+      overrides: overrides,
+      layout: layout
+    };
+  }
+
+  /** 提交用的 payload：只有真的变了的那几项（scope 为空 = 整页保存）。 */
+  function replyPayloadFor(scope) {
+    var keys = replyTouchedKeys(scope);
+    var now = replyTextsNow();
+    var payload = {};
+    REPLY_KEYS.forEach(function (k) {
+      if (keys[k]) payload[k] = now.texts[k];
+    });
+    return payload;
+  }
+
+  /** 把合并后的 button_defs 文本同步进「🔘 按钮（原始文本）」那张表，免得两条写入通道打架。 */
+  function applyButtonsTextToTable(t) {
+    var rows = [];
+    toText(t).split("\n").forEach(function (line) {
+      var s = toText(line).trim();
+      if (!s || s.charAt(0) === "#") return;
+      var row = null;
+      try { row = TABLE_DEFS.buttons.parse(s); } catch (e) { row = null; }
+      if (row) rows.push(row);
+    });
+    state.data.buttons = rows;
+    var map = {};
+    rows.forEach(function (row) {
+      map[rowKey(TAB_BY_ID.buttons, row)] = JSON.stringify(row);
+    });
+    state.originals.buttons = map;
+  }
+
+  /** 保存成功后：把草稿的「已改」标记清掉，并把这次写出去的文本当成新基线。 */
+  function markRepliesSaved(payload) {
+    var r = state.replies;
+    REPLY_KEYS.forEach(function (k) {
+      if (Object.prototype.hasOwnProperty.call(payload || {}, k)) r.original[k] = payload[k];
+    });
+    r.originalLines = toText(r.original.button_defs).split("\n");
+    r.originalOverrides = parseTextOverrides(r.original.text_overrides);
+    r.originalLayout = parseButtonLayout(r.original.button_layout, replyRowMax());
+    Object.keys(r.drafts || {}).forEach(function (id) {
+      var d = r.drafts[id];
+      d.textTouched = false;
+      d.buttonsTouched = false;
+      d.layoutTouched = false;
+      d.perRow = "";
+    });
+    r.layoutAllTouched = false;
+    r.layoutAllDraft = "";
+    applyButtonsTextToTable(r.original.button_defs);
+  }
+
+  /** 端点半读不到时的兜底：拿已有 config 里的 button_defs 拼一份「只读场景」。 */
+  function replyFallbackPayload() {
+    var scenes = [];
+    var byScene = {};
+    (state.data.buttons || []).forEach(function (row) {
+      var sid = toText(row.scene).trim().toLowerCase();
+      if (!sid) return;
+      if (!byScene[sid]) {
+        byScene[sid] = {
+          id: sid,
+          label: REPLY_SCENE_LABEL[sid] || sid,
+          desc: "来自配置文件 button_defs（只读）",
+          parent: "", parent_label: "", source: "config",
+          per_row: 0, dynamic_text: true, default_buttons: [], buttons: [],
+          text: {
+            template: "{原文}", placeholders: ["原文"],
+            samples: { "原文": REPLY_DEMO_SAMPLE },
+            override: "", preview: REPLY_DEMO_SAMPLE, dynamic: true
+          }
+        };
+        scenes.push(byScene[sid]);
+      }
+      byScene[sid].buttons.push({
+        label: row.label, data: row.data, style: normalizeButtonStyle(row.style)
+      });
+    });
+    return normalizeReplyPayload({
+      transport: "config",
+      buttons_per_row_default: 3,
+      groups: [{
+        id: "config",
+        label: "📄 配置里的按钮（只读）",
+        desc: "scenes 接口读不到，就先把 button_defs 里的行列出来",
+        scenes: scenes
+      }]
+    });
+  }
+
+  /** 读回复场景：GET scenes；读不到就用 config 里的 button_defs 只读兜底（绝不白屏）。 */
+  async function loadReplies() {
+    var r = state.replies;
+    r.loading = true;
+    r.error = "";
+    r.readonly = false;
+    r.source = "";
+    r.drafts = {};
+    r.sel = {};
+    r.batch = null;
+    r.batchValue = "";
+    r.focus = "";
+    r.query = "";
+    r.collapsed = {};
+    r.layoutAllTouched = false;
+    r.layoutAllDraft = "";
+    if (state.tab === "replies") render();
+
+    var payload = null;
+    if (!ENV.online) {
+      payload = normalizeReplyPayload(DEMO.replies);
+      r.source = "demo";
+    } else {
+      try {
+        var res = await bridgeRequest("get", "scenes", {});
+        if (!res || typeof res !== "object" || !Array.isArray(res.groups)) {
+          throw new Error("scenes 接口没回 groups（插件端可能还没上线这个路由）");
+        }
+        payload = normalizeReplyPayload(res);
+        r.source = payload.transport || "plugin-api";
+      } catch (e) {
+        r.error = describeError(e, "scenes");
+        payload = replyFallbackPayload();
+        r.source = "config";
+        r.readonly = true;
+      }
+    }
+    r.groups = payload.groups;
+    r.scenes = payload.scenes;
+    r.perRowDefault = payload.perRowDefault;
+    r.perRowMax = payload.perRowMax;
+    r.buttonStyles = payload.buttonStyles;
+    r.defaultStyle = payload.buttonStyles.length
+      ? (payload.buttonStyles[0].value || "default") : "default";
+
+    /* 原始三份文本：保存时用来判断「哪几项真的变了」 */
+    var original = { button_defs: "", text_overrides: "", button_layout: "" };
+    if (ENV.online) {
+      try {
+        var raw = await fetchRawConfig();
+        REPLY_KEYS.forEach(function (k) { original[k] = toText(raw[k]); });
+      } catch (e) { /* 读不到原始文本也不影响看和改，下面的基线用本地表格兜底 */ }
+    }
+    if (!original.button_defs) {
+      original.button_defs = (state.data.buttons || []).map(function (row) {
+        return TABLE_DEFS.buttons.serialize(row);
+      }).join("\n");
+    }
+    r.original = original;
+    r.originalLines = toText(original.button_defs).split("\n");
+    r.originalOverrides = parseTextOverrides(original.text_overrides);
+    r.originalLayout = parseButtonLayout(original.button_layout, replyRowMax());
+    /* 插件 payload 里已经生效的覆盖也并进基线：没改就不会被重写 */
+    r.sceneRow = {};
+    r.scenes.forEach(function (s) {
+      if (s.text.override && !r.originalOverrides[s.id]) r.originalOverrides[s.id] = s.text.override;
+      /* 每个场景「每行几个」只用于显示兜底，不写回配置（没改就不该多出配置行） */
+      r.sceneRow[s.id] = clampPerRow(s.per_row, 0, replyRowMax());
+    });
+
+    r.focus = r.scenes.length ? r.scenes[0].id : "";
+    r.loaded = true;
+    r.loading = false;
+    render();
+  }
+
+  /**
+   * 保存回复配置：POST config {action:"save_replies", payload:{...}}。
+   * payload 里只放真的改过的键；scope 非空 = 只保存某一张卡片。
+   */
+  async function saveReplies(scope) {
+    var payload = replyPayloadFor(scope);
+    if (!Object.keys(payload).length) {
+      return { ok: false, empty: true, message: "这张卡片没有改动，不用保存" };
+    }
+    if (!ENV.online) {
+      return { ok: false, message: "离线预览：不会真正保存回复配置" };
+    }
+    if (state.replies.readonly) {
+      return { ok: false, message: "场景接口读不到，现在是只读模式（先点「↻ 重读场景」）" };
+    }
+    try {
+      var res = await bridgeRequest("post", "config", { action: "save_replies", payload: payload });
+      if (res && typeof res === "object" && typeof res.editor_status === "string") {
+        try {
+          var fresh = parseEditorStatus({ editor_status: res.editor_status });
+          if (fresh) { pendingStatus = fresh; lastStatus = fresh; }
+        } catch (e) { /* 状态解析失败不影响「已保存」这个结论 */ }
+      }
+      var bad = res && typeof res === "object" && (res.ok === false || res.status === "error");
+      if (bad) {
+        return {
+          ok: false,
+          message: toText(res.message) || "插件没有接受这次保存",
+          detail: res
+        };
+      }
+      var wrote = REPLY_KEYS.filter(function (k) {
+        return Object.prototype.hasOwnProperty.call(payload, k);
+      }).join(" / ");
+      markRepliesSaved(payload);
+      return {
+        ok: true,
+        message: toText(res && res.message) ||
+          ("已写回 " + wrote + "（" + Object.keys(payload).length + " 项）"),
+        wrote: wrote,
+        detail: res
+      };
+    } catch (e) {
+      return { ok: false, message: describeError(e, "config") };
+    }
+  }
+
+  /* ---- 渲染：场景卡片 / 按钮总览 / 常驻预览 ---- */
+  function replyWarnHtml(warnings, danger) {
+    if (!warnings || !warnings.length) return "";
+    return '<div class="rp-warn ' + (danger ? "is-danger" : "is-warn") + '"><ul>' +
+      warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") + "</ul></div>";
+  }
+
+  /** 占位符标签：点一下就插到光标处。 */
+  function renderReplyPlaceholderChips(scene, tpl) {
+    var samples = (scene.text && scene.text.samples) || {};
+    var declared = (scene.text && scene.text.placeholders) || [];
+    var names = knownPlaceholderNames(scene);
+    unknownPlaceholders(tpl, samples, declared).forEach(function (n) {
+      if (names.indexOf(n) < 0) names.push(n);
+    });
+    if (!names.length) return '<span class="hint faint">这个场景没有可用占位符</span>';
+    return names.map(function (n) {
+      var hasSample = Object.prototype.hasOwnProperty.call(samples, n);
+      var known = declared.indexOf(n) >= 0 || hasSample;
+      var title = hasSample
+        ? "点一下插到光标处；示例值：" + toText(samples[n])
+        : (known ? "点一下插到光标处；插件认这个占位符，但接口没给示例值"
+                 : "插件不认识这个占位符（这一行覆盖会被忽略）");
+      return '<span class="rp-ph' + (known ? "" : " is-bad") + '" data-act="rp:ph" data-scene="' +
+        esc(scene.id) + '" data-name="' + esc(n) + '" title="' + esc(title) + '">' +
+        esc("{" + n + "}") + "</span>";
+    }).join(" ");
+  }
+
+  function replyStyleOptions(current) {
+    var list = (state.replies.buttonStyles || []).slice();
+    var cur = toText(current);
+    if (!list.some(function (s) { return s.value === cur; })) {
+      list.push({ value: cur, label: cur === "" ? "默认(灰)" : cur });
+    }
+    return list.map(function (s) {
+      return '<option value="' + esc(s.value) + '"' + (s.value === cur ? " selected" : "") +
+        ">" + esc(s.label) + "</option>";
+    }).join("");
+  }
+
+  function replySourceHint(scene) {
+    var src = scene.source;
+    if (src === "config") return "这个场景的按钮目前来自配置文件 button_defs（你配过的）";
+    if (src === "inherit") {
+      return "这个场景没配按钮，现在借用父场景「" + (scene.parent_label || scene.parent) +
+        "」的按钮；在这里改一下就会变成它自己的配置";
+    }
+    if (src === "default") return "这个场景没配按钮，现在用的是插件出厂默认按钮；改一下就会写进配置";
+    return "这个场景目前没有任何按钮（也可以用默认按钮，如果插件提供了的话）";
+  }
+
+  function renderReplyButtonRow(sceneId, b, i, total) {
+    var errs = validateReplyButton(b);
+    var ro = state.replies.readonly;
+    var sid = esc(sceneId);
+    return '<div class="rp-btn-edit">' +
+      '<span class="idx">' + (i + 1) + "</span>" +
+      '<input class="cell-input' + (errs.label ? " is-bad" : "") +
+      '" style="flex:1 1 140px;min-width:120px" data-act="rp:btnLabel" data-scene="' + sid +
+      '" data-i="' + i + '" value="' + esc(b.label) + '" placeholder="按钮文案"' +
+      (errs.label ? ' title="' + esc(errs.label) + '"' : "") + (ro ? " disabled" : "") + " />" +
+      '<span class="arrow-to">→</span>' +
+      '<input class="cell-input mono' + (errs.data ? " is-bad" : "") +
+      '" style="flex:1 1 170px;min-width:140px" data-act="rp:btnData" data-scene="' + sid +
+      '" data-i="' + i + '" value="' + esc(b.data) + '" placeholder="/钓鱼 背包"' +
+      (errs.data ? ' title="' + esc(errs.data) + '"' : "") + (ro ? " disabled" : "") + " />" +
+      '<select class="cell-input" data-act="rp:btnStyle" data-scene="' + sid + '" data-i="' + i +
+      '"' + (ro ? " disabled" : "") + ">" + replyStyleOptions(b.style) + "</select>" +
+      (ro ? "" : '<span class="rp-move">' +
+        '<button class="btn btn-sm btn-icon btn-ghost" data-act="rp:btnUp" data-scene="' + sid +
+        '" data-i="' + i + '"' + (i === 0 ? " disabled" : "") + ' title="上移">↑</button>' +
+        '<button class="btn btn-sm btn-icon btn-ghost" data-act="rp:btnDown" data-scene="' + sid +
+        '" data-i="' + i + '"' + (i === total - 1 ? " disabled" : "") + ' title="下移">↓</button>' +
+        '<button class="btn btn-sm btn-icon btn-ghost" data-act="rp:btnDel" data-scene="' + sid +
+        '" data-i="' + i + '" title="删除这个按钮">🗑</button>' +
+        "</span>") +
+      "</div>";
+  }
+
+  function renderReplyCard(scene) {
+    var r = state.replies;
+    var d = replySceneDraft(scene.id);
+    var text = d.text;
+    var warnings = templateWarnings(text, scene);
+    var bad = replyBadButtons(d.buttons);
+    var src = scene.source || "none";
+    var srcText = "来源：" + (REPLY_SOURCE_LABEL[src] || src) +
+      (src === "inherit" && (scene.parent_label || scene.parent)
+        ? "自 " + (scene.parent_label || scene.parent) : "");
+    var ownRow = d.layoutTouched ? d.perRow : (r.originalLayout[scene.id] || "");
+    var eff = replyEffectivePerRow(scene);
+
+    var html = '<article class="rp-card' + (r.focus === scene.id ? " is-focus" : "") +
+      '" data-scene="' + esc(scene.id) + '">';
+    html += '<div class="rp-card-head" data-act="rp:focus" data-scene="' + esc(scene.id) + '">' +
+      '<span class="rp-card-title">' + esc(scene.label) + "</span>" +
+      '<span class="rp-card-id">' + esc(scene.id) + "</span>" +
+      '<span class="rp-src src-' + esc(src) + '" title="' + esc(replySourceHint(scene)) + '">' +
+      esc(srcText) + "</span>" +
+      '<span class="spacer"></span>' +
+      '<span class="hint faint">' + (d.buttons.length ? d.buttons.length + " 个按钮" : "没有按钮") + "</span>" +
+      (r.readonly ? "" :
+        '<button class="btn btn-sm" data-act="rp:saveCard" data-scene="' + esc(scene.id) +
+        '" title="只把这个场景的改动写回插件">💾 只保存这张</button>' +
+        '<button class="btn btn-sm btn-ghost" data-act="rp:reset" data-scene="' + esc(scene.id) +
+        '" title="把这张卡片改回载入时的样子">↺ 还原</button>') +
+      "</div>";
+
+    html += '<div class="rp-body">';
+    html += '<div class="rp-row"><span class="rp-label">文案模板</span>' +
+      '<span class="hint faint">' + esc(scene.desc || "") +
+      (scene.dynamic_text ? "　（这条回复由代码拼装）" : "　（模板就是完整文案，可任意改写）") + "</span></div>";
+    html += '<textarea class="rp-text' + (warnings.length ? " is-bad" : "") + '" data-act="rp:text" data-scene="' +
+      esc(scene.id) + '" spellcheck="false" rows="2" placeholder="这条回复要说的话…"' +
+      (r.readonly ? " readonly" : "") + ">" + esc(text) + "</textarea>";
+    html += '<div class="rp-row"><span class="rp-label">可用占位符</span>' +
+      renderReplyPlaceholderChips(scene, text) + "</div>";
+    html += '<div id="rpWarn-' + esc(scene.id) + '">' + replyWarnHtml(warnings, false) + "</div>";
+
+    html += '<div class="rp-row"><span class="rp-label">按钮</span>' +
+      '<span class="hint faint">文案 → 点击后发送的指令；顺序就是 QQ 里的显示顺序</span></div>';
+    if (!d.buttons.length) {
+      html += '<div class="hint faint">这个场景' +
+        (src === "none" ? "目前没有任何按钮" : "现在用的是「" + esc(REPLY_SOURCE_LABEL[src] || src) + "」的按钮") +
+        "，点下面的「＋ 加按钮」给它配一排。</div>";
+    }
+    html += '<div class="rp-btns-edit">' + d.buttons.map(function (b, i) {
+      return renderReplyButtonRow(scene.id, b, i, d.buttons.length);
+    }).join("") + "</div>";
+    html += '<div class="rp-row">' +
+      (r.readonly ? "" :
+        '<button class="btn btn-sm" data-act="rp:btnAdd" data-scene="' + esc(scene.id) + '">＋ 加按钮</button>') +
+      '<span class="divider"></span><span class="hint">每行</span>' +
+      '<input class="cell-input" style="width:58px" type="number" min="1" max="' + replyRowMax() +
+      '" data-act="rp:perRow" data-scene="' + esc(scene.id) + '" value="' + esc(ownRow) +
+      '" placeholder="' + esc(String(eff)) + '" title="这个场景每行摆几个按钮；留空 = 用全局默认"' +
+      (r.readonly ? " disabled" : "") + " />" +
+      '<span class="hint">个（留空 = 现在生效的 <b>' + esc(String(eff)) +
+      "</b> 个；这里只写这个场景的覆盖行 " + '<span class="mono">' + esc(scene.id) + "|N</span>）</span>" +
+      (bad.length ? '<span class="hint" style="color:var(--danger)">有 ' + bad.length +
+        " 个按钮缺文案或指令，保存时会跳过</span>" : "") +
+      "</div>";
+    html += "</div></article>";
+    return html;
+  }
+
+  /** 预览模型（草稿 -> 预览）：卡片里改什么，预览就跟着变。 */
+  function previewModelFor(scene) {
+    var d = scene ? state.replies.drafts[scene.id] : null;
+    return replyPreviewModel(scene, {
+      text: d ? d.text : undefined,
+      buttons: d ? d.buttons : (scene ? scene.buttons : []),
+      mode: state.replies.chatMode,
+      perRow: replyEffectivePerRow(scene)
+    });
+  }
+
+  function renderReplyPreviewPanel() {
+    var r = state.replies;
+    var scene = replySceneById(r.focus) || r.scenes[0] || null;
+    var html = '<aside class="rp-side"><section class="card">';
+    html += '<div class="card-head"><h2>👁️ 预览</h2><span class="spacer"></span>' +
+      '<button class="btn btn-sm btn-ghost" data-act="rp:preview">' +
+      (r.previewOpen ? "收起" : "展开") + "</button></div>";
+    if (!r.previewOpen) {
+      return html + '<div class="notice" style="margin:10px"><span class="notice-icon">👁️</span>' +
+        "<div>预览已收起：点右上角「展开」看这条回复在 QQ 里的样子。</div></div></section></aside>";
+    }
+    if (!scene) {
+      return html + '<div class="empty"><span class="empty-icon">🫧</span>' +
+        '<div class="empty-title">还没有可预览的场景</div>' +
+        '<div class="empty-sub">场景接口通了之后这里会跟着卡片实时更新</div></div></section></aside>';
+    }
+    html += '<div class="toolbar" style="border-bottom:1px solid var(--border)">' +
+      '<button class="btn btn-sm' + (r.chatMode === "group" ? " btn-primary" : "") +
+      '" data-act="rp:mode" data-mode="group">👥 群聊</button>' +
+      '<button class="btn btn-sm' + (r.chatMode === "private" ? " btn-primary" : "") +
+      '" data-act="rp:mode" data-mode="private">👤 单聊</button>' +
+      '<span class="spacer" style="margin-left:auto"></span>' +
+      '<span class="hint faint mono">' + esc(scene.id) + "</span></div>";
+    html += '<div id="rpPreviewBody" style="padding:10px">' +
+      renderReplyPreview(previewModelFor(scene)) + "</div>";
+    html += '<div id="rpPreviewWarn" style="padding:0 10px 10px">' +
+      replyWarnHtml(templateWarnings(replySceneDraft(scene.id).text, scene), true) + "</div>";
+    html += "</section></aside>";
+    return html;
+  }
+
+  function renderReplyBatchStrip() {
+    var r = state.replies;
+    var html = '<div class="toolbar" style="background:var(--primary-soft);border-bottom-color:var(--primary)">';
+    if (r.batch === "style") {
+      html += "<span class='nowrap'>把选中的按钮样式都改成</span>" +
+        "<select class='cell-input' data-act='rp:batchValue'>" + replyStyleOptions(r.batchValue) + "</select>";
+    } else if (r.batch === "prefix") {
+      html += "<span class='nowrap'>把选中按钮的指令前缀都改成</span>" +
+        "<input class='cell-input mono' style='width:150px' data-act='rp:batchValue' value='" +
+        esc(r.batchValue) + "' placeholder='/钓鱼' />";
+    } else if (r.batch === "delete") {
+      html += "<span class='nowrap'>确定删除选中的 <b>" + replySelCount() +
+        "</b> 个按钮？保存后才真正生效。</span>";
+    }
+    html += '<button class="btn btn-sm btn-primary" data-act="rp:batchApply">应用</button>' +
+      '<button class="btn btn-sm" data-act="rp:batchCancel">取消</button></div>';
+    return html;
+  }
+
+  /** 🔘 按钮总览：全局设置 + 所有按钮一张表 + 批量操作。 */
+  function renderReplyOverview() {
+    var r = state.replies;
+    var rows = replyOverviewRows();
+    var sel = replySelCount();
+    var html = "";
+
+    html += '<section class="card"><div class="card-head"><h2>🌐 全局设置</h2>' +
+      '<span class="hint">每行几个、默认样式是所有场景共用的属性，只在这里配一次</span></div>';
+    html += '<div class="form-grid">';
+    html += '<div class="form-row"><label>每行几个按钮（* 全局默认，1-' + replyRowMax() + "）</label>" +
+      '<span class="field"><input type="number" min="1" max="' + replyRowMax() + '" data-act="rp:layoutAll" value="' +
+      esc(r.layoutAllTouched ? r.layoutAllDraft : (r.originalLayout[REPLY_LAYOUT_ALL] || "")) +
+      '" placeholder="' + esc(String(r.perRowDefault || 3)) + '"' + (r.readonly ? " disabled" : "") +
+      " /></span></div>";
+    html += '<div class="form-row"><label>新加按钮的默认样式</label><span class="field">' +
+      '<select data-act="rp:defaultStyle"' + (r.readonly ? " disabled" : "") + ">" +
+      replyStyleOptions(r.defaultStyle) + "</select></span></div>";
+    html += "</div>";
+    html += '<div class="form-note" style="padding:0 10px 10px">写进配置的样子：' +
+      '<span class="mono">*|3</span>（全局默认）、<span class="mono">story.prompt|1</span>（单个场景覆盖）。' +
+      "卡片里的「每行 N 个」只写那个场景的覆盖行。</div>";
+    html += "</section>";
+
+    html += '<section class="card">';
+    html += '<div class="card-head"><h2>🔘 所有按钮</h2><span class="hint">共 ' + rows.length +
+      " 个按钮 · 和场景卡片是同一份草稿，改哪边都一样</span>" +
+      '<span class="spacer"></span><span class="hint faint">批量操作：先勾选左边</span></div>';
+    if (r.readonly) {
+      html += '<div class="notice"><span class="notice-icon">🔒</span><div>只读模式：场景接口没读到，这里是 button_defs 的现有内容。</div></div>';
+    } else {
+      html += '<div class="toolbar"><span class="stat-chip">已选 <b>' + sel + "</b></span>" +
+        '<button class="btn btn-sm" data-act="rp:batch" data-kind="style"' + (sel ? "" : " disabled") + ">批量改样式</button>" +
+        '<button class="btn btn-sm" data-act="rp:batch" data-kind="prefix"' + (sel ? "" : " disabled") + ">批量改指令前缀</button>" +
+        '<button class="btn btn-sm btn-danger" data-act="rp:batch" data-kind="delete"' + (sel ? "" : " disabled") + ">批量删除</button>" +
+        '<span class="spacer" style="margin-left:auto"></span>' +
+        '<button class="btn btn-sm" data-act="rp:selAll">全选 / 取消</button></div>';
+      if (r.batch) html += renderReplyBatchStrip();
+    }
+
+    if (!rows.length) {
+      html += '<div class="empty"><span class="empty-icon">🔘</span>' +
+        '<div class="empty-title">所有场景都没有按钮</div>' +
+        '<div class="empty-sub">到「场景卡片」视图里给需要的场景点「＋ 加按钮」</div></div>';
+    } else {
+      html += '<div class="table-wrap rp-table-wrap"><table class="grid" style="min-width:980px">';
+      html += "<thead><tr>" +
+        (r.readonly ? "" : '<th style="width:34px"></th>') +
+        '<th style="width:210px">场景</th><th style="width:170px">按钮文案</th>' +
+        '<th style="width:220px">点击后发送</th><th style="width:120px">样式</th>' +
+        "<th>说明</th>" + (r.readonly ? "" : '<th style="width:130px"></th>') + "</tr></thead><tbody>";
+      rows.forEach(function (row) {
+        var errs = validateReplyButton(row.button);
+        var bad = Object.keys(errs).length > 0;
+        html += "<tr" + (bad ? ' class="is-invalid"' : "") + ">" +
+          (r.readonly ? "" : '<td><input type="checkbox" data-act="rp:sel" data-key="' +
+            esc(row.key) + '"' + (r.sel[row.key] ? " checked" : "") + " /></td>") +
+          '<td class="id-cell">' + esc(row.scene_label) +
+          ' <span class="mono faint">' + esc(row.scene_id) + "</span></td>" +
+          "<td>" + esc(row.button.label) + "</td>" +
+          '<td class="mono">' + esc(row.button.data) + "</td>" +
+          "<td>" + esc(row.button.style) + "</td>" +
+          '<td class="faint">' + esc(REPLY_SOURCE_LABEL[row.source] || row.source) +
+          (bad ? "　<span style=\"color:var(--danger)\">" + esc(errs.label || errs.data || errs.style) + "</span>" : "") +
+          "</td>" +
+          (r.readonly ? "" :
+            '<td class="actions">' +
+            '<button class="btn btn-sm" data-act="rp:goto" data-scene="' + esc(row.scene_id) +
+            '" title="跳到这张卡片">✏️ 改</button>' +
+            '<button class="btn btn-sm btn-danger" data-act="rp:btnDel" data-scene="' + esc(row.scene_id) +
+            '" data-i="' + row.i + '" title="删除这个按钮">🗑</button></td>') +
+          "</tr>";
+      });
+      html += "</tbody></table></div>";
+    }
+    html += "</section>";
+    return html;
+  }
+
+  /** 💬 回复 标签页：二级切换（场景卡片 / 按钮总览）+ 常驻预览。 */
+  function renderRepliesTab(tab) {
+    var r = state.replies;
+    var dirty = replyDirtyCount();
+    var html = "";
+
+    html += '<section class="card">';
+    html += '<div class="card-head"><h2>💬 ' + esc(tab.title || "回复场景") + "</h2>" +
+      '<span class="hint">' + esc(tab.hint || "") + "</span>" +
+      '<span class="spacer"></span>' +
+      '<button class="btn btn-sm" data-act="rp:retry" title="重新读一次场景接口">↻ 重读场景</button>' +
+      '<button class="btn btn-sm btn-primary" data-act="rp:saveAll"' + (dirty ? "" : " disabled") +
+      ">💾 保存回复改动" + (dirty ? "（" + dirty + "）" : "") + "</button></div>";
+
+    if (r.loading) {
+      html += '<div class="empty"><span class="empty-icon">⏳</span>' +
+        '<div class="empty-title">正在读取回复场景…</div></div>';
+      html += "</section>";
+      return html;
+    }
+    if (r.error) {
+      html += '<div class="notice notice-danger"><span class="notice-icon">⛔</span><div>' +
+        "<b>读不到「回复场景」接口</b>　" + esc(r.error) +
+        "<br />下面是配置文件 button_defs 里的按钮，<b>只能看不能改</b>（免得把没读到的东西覆盖掉）。" +
+        '<div style="margin-top:6px"><button class="btn btn-sm btn-primary" data-act="rp:retry">🔄 重试</button></div>' +
+        "</div></div>";
+    } else {
+      html += '<div class="notice"><span class="notice-icon">ℹ️</span><div>' +
+        "场景接口：<b>" + esc(r.source || "scenes") + "</b>　共 <b>" + r.scenes.length +
+        "</b> 个场景 / <b>" + r.groups.length + "</b> 组。改完点卡片上的「💾 只保存这张」，" +
+        "或右上角「💾 保存并生效」一次全提交（只提交真的变了的项）。" +
+        (r.readonly ? "" : "　群聊里点按钮只会把指令填进输入框，单聊才会自动发送。") +
+        "</div></div>";
+    }
+
+    html += '<div class="toolbar">' +
+      '<button class="btn btn-sm' + (r.view === "cards" ? " btn-primary" : "") +
+      '" data-act="rp:view" data-view="cards">🗂️ 场景卡片</button>' +
+      '<button class="btn btn-sm' + (r.view === "overview" ? " btn-primary" : "") +
+      '" data-act="rp:view" data-view="overview">🔘 按钮总览</button>' +
+      '<span class="divider"></span>' +
+      (r.view === "cards"
+        ? '<label class="field search"><span class="field-icon">🔍</span>' +
+          '<input type="search" id="rpSearch" data-act="rp:query" placeholder="找场景：id / 名称 / 说明…" value="' +
+          esc(r.query) + '" /></label>' +
+          '<button class="btn btn-sm" data-act="rp:expandAll">全部展开</button>' +
+          '<button class="btn btn-sm" data-act="rp:collapseAll">全部收起</button>'
+        : "") +
+      '<span class="spacer" style="margin-left:auto"></span>' +
+      '<span id="rpStats">' + replyStatsHtml() + "</span></div>";
+    html += "</section>";
+
+    html += '<div class="rp-split"><div class="rp-main" id="rpMain">' + renderReplyMain() +
+      "</div>" + renderReplyPreviewPanel() + "</div>";
+    return html;
+  }
+
+  /** 工具栏上的计数（搜索结果会跟着变，所以单独抽出来局部刷新）。 */
+  function replyStatsHtml() {
+    var r = state.replies;
+    var shown = replyFilterScenes(r.scenes, r.query).length;
+    var dirty = replyDirtyCount();
+    return '<span class="stat-chip">场景 <b>' + shown + "</b>" +
+      (shown !== r.scenes.length ? " / " + r.scenes.length : "") + "</span>" +
+      '<span class="stat-chip">按钮 <b>' + replyOverviewRows().length + "</b></span>" +
+      '<span class="stat-chip' + (dirty ? " is-dirty" : "") + '">未保存 <b>' + dirty + "</b></span>" +
+      '<span class="hint faint">每行几个：全局 <b>' + esc(String(replyGlobalPerRow() || r.perRowDefault || 3)) +
+      "</b> 个</span>";
+  }
+
+  /** 卡片视图 / 总览视图的主体（局部刷新只重画这一块）。 */
+  function renderReplyMain() {
+    var r = state.replies;
+    if (r.view === "overview") return renderReplyOverview();
+    if (!r.groups.length) {
+      return '<section class="card"><div class="empty"><span class="empty-icon">🫧</span>' +
+        '<div class="empty-title">没有读到任何回复场景</div>' +
+        '<div class="empty-sub">插件端还没上线 scenes 接口的话，可以先在「🔘 按钮（原始文本）」页里改</div>' +
+        "</div></section>";
+    }
+    var vis = replyVisibleGroups();
+    if (!vis.length) {
+      return '<section class="card"><div class="empty"><span class="empty-icon">🔍</span>' +
+        '<div class="empty-title">没有匹配「' + esc(r.query) + '」的场景</div>' +
+        '<div class="empty-sub">换个关键词，或清空搜索框看全部 ' + r.scenes.length + " 个场景</div>" +
+        "</div></section>";
+    }
+    return vis.map(function (item) {
+      var g = item.group;
+      var open = !r.collapsed[g.id];
+      var scenes = open ? item.scenes : [];
+      var withButtons = item.scenes.filter(function (s) {
+        return replySceneDraft(s.id).buttons.length > 0;
+      }).length;
+      var html = '<section class="rp-group"><div class="rp-group-head">' +
+        '<button class="btn btn-sm btn-icon btn-ghost" data-act="rp:group" data-group="' + esc(g.id) +
+        '" title="' + (open ? "收起这一组" : "展开这一组") + '">' + (open ? "▾" : "▸") + "</button>" +
+        "<h3>" + esc(g.label) + "</h3>" +
+        '<span class="hint">' + esc(g.desc || "") + "</span>" +
+        '<span class="spacer" style="margin-left:auto"></span>' +
+        '<span class="hint faint">' + item.scenes.length + " 个场景 · " + withButtons + " 个有按钮</span></div>";
+      scenes.forEach(function (scene) { html += renderReplyCard(scene); });
+      return html + "</section>";
+    }).join("");
+  }
+
+  /** 只重画主体 + 计数（搜索、折叠分组时用，输入框不会失焦）。 */
+  function refreshReplyMain() {
+    var box = document.getElementById("rpMain");
+    if (box) box.innerHTML = renderReplyMain();
+    var stats = document.getElementById("rpStats");
+    if (stats) stats.innerHTML = replyStatsHtml();
+    renderStatusBar();
+    renderTabs();
+  }
+
+  /** 打字时只刷新预览与警告，不整体重绘（否则输入框会失焦）。 */
+  function refreshReplyLive(sceneId) {
+    var scene = replySceneById(sceneId);
+    if (!scene) return;
+    var body = document.getElementById("rpPreviewBody");
+    if (body && state.replies.focus === sceneId) {
+      body.innerHTML = renderReplyPreview(previewModelFor(scene));
+    }
+    var warn = document.getElementById("rpWarn-" + sceneId);
+    if (warn) {
+      warn.innerHTML = replyWarnHtml(templateWarnings(replySceneDraft(sceneId).text, scene), false);
+    }
+    var pw = document.getElementById("rpPreviewWarn");
+    if (pw && state.replies.focus === sceneId) {
+      pw.innerHTML = replyWarnHtml(templateWarnings(replySceneDraft(sceneId).text, scene), true);
+    }
+    renderStatusBar();
+    renderTabs();
+  }
+
+  /* ===========================================================================
      11. 渲染：总入口 + 状态栏
      =========================================================================== */
   function render() {
@@ -3160,6 +4663,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       panel.innerHTML = banner + renderSnapshotsTab(tab);
     } else if (tab.kind === "players") {
       panel.innerHTML = banner + renderPlayersTab(tab);
+    } else if (tab.kind === "replies") {
+      panel.innerHTML = banner + renderRepliesTab(tab);
     } else if (tab.navGroup) {
       // 「⌨️ 命令」这一组里有两张表：上面一条小切换条，下面渲染当前这张
       panel.innerHTML = banner + renderSubTabs(tab.navGroup, tab.id) + renderTableTab(tab);
@@ -3219,6 +4724,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     var cnt;
     if (tab.kind === "snapshots") cnt = (state.snapshots || []).length;
     else if (tab.kind === "players") cnt = playerRowsNow().length;
+    else if (tab.kind === "replies") cnt = (state.replies.scenes || []).length;
     else cnt = (state.data[tab.id] || []).length;
     document.getElementById("tabInfo").textContent = tab.title + " · " + cnt + " 条";
 
@@ -3448,13 +4954,33 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     var btn = document.getElementById("btnSave");
     btn.disabled = true;
     btn.textContent = "⏳ 保存中…";
+    var replyDirty = state.replies.loaded && !state.replies.readonly && replyDirtyCount() > 0;
     try {
+      /* 💬 回复页改过按钮：先把合并后的 button_defs 同步进原始表格，
+         否则 save_content 会把刚改的按钮又写回旧值（两条通道打架）。 */
+      if (replyDirty) applyButtonsTextToTable(replyTextsNow().texts.button_defs);
       var res = await saveConfig(buildPayload());
-      if (res && res.ok) {
+      var replyRes = replyDirty ? await saveReplies(null) : null;
+
+      if (!replyDirty) {
+        if (res && res.ok) {
+          markSaved();
+          toast("ok", "已保存并生效", res.message || "配置已写入插件");
+        } else {
+          toast("warn", "没有真正写入", (res && res.message) || "保存通道未接入");
+        }
+      } else if (res && res.ok && replyRes && replyRes.ok) {
         markSaved();
-        toast("ok", "已保存并生效", res.message || "配置已写入插件");
+        toast("ok", "已保存并生效", (res.message || "") + "；回复配置：" + replyRes.message);
+      } else if (res && res.ok && replyRes) {
+        // 内容表写进去了，回复配置没写进去：别说「全部成功」
+        markSaved();
+        toast("warn", "回复配置没保存成功", replyRes.message);
+      } else if (replyRes && replyRes.ok) {
+        toast("warn", "内容表没保存成功，回复配置已写入",
+          (res && res.message) || "保存通道未接入");
       } else {
-        toast("warn", "没有真正写入", (res && res.message) || "保存通道未接入");
+        toast("warn", "没有真正写入", replyRes ? replyRes.message : ((res && res.message) || "保存通道未接入"));
       }
     } catch (e) {
       toast("err", "保存失败", String(e && e.message || e));
@@ -3541,6 +5067,17 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (snaps && snaps.autoBackup) state.autoBackup = deepClone(snaps.autoBackup);
     state.players = snaps ? snaps.players : undefined;
     state.nextAutoBackup = snaps ? snaps.nextAutoBackup : "";
+
+    /* 💬 回复页：读场景列表（端点半读不到会自己退回只读展示，不会抛出来） */
+    try {
+      await loadReplies();
+    } catch (e) {
+      state.replies.loading = false;
+      state.replies.error = state.replies.error || String((e && e.message) || e);
+      state.replies.scenes = state.replies.scenes || [];
+      state.replies.groups = state.replies.groups || [];
+      state.replies.loaded = true;
+    }
 
     markSaved();
     state.savedAt = null;
@@ -3773,6 +5310,228 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         });
         break;
       }
+
+      /* ---- 💬 回复：视图切换 / 聚焦 / 预览 ---- */
+      case "rp:view":
+        state.replies.view = el.getAttribute("data-view") === "overview" ? "overview" : "cards";
+        render();
+        break;
+      case "rp:focus": {
+        var fid = el.getAttribute("data-scene");
+        if (!replySceneById(fid)) break;
+        state.replies.focus = fid;
+        state.replies.previewOpen = true;
+        render();
+        break;
+      }
+      case "rp:preview":
+        state.replies.previewOpen = !state.replies.previewOpen;
+        render();
+        break;
+      case "rp:group": {
+        var gid = el.getAttribute("data-group");
+        state.replies.collapsed[gid] = !state.replies.collapsed[gid];
+        refreshReplyMain();
+        break;
+      }
+      case "rp:expandAll":
+        state.replies.collapsed = {};
+        refreshReplyMain();
+        break;
+      case "rp:collapseAll":
+        (state.replies.groups || []).forEach(function (g) { state.replies.collapsed[g.id] = true; });
+        refreshReplyMain();
+        break;
+      case "rp:mode":
+        state.replies.chatMode = el.getAttribute("data-mode") === "private" ? "private" : "group";
+        render();
+        break;
+      case "rp:retry":
+        // 重读会丢掉没保存的草稿：跟「重新载入」一样要按两次
+        if (replyDirtyCount() > 0 &&
+            !(state.pendingConfirm && state.pendingConfirm.scope === "replies")) {
+          state.pendingConfirm = { scope: "replies", action: "reload" };
+          toast("warn", "有未保存的回复改动", "再点一次「↻ 重读场景」会丢弃它们");
+          setTimeout(function () {
+            if (state.pendingConfirm && state.pendingConfirm.scope === "replies") {
+              state.pendingConfirm = null;
+            }
+          }, 3000);
+          break;
+        }
+        state.pendingConfirm = null;
+        loadReplies();
+        break;
+      case "rp:saveAll":
+        saveReplies(null).then(function (res) {
+          if (res.ok) toast("ok", "回复配置已保存", res.message);
+          else if (res.empty) toast("info", "没有要保存的回复改动", res.message);
+          else toast("warn", "回复配置没保存成功", res.message);
+          render();
+        });
+        break;
+      case "rp:saveCard": {
+        var saveId = el.getAttribute("data-scene");
+        saveReplies(saveId).then(function (res) {
+          if (res.ok) toast("ok", "这张卡片已保存", res.message);
+          else if (res.empty) toast("info", "这张卡片没有改动", res.message);
+          else toast("warn", "这张卡片没保存成功", res.message);
+          render();
+        });
+        break;
+      }
+      case "rp:reset": {
+        var resetId = el.getAttribute("data-scene");
+        delete state.replies.drafts[resetId];
+        var resetScene = replySceneById(resetId);
+        state.replies.layoutAllTouched = false;
+        toast("info", "已还原这张卡片", resetScene ? resetScene.label : resetId);
+        render();
+        break;
+      }
+      case "rp:ph": {
+        var phScene = el.getAttribute("data-scene");
+        var phName = el.getAttribute("data-name");
+        var box = document.querySelector('[data-act="rp:text"][data-scene="' + phScene + '"]');
+        var d0 = replySceneDraft(phScene);
+        if (box && typeof box.selectionStart === "number") {
+          d0.text = insertPlaceholder(box.value, phName, box.selectionStart, box.selectionEnd);
+          box.value = d0.text;
+          var caret = box.selectionStart + ("{" + phName + "}").length;
+          try { box.focus(); box.setSelectionRange(caret, caret); } catch (e) { /* 忽略 */ }
+        } else {
+          d0.text = insertPlaceholder(d0.text, phName);
+        }
+        var phSceneObj = replySceneById(phScene);
+        d0.textTouched = d0.text !== (phSceneObj ? replyTextBaseline(phSceneObj) : "");
+        state.replies.focus = phScene;
+        refreshReplyLive(phScene);
+        break;
+      }
+
+      /* ---- 💬 回复：卡片里的按钮增删改排序 ---- */
+      case "rp:btnAdd": {
+        var addId = el.getAttribute("data-scene");
+        var ad = replySceneDraft(addId);
+        var last = ad.buttons[ad.buttons.length - 1];
+        ad.buttons.push({
+          label: "",
+          data: last ? applyCommandPrefix(last.data, "/钓鱼") : "/钓鱼",
+          style: state.replies.defaultStyle || "default"
+        });
+        ad.buttonsTouched = true;
+        state.replies.focus = addId;
+        render();
+        var newBoxes = document.querySelectorAll('[data-act="rp:btnLabel"][data-scene="' + addId + '"]');
+        if (newBoxes && newBoxes.length && newBoxes[newBoxes.length - 1].focus) {
+          newBoxes[newBoxes.length - 1].focus();
+        }
+        break;
+      }
+      case "rp:btnDel": {
+        var delId = el.getAttribute("data-scene");
+        var delI = Number(el.getAttribute("data-i"));
+        var dd = replySceneDraft(delId);
+        if (!dd.buttons[delI]) break;
+        var gone = dd.buttons.splice(delI, 1)[0];
+        dd.buttonsTouched = true;
+        state.replies.sel = {};
+        state.replies.batch = null;
+        state.replies.focus = delId;
+        toast("info", "已删掉这个按钮", gone.label || gone.data || "（空按钮）");
+        render();
+        break;
+      }
+      case "rp:btnUp":
+      case "rp:btnDown": {
+        var mvId = el.getAttribute("data-scene");
+        var mvI = Number(el.getAttribute("data-i"));
+        var md = replySceneDraft(mvId);
+        var to = act === "rp:btnUp" ? mvI - 1 : mvI + 1;
+        if (to < 0 || to >= md.buttons.length) break;
+        var tmp = md.buttons[mvI];
+        md.buttons[mvI] = md.buttons[to];
+        md.buttons[to] = tmp;
+        md.buttonsTouched = true;
+        state.replies.sel = {};      // 顺序变了，总览里的勾选不再对应同一行
+        state.replies.focus = mvId;
+        render();
+        break;
+      }
+      case "rp:goto": {
+        state.replies.view = "cards";
+        state.replies.focus = el.getAttribute("data-scene");
+        state.replies.previewOpen = true;
+        render();
+        break;
+      }
+
+      /* ---- 💬 回复：按钮总览的批量操作 ---- */
+      case "rp:sel": {
+        ev.stopPropagation();
+        var selKey = el.getAttribute("data-key");
+        state.replies.sel[selKey] = !state.replies.sel[selKey];
+        render();
+        break;
+      }
+      case "rp:selAll": {
+        var allRows = replyOverviewRows();
+        var allOn = allRows.length > 0 && allRows.every(function (x) { return state.replies.sel[x.key]; });
+        state.replies.sel = {};
+        if (!allOn) allRows.forEach(function (x) { state.replies.sel[x.key] = true; });
+        render();
+        break;
+      }
+      case "rp:batch": {
+        var kind = el.getAttribute("data-kind");
+        state.replies.batch = kind;
+        state.replies.batchValue = kind === "prefix"
+          ? "/钓鱼"
+          : (kind === "style" ? (((state.replies.buttonStyles || [])[0] || {}).value || "default") : "");
+        render();
+        break;
+      }
+      case "rp:batchCancel":
+        state.replies.batch = null;
+        render();
+        break;
+      case "rp:batchApply": {
+        var bk = state.replies.batch;
+        var bv = state.replies.batchValue;
+        var picked = replyOverviewRows().filter(function (x) { return state.replies.sel[x.key]; });
+        if (!picked.length) { toast("warn", "没有勾选按钮", "先在左边勾几个"); break; }
+        var touchedScenes = {};
+        picked.forEach(function (x) { touchedScenes[x.scene_id] = true; });
+        if (bk === "style") {
+          picked.forEach(function (x) { x.button.style = toText(bv) || "default"; });
+          toast("ok", "已批量改样式", picked.length + " 个按钮 → " + (toText(bv) || "default"));
+        } else if (bk === "prefix") {
+          if (!toText(bv).trim()) { toast("err", "前缀不能为空", "例如 /钓鱼"); break; }
+          picked.forEach(function (x) { x.button.data = applyCommandPrefix(x.button.data, bv); });
+          toast("ok", "已批量改指令前缀", picked.length + " 个按钮 → " + bv);
+        } else if (bk === "delete") {
+          var byScene = {};
+          picked.forEach(function (x) {
+            byScene[x.scene_id] = byScene[x.scene_id] || [];
+            byScene[x.scene_id].push(x.i);
+          });
+          Object.keys(byScene).forEach(function (sid) {
+            var idx = byScene[sid].slice().sort(function (a, b) { return b - a; });
+            var d2 = replySceneDraft(sid);
+            idx.forEach(function (i2) { d2.buttons.splice(i2, 1); });
+          });
+          toast("ok", "已批量删除", picked.length + " 个按钮（保存后生效）");
+        } else {
+          break;
+        }
+        Object.keys(touchedScenes).forEach(function (sid) {
+          replySceneDraft(sid).buttonsTouched = true;
+        });
+        state.replies.sel = {};
+        state.replies.batch = null;
+        render();
+        break;
+      }
     }
   });
 
@@ -3808,6 +5567,62 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       return;
     }
     if (act === "batchField") { state.batchField = el.value; return; }
+    /* ---- 💬 回复：文案 / 按钮 / 每行几个 的实时改动 ---- */
+    if (act === "rp:text") {
+      var textId = el.getAttribute("data-scene");
+      var textScene = replySceneById(textId);
+      if (!textScene) return;
+      var td = replySceneDraft(textId);
+      td.text = el.value;
+      td.textTouched = el.value !== replyTextBaseline(textScene);
+      state.replies.focus = textId;
+      if (el.classList) el.classList.toggle("is-bad", templateWarnings(el.value, textScene).length > 0);
+      refreshReplyLive(textId);
+      return;
+    }
+    if (act === "rp:btnLabel" || act === "rp:btnData") {
+      var bid = el.getAttribute("data-scene");
+      var bi = Number(el.getAttribute("data-i"));
+      var bd = replySceneDraft(bid);
+      if (!bd.buttons[bi]) return;
+      if (act === "rp:btnLabel") bd.buttons[bi].label = el.value;
+      else bd.buttons[bi].data = el.value;
+      bd.buttonsTouched = true;
+      state.replies.focus = bid;
+      var bErrs = validateReplyButton(bd.buttons[bi]);
+      var bBad = act === "rp:btnLabel" ? bErrs.label : bErrs.data;
+      if (el.classList) el.classList.toggle("is-bad", !!bBad);
+      if (bBad) el.title = bBad; else el.removeAttribute("title");
+      refreshReplyLive(bid);
+      return;
+    }
+    if (act === "rp:perRow") {
+      var prId = el.getAttribute("data-scene");
+      var prd = replySceneDraft(prId);
+      prd.perRow = el.value;
+      prd.layoutTouched = clampPerRow(el.value, 0, replyRowMax()) > 0;
+      if (el.classList) el.classList.toggle("is-bad", String(el.value).trim() !== "" && !prd.layoutTouched);
+      state.replies.focus = prId;
+      refreshReplyLive(prId);
+      return;
+    }
+    if (act === "rp:layoutAll") {
+      state.replies.layoutAllDraft = el.value;
+      state.replies.layoutAllTouched = clampPerRow(el.value, 0, replyRowMax()) > 0;
+      if (el.classList) {
+        el.classList.toggle("is-bad", String(el.value).trim() !== "" && !state.replies.layoutAllTouched);
+      }
+      renderStatusBar();
+      renderTabs();
+      return;
+    }
+    if (act === "rp:batchValue") { state.replies.batchValue = el.value; return; }
+    if (act === "rp:defaultStyle") { state.replies.defaultStyle = el.value; return; }
+    if (act === "rp:query") {
+      state.replies.query = el.value;
+      refreshReplyMain();
+      return;
+    }
     if (act === "p:goldInput") {
       if (state.goldEdit) state.goldEdit.value = el.value;
       return;
@@ -3822,6 +5637,14 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       state.autoBackupDirty = true;
       renderStatusBar();
       renderTabs();
+    }
+  });
+
+  /* 点「占位符」标签时别让输入框失焦（否则插进去的位置就丢了） */
+  document.addEventListener("mousedown", function (ev) {
+    var el = ev.target;
+    if (el && typeof el.closest === "function" && el.closest('[data-act="rp:ph"]')) {
+      ev.preventDefault();
     }
   });
 
@@ -3842,6 +5665,23 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       state.autoBackup.enable = el.checked;
       state.autoBackupDirty = true;
       render();
+    }
+    /* ---- 💬 回复：按钮样式下拉（select 走 change） ---- */
+    else if (act === "rp:btnStyle") {
+      var stId = el.getAttribute("data-scene");
+      var stI = Number(el.getAttribute("data-i"));
+      var sd = replySceneDraft(stId);
+      if (!sd.buttons[stI]) return;
+      sd.buttons[stI].style = toText(el.value) || "default";
+      sd.buttonsTouched = true;
+      state.replies.focus = stId;
+      refreshReplyLive(stId);
+    }
+    else if (act === "rp:defaultStyle") {
+      state.replies.defaultStyle = toText(el.value) || "default";
+    }
+    else if (act === "rp:batchValue") {
+      state.replies.batchValue = el.value;
     }
   });
 

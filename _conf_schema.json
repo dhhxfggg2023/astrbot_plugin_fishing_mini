@@ -674,9 +674,23 @@
   },
   "button_defs": {
     "invisible": true,
-    "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。场景：cast=抛竿结果 / pull=咬钩提示（拉线）/ bag=背包视图 / location=钓点视图 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）；样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
+    "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。插件里每条回复都有独立的场景键（共 150+ 个，见编辑器页面「💬 回复」页的场景卡片），常用的如 cast.hit=钓到鱼的结果 / cast.miss_none=空竿 / pull.hook=咬钩提示 / bag.list=背包视图 / location.list=钓点视图 / shop.list=商店货架 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）。老的 5 个场景键（cast/pull/bag/location/story）仍然有效：没单独配置的子场景会继承它们，所以升级后默认按钮一字不变。样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
     "type": "text",
     "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|今日|/钓鱼 今日|default\ncast|卖光光|/钓鱼 卖光光|default\ncast|帮助|/钓鱼 帮助|default\npull|拉线！|/钓鱼 拉|primary\nbag|卖光光|/钓鱼 卖光光|default\nbag|水族馆|/钓鱼 水族馆|default\nbag|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|背包|/钓鱼 背包|default\nlocation|今日|/钓鱼 今日|default\nstory|{label}|/钓鱼 事件 {n}|default"
+  },
+  "text_overrides": {
+    "invisible": true,
+    "description": "每一条回复的文案。一行一条：场景|模板。场景键与 button_defs 完全同名（例如 cast.hit 既是「钓到鱼的结果」那条回复的按钮场景，也是它的文案键）。模板里可以用 {原文} 表示插件原本拼好的那段文字（把它放在前后就能加前缀/后缀、改 emoji、换语气），也可以用该场景声明的具体占位符（例如 cast.hit 支持 {鱼名} {品质} {估值} {余额}）。没写到的场景一律用内置文案，所以留空=和以前完全一样。未知场景、占位符写错的行会被跳过并在日志里提示（不会把 {xxx} 发给玩家）。推荐用编辑器页面「💬 回复」页改，那里可以实时预览效果。",
+    "type": "text",
+    "default": "",
+    "hint": "例：cast.miss_none|🪝 水面静悄悄的，连个泡都没有 ｜ pull.hook|{原文}\\n　⚡ 快！{秒数} 秒内发 /钓鱼 拉"
+  },
+  "button_layout": {
+    "invisible": true,
+    "description": "按钮排布：一行一条，格式「场景|每行几个」。场景写 * 表示其余所有场景的默认值。每行个数只能是 1~5。留空=用内置排布（默认每行 3 个，随机插曲 story 每行 1 个），与历史版本逐字一致。",
+    "type": "text",
+    "default": "",
+    "hint": "例：*|2 表示所有场景每行 2 个按钮；story|1 表示插曲每行 1 个"
   },
   "command_aliases": {
     "invisible": true,

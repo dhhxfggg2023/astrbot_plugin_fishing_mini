@@ -1751,21 +1751,308 @@ def _parse_easter_egg_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]
 
 
 # -----------------------------------------------------------------------------
-# 按钮表（button_defs）：一行一个按钮，全部可在配置面板里改
-#   场景|按钮文案|点击后发送|样式
+# 回复场景总表（唯一的「场景清单」）
+#
+# 为什么要有这张表：插件里**每一条回复**都有一个场景键（scene id），站长可以给
+# 任意一条回复单独配按钮与文案。这张表是三件事的唯一依据：
+#   1. 校验 button_defs / text_overrides 里的场景键（不认识的直接跳过并告警）
+#   2. 编辑器的「💬 回复」页按它枚举全部场景（按指令分组）
+#   3. test_local.py 用它做护栏：场景表 ↔ 文案表（_texts.py）↔ 代码里的回复出口
+#      三者少了一个就报错，避免以后新增回复忘了登记
+#
+# 「继承」字段：parent 场景没被单独配置时，该场景沿用 parent 的按钮。
+# 这是为了**升级前后默认行为逐字不变**：老版本的 5 个场景（cast/pull/bag/
+# location/story）仍然存在、仍是内置默认按钮的拥有者，只是原来共用它们的那些
+# 回复各自拿到了更细的场景键（例如 cast.hit / cast.junk / help.page 都继承 cast）。
 # -----------------------------------------------------------------------------
-#: 允许出现的场景（与 _views.py 里 5 个按钮方法一一对应）
-BUTTON_SCENES: tuple[str, ...] = ("cast", "pull", "bag", "location", "story")
 
-#: 每个场景一行最多摆几个按钮。默认值下与历史版本的按钮排版逐项一致：
-#: cast 有 5 个按钮 -> 3 + 2 两行；bag/location 各 3 个 -> 一行；pull 1 个 -> 一行。
-BUTTONS_PER_ROW: dict[str, int] = {
-    "cast": 3,
-    "bag": 3,
-    "location": 3,
-    "pull": 3,
-    "story": 1,
+#: 场景分组：(组 id, 标题, 说明)。编辑器按这个顺序分组展示
+SCENE_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ("cast", "🎣 下竿", "抛竿 / 连钓过程中的每一条回复"),
+    ("pull", "🪝 拉线", "咬钩提示与拉线判定结果"),
+    ("story", "❔ 小插曲", "水面上偶尔发生的小事件"),
+    ("bag", "🎒 背包", "背包与锁定"),
+    ("sell", "💰 卖鱼", "卖出 / 卖光光"),
+    ("shop", "🛒 商店", "买鱼饵、买道具"),
+    ("backpack", "🎒 扩容", "背包扩容"),
+    ("rod", "🎣 鱼竿", "买竿与换竿"),
+    ("bait", "🪱 换饵", "切换当前鱼饵"),
+    ("location", "📍 钓点", "钓点列表、前往、解锁"),
+    ("orders", "📋 订单", "每日订单"),
+    ("aquarium", "🐠 水族馆", "放 / 取 / 卖 / 领 / 扩建"),
+    ("item", "🎁 用道具", "饲料、培育、装饰"),
+    ("collection", "📕 图鉴", "收集进度"),
+    ("fishinfo", "🔍 查鱼", "查鱼 / 查钓点"),
+    ("collectibles", "🧺 杂物", "杂物与纸条"),
+    ("profile", "📇 档案", "等级 / 金币 / 统计"),
+    ("stamina", "⚡ 体力", "体力查看"),
+    ("sign", "📅 签到", "每日签到"),
+    ("today", "🌤️ 今日", "天气与行情"),
+    ("rank", "📊 排行", "群内排行榜"),
+    ("help", "❓ 帮助", "帮助分页与用法提示"),
+    ("custom", "🧩 自定义", "站长自定义命令"),
+    ("system", "⚙️ 通用", "兜底报错、群播报与共用按钮组"),
+)
+
+#: 全部回复场景：(场景 id, 分组, 说明, 继承场景)。继承场景留空 = 默认没有按钮
+REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
+    # ---- 共用按钮组（老版本的 5 个场景，默认按钮的拥有者）----
+    ("cast", "system", "共用按钮组：下竿相关回复（未单独配置时都继承它）", ""),
+    ("pull", "system", "共用按钮组：拉线相关回复（未单独配置时都继承它）", ""),
+    ("bag", "system", "共用按钮组：背包相关回复（未单独配置时都继承它）", ""),
+    ("location", "system", "共用按钮组：钓点相关回复（未单独配置时都继承它）", ""),
+    ("story", "system", "共用按钮组：小插曲（按选项生成，{label}/{n} 是模板占位符）", ""),
+    # ---- 下竿 ----
+    ("cast.hit", "cast", "钓到鱼之后那条结果", "cast"),
+    ("cast.junk", "cast", "这一竿钩上的是杂物", "cast"),
+    ("cast.miss_none", "cast", "空竿：空钩没鱼理", ""),
+    ("cast.miss_bait", "cast", "空竿：咬了一口又吐掉", ""),
+    ("cast.miss_deep", "cast", "空竿：深水钓点鱼不开口", ""),
+    ("cast.bait_note", "cast", "这一竿的鱼饵变化提示（挂在结果后面）", ""),
+    ("cast.busy", "cast", "上一竿还在等「拉」，又抛了一竿", ""),
+    ("cast.bad_bait", "cast", "指定的鱼饵不存在", ""),
+    ("cast.no_stamina", "cast", "体力不够，抛不了竿", ""),
+    ("cast.no_gold", "cast", "金币不够付钓费", ""),
+    ("cast.bag_full", "cast", "背包满了，钓上来的鱼装不下", ""),
+    ("cast.achievement", "cast", "这一竿解锁了新成就", ""),
+    ("cast.milestone", "cast", "这一竿达成了累计里程碑", ""),
+    ("cast.egg", "cast", "这一竿触发了彩蛋", ""),
+    ("cast.save_failed", "cast", "存档失败提示（单竿）", ""),
+    ("cast.multi_limit", "cast", "连钓次数超过上限", ""),
+    ("cast.multi_busy", "cast", "还在等「拉」的时候想连钓", ""),
+    ("cast.multi_bad_times", "cast", "连钓次数不是正整数", ""),
+    ("cast.multi_no_stamina", "cast", "连钓体力不够", ""),
+    ("cast.multi_no_bait", "cast", "连钓鱼饵不够", ""),
+    ("cast.multi_no_gold", "cast", "连钓金币不够", ""),
+    ("cast.multi_bag_full", "cast", "连钓途中背包满了", ""),
+    ("cast.multi_summary", "cast", "连钓战果汇总（每次钓获一行）", ""),
+    ("cast.multi_achievement", "cast", "连钓之后解锁的成就", ""),
+    ("cast.multi_milestone", "cast", "连钓之后达成的里程碑", ""),
+    ("cast.multi_save_failed", "cast", "连钓存档失败提示", ""),
+    # ---- 拉线 ----
+    ("pull.hook", "pull", "鱼咬钩了，提示在限定时间内发「拉」", "pull"),
+    ("pull.confirm", "pull", "拉线成功受理的即时回执", ""),
+    ("pull.none", "pull", "发「拉」的时候并没有鱼咬钩", ""),
+    ("pull.timeout", "pull", "超时没拉，鱼吐钩跑了", ""),
+    ("pull.escape", "pull", "拉到了但鱼挣脱跑了", ""),
+    # ---- 小插曲 ----
+    ("story.prompt", "story", "小插曲的提示与选项", "story"),
+    ("story.wrong_owner", "story", "想插手别人的小插曲", ""),
+    ("story.none", "story", "当前没有需要决定的事", ""),
+    ("story.expired", "story", "犹豫太久，插曲已经过去了", ""),
+    ("story.bad_choice", "story", "插曲选项序号写得不对", ""),
+    ("story.result", "story", "做出选择之后的结果", ""),
+    # ---- 背包 ----
+    ("bag.list", "bag", "背包内容（分页）", "bag"),
+    ("bag.empty", "bag", "背包是空的", ""),
+    ("lock.usage", "bag", "锁定/解锁的用法说明", ""),
+    ("lock.bad_index", "bag", "锁定/解锁的序号超出背包范围", ""),
+    ("lock.done", "bag", "锁定成功", ""),
+    ("lock.all_done", "bag", "解锁成功（批量解锁全部）", ""),
+    ("unlock.done", "bag", "解锁成功", ""),
+    # ---- 卖鱼 ----
+    ("sell.result", "sell", "卖出的结算结果", ""),
+    ("sell.empty", "sell", "背包空空的，没东西可卖", ""),
+    ("sell.removed", "sell", "「卖 垃圾」这个老玩法已去掉的提示", ""),
+    ("sell.bad_index", "sell", "卖的序号超出背包范围", ""),
+    ("sell.no_fish", "sell", "没有叫这个名字的鱼", ""),
+    ("sell.missing", "sell", "背包里没有这种鱼", ""),
+    ("sell.all_locked", "sell", "选中的鱼都锁着，卖光光不会动它们", ""),
+    ("sell.nothing", "sell", "没有可卖的鱼（兜底提示）", ""),
+    ("sell.locked_note", "sell", "卖完之后提示还有锁定的鱼留下", ""),
+    # ---- 商店 ----
+    ("shop.list", "shop", "商店货架", ""),
+    ("shop.usage", "shop", "商店用法说明", ""),
+    ("shop.usage_short", "shop", "商店用法（简版，带「看货架」）", ""),
+    ("shop.free_hook", "shop", "空钩不用买", ""),
+    ("shop.not_found", "shop", "商店里没有这件东西", ""),
+    ("shop.locked", "shop", "等级 / 鱼竿不够，还没上架", ""),
+    ("shop.no_gold_bait", "shop", "买鱼饵金币不足", ""),
+    ("shop.no_gold_item", "shop", "买道具金币不足", ""),
+    ("shop.bought", "shop", "买到东西了", ""),
+    # ---- 背包扩容 ----
+    ("backpack.upgraded", "backpack", "背包扩容成功", ""),
+    ("backpack.max", "backpack", "背包已经扩到最大", ""),
+    ("backpack.no_gold", "backpack", "扩容金币不足", ""),
+    # ---- 鱼竿 ----
+    ("rod.list", "rod", "鱼竿列表", ""),
+    ("rod.not_found", "rod", "没有这款鱼竿", ""),
+    ("rod.owned", "rod", "已经有这款竿了", ""),
+    ("rod.level_low", "rod", "等级不够，买不了这款竿", ""),
+    ("rod.no_gold", "rod", "买竿金币不足", ""),
+    ("rod.bought", "rod", "买到鱼竿了", ""),
+    ("rod.not_owned", "rod", "还没买这款竿", ""),
+    ("rod.equipped", "rod", "换好竿了", ""),
+    # ---- 换饵 ----
+    ("bait.equipped", "bait", "换饵成功", ""),
+    ("bait.not_found", "bait", "没有这种鱼饵", ""),
+    ("bait.locked", "bait", "这种鱼饵还没解锁", ""),
+    ("bait.not_owned", "bait", "背包里没有这种鱼饵", ""),
+    ("bait.same", "bait", "当前用的就是它", ""),
+    ("bait.empty", "bait", "没有鱼饵可用", ""),
+    # ---- 钓点 ----
+    ("location.list", "location", "钓点列表", "location"),
+    ("location.not_found", "location", "没有这个钓点", ""),
+    ("location.locked", "location", "钓点还没解锁", ""),
+    ("location.already_here", "location", "已经在这个钓点了", ""),
+    ("location.moved", "location", "前往钓点成功", ""),
+    ("location.unlocked", "location", "解锁钓点成功", ""),
+    ("location.unlock_go", "location", "解锁并直接前往成功", ""),
+    ("location.unlock_need", "location", "还不能去：条件没满足", ""),
+    # ---- 订单 ----
+    ("orders.locked", "orders", "等级不够，还看不到订单", ""),
+    ("orders.usage", "orders", "订单用法说明", ""),
+    ("orders.list", "orders", "当前订单列表", ""),
+    ("orders.submit_result", "orders", "交单结果", ""),
+    # ---- 水族馆 ----
+    ("aquarium.view", "aquarium", "水族馆总览", ""),
+    ("aquarium.usage", "aquarium", "水族馆用法说明", ""),
+    ("aquarium.max", "aquarium", "水族馆已经扩到最大", ""),
+    ("aquarium.no_gold", "aquarium", "扩建金币不足", ""),
+    ("aquarium.upgraded", "aquarium", "扩建成功", ""),
+    ("aquarium.income_start", "aquarium", "鱼塘开始计产了", ""),
+    ("aquarium.income_empty", "aquarium", "空缸没有产出", ""),
+    ("aquarium.income_wait", "aquarium", "产出还不够，再等等", ""),
+    ("aquarium.income", "aquarium", "领到了挂机产出", ""),
+    ("aquarium.feed_usage", "aquarium", "投喂用法提示（要用「用」指令）", ""),
+    ("aquarium.put_usage", "aquarium", "放鱼用法说明", ""),
+    ("aquarium.full", "aquarium", "水族馆已满", ""),
+    ("aquarium.put_done", "aquarium", "放鱼结果", ""),
+    ("aquarium.take_usage", "aquarium", "取鱼用法说明", ""),
+    ("aquarium.take_done", "aquarium", "取鱼结果", ""),
+    ("aquarium.sell_usage", "aquarium", "卖馆藏用法说明", ""),
+    ("aquarium.sell_done", "aquarium", "卖馆藏结果", ""),
+    ("aquarium.bad_slot", "aquarium", "栏位号不对", ""),
+    # ---- 用道具 ----
+    ("item.empty", "item", "背包里没有道具", ""),
+    ("item.usage", "item", "道具用法说明", ""),
+    ("item.missing", "item", "没有这个道具", ""),
+    ("item.used", "item", "道具使用成功", ""),
+    ("item.deco_disabled", "item", "本服没有开放装饰位", ""),
+    ("item.deco_full", "item", "装饰位满了", ""),
+    ("item.deco_used", "item", "装饰已生效", ""),
+    ("item.breed_no_fish", "item", "空缸不能培育", ""),
+    ("item.breed_usage", "item", "培育用法说明", ""),
+    ("item.breed_bad_slot", "item", "培育的栏位号不对", ""),
+    ("item.breed_failed", "item", "培育没能用出去", ""),
+    ("item.breed_done", "item", "培育结果", ""),
+    ("item.feed_no_fish", "item", "空缸不能投喂", ""),
+    ("item.feed_usage", "item", "投喂用法说明", ""),
+    ("item.feed_full", "item", "这些栏位都喂满了", ""),
+    ("item.feed_missing", "item", "饲料已经用完了", ""),
+    ("item.feed_done", "item", "投喂结果", ""),
+    # ---- 图鉴 ----
+    ("collection.view", "collection", "图鉴总览", ""),
+    ("collection.detail", "collection", "图鉴完整清单（分页）", ""),
+    ("collection.location", "collection", "某个钓点的收集进度", ""),
+    # ---- 查鱼 ----
+    ("fishinfo.usage", "fishinfo", "查鱼 / 查钓点的用法说明", ""),
+    ("fishinfo.detail", "fishinfo", "鱼或钓点的详情", ""),
+    ("fishinfo.location_detail", "fishinfo", "钓点里的鱼种清单", ""),
+    ("fishinfo.not_found", "fishinfo", "没有这种鱼，也没有这个钓点", ""),
+    ("fishinfo.empty", "fishinfo", "这个钓点还没有配置鱼种", ""),
+    # ---- 杂物 ----
+    ("collectibles.view", "collectibles", "杂物与纸条收集", ""),
+    # ---- 档案 / 体力 / 签到 / 今日 ----
+    ("profile.view", "profile", "档案（等级 / 金币 / 统计）", ""),
+    ("profile.renamed", "profile", "老指令「金币」改名的提示", ""),
+    ("stamina.view", "stamina", "体力状态", ""),
+    ("sign.done", "sign", "今天已经签到过了", ""),
+    ("sign.result", "sign", "签到成功", ""),
+    ("today.view", "today", "今日天气与行情", ""),
+    # ---- 排行 ----
+    ("rank.empty", "rank", "全服还没有排行数据", ""),
+    ("rank.no_data", "rank", "这个榜单还没有数据", ""),
+    ("rank.view", "rank", "排行榜内容", ""),
+    # ---- 帮助 / 自定义 / 通用 ----
+    ("help.page", "help", "帮助分页", "cast"),
+    ("help.unknown", "help", "不认识的用法（兜底提示）", ""),
+    ("custom.send", "custom", "自定义命令「发送:」的回复", ""),
+    ("system.error", "system", "操作出错的兜底回复", ""),
+    ("broadcast.catch", "system", "群播报：有人钓到了鱼", ""),
+)
+
+#: 场景 id 列表（button_defs / text_overrides 只认这些键）
+SCENE_IDS: tuple[str, ...] = tuple(row[0] for row in REPLY_SCENES)
+
+#: 允许出现在 button_defs / text_overrides 里的场景（旧名字，保持向后兼容）
+BUTTON_SCENES: tuple[str, ...] = SCENE_IDS
+
+#: 场景 -> 继承场景（没单独配按钮时用父场景的）
+SCENE_PARENT: dict[str, str] = {
+    row[0]: row[3] for row in REPLY_SCENES if row[3]
 }
+
+#: 场景 -> 说明 / 分组
+SCENE_DESC: dict[str, str] = {row[0]: row[2] for row in REPLY_SCENES}
+SCENE_GROUP: dict[str, str] = {row[0]: row[1] for row in REPLY_SCENES}
+SCENE_LABEL: dict[str, str] = {row[0]: row[2] for row in REPLY_SCENES}
+
+#: 继承关系反查：父场景 -> 子场景（编辑器要提示「这几个场景在共用它」）
+SCENE_CHILDREN: dict[str, tuple[str, ...]] = {}
+for _scene_id, _parent in SCENE_PARENT.items():
+    SCENE_CHILDREN[_parent] = SCENE_CHILDREN.get(_parent, ()) + (_scene_id,)
+
+#: 每个场景一行最多摆几个按钮的**内置**默认值。默认值下与历史版本逐项一致：
+#: cast 有 5 个按钮 -> 3 + 2 两行；bag/location 各 3 个 -> 一行；pull 1 个 -> 一行。
+#: 键 "*" = 其余所有场景的默认值（配置项 button_layout 可以覆盖它们）
+BUILTIN_BUTTONS_PER_ROW: dict[str, int] = {"*": 3, "story": 1}
+
+#: 生效的「每行几个」（配置接管后就地更新；_views.py 读它排版）
+BUTTONS_PER_ROW: dict[str, int] = dict(BUILTIN_BUTTONS_PER_ROW)
+
+#: 单行按钮个数上限（防止站长把键盘排爆）
+BUTTONS_PER_ROW_MAX = 5
+
+
+def scene_rows_per_row(scene: str) -> int:
+    """某个场景一行摆几个按钮（场景自身 > "*" 全局 > 3）。"""
+    value = BUTTONS_PER_ROW.get(scene)
+    if value is None:
+        value = BUTTONS_PER_ROW.get("*")
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = 3
+    return max(1, min(BUTTONS_PER_ROW_MAX, number))
+
+
+def _parse_button_layout(raw: Any, *, warn: Any = None) -> dict[str, int]:
+    """解析 `button_layout`：``场景|每行几个``（``*`` = 全局默认）。
+
+    坏行跳过并告警；返回 ``{场景: 个数}``（可能含 ``"*"``）。
+    """
+    rows: dict[str, int] = {}
+    bad = 0
+    first_bad = ""
+    for line in _defs_lines(raw):
+        parts = [x.strip() for x in line.split("|")]
+        if len(parts) < 2 or not parts[0]:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        scene = parts[0].lower()
+        if scene != "*" and scene not in SCENE_IDS:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        try:
+            number = int(float(parts[1]))
+        except (TypeError, ValueError):
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        if number < 1 or number > BUTTONS_PER_ROW_MAX:
+            bad += 1
+            first_bad = first_bad or line
+            continue
+        rows[scene] = number
+    if bad and warn:
+        warn(
+            f"button_layout 有 {bad} 行不合法已跳过（首条：{first_bad[:40]}），"
+            f"每行个数只能是 1~{BUTTONS_PER_ROW_MAX}"
+        )
+    return rows
 
 #: 样式别名 -> QQ 官方键盘的 render_data.style（内置默认只用到 1 和 4）
 BUTTON_STYLE_ALIASES: dict[str, int] = {

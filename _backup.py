@@ -34,6 +34,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -48,6 +49,10 @@ ENVELOPE_VERSION = 1
 #: 快照文件标记与版本
 SNAPSHOT_KEY = "__fishing_backup__"
 SNAPSHOT_VERSION = 1
+
+#: ``index.json`` 里「每次生成都会变」的字段：比较内容有没有变时忽略它们
+#: （它们照样写进文件，索引的对外结构一个字段都没少，见 ``rebuild_index``）
+INDEX_VOLATILE_KEYS = ("updated_at", "updated_text")
 
 KIND_DAILY = "daily"
 KIND_AUTO = "auto"
@@ -87,6 +92,32 @@ README_TEXT = """# 存档目录说明（群钓鱼插件）
 - 快照里的玩家 ID 就是当时的用户 ID；换平台（QQ 号 → openid）不会自动对应。
 - 数据版本 (`data_version`) 会在读档时自动迁移；跨大版本恢复的玩家数据也能读。
 """
+
+
+def _log_warning(text: str) -> None:
+    """写一条警告日志（logger 由 main 注入；拿不到就静默）。
+
+    本模块走的是「纯标准库、可单独导入测试」的路子，所以不 import astrbot 的
+    logger，也不 print：注入过 ``logger`` 就写日志，没注入就安静降级。
+    """
+    log = globals().get("logger")
+    if log is None:
+        return
+    try:
+        log.warning(text)
+    except Exception:  # pragma: no cover - 日志本身出错不该影响存档
+        pass
+
+
+def _log_debug(text: str) -> None:
+    """写一条调试日志（logger 由 main 注入；拿不到就静默）。"""
+    log = globals().get("logger")
+    if log is None:
+        return
+    try:
+        log.debug(text)
+    except Exception:  # pragma: no cover - 同上
+        pass
 
 
 def _text(ts: float | int | None = None, fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
@@ -138,12 +169,66 @@ def envelope_meta(raw: Any) -> dict[str, Any]:
     }
 
 
+def _index_stamps(ts: float | None = None) -> tuple[int, str]:
+    """``index.json`` 的两个时间字段（同一个时刻算出来，免得跨秒对不上）。"""
+    stamp = float(ts if ts is not None else time.time())
+    return int(stamp), _text(stamp)
+
+
+def _index_semantic(payload: Any) -> Any:
+    """取出索引里「有意义」的部分：去掉每次生成都会变的时间戳字段。
+
+    只用于**比较内容有没有变**，不会写进文件 —— ``index.json`` 的对外结构
+    （含 ``updated_at`` / ``updated_text``）一个字段都没动。
+    """
+    if not isinstance(payload, dict):
+        return None
+    return {
+        key: value for key, value in payload.items() if key not in INDEX_VOLATILE_KEYS
+    }
+
+
+def _content_digest(value: Any) -> str:
+    """内容摘要（sha1）：进程内判断「盘上还是上次那份清单」用。"""
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    except (TypeError, ValueError):  # pragma: no cover - 正常内容不会序列化失败
+        return ""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """原子写文本：先写同目录临时文件，再 ``os.replace`` 顶上去。
+
+    好处：进程被杀 / 写盘出错时，**已经存在的那份文件一个字节都不会动**
+    （不会出现半截 JSON）；本次的临时文件在异常路径上也会删干净。
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:  # 含 KeyboardInterrupt：先清掉临时文件再往上抛
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
 class BackupStore:
     """存档仓库：负责所有落盘动作（不含任何 AstrBot 依赖，方便单测）。"""
 
     def __init__(self, root: str | os.PathLike[str], data_version: int = 1) -> None:
         self.root = Path(root)
         self.data_version = int(data_version)
+        #: ``index.json`` 的进程内缓存：上次写进去的内容摘要 + 当时的文件/目录指纹。
+        #: 让同一进程里反复调用 ``rebuild_index()`` 几乎零开销（见该方法说明）。
+        self._index_digest: str | None = None
+        self._index_payload: dict[str, Any] | None = None
+        self._index_sig: tuple[int, int] | None = None
+        self._scan_sig: tuple[tuple[str, str, int, int], ...] | None = None
+        #: 上一次报过的索引错误（同一个错只告警一次，见 ``_warn_index``）
+        self._index_error = ""
 
     # ---------------------------------------------------------------- 目录
     def path_of(self, *parts: str) -> Path:
@@ -488,13 +573,122 @@ class BackupStore:
         return removed
 
     # ------------------------------------------------------------ 清单
-    def rebuild_index(self) -> dict[str, Any]:
-        """重写 index.json（网页面板/排查都读它）。"""
-        items = self.list_snapshots()
-        payload = {
+    def _index_file_sig(self) -> tuple[int, int] | None:
+        """``index.json`` 的轻量指纹（修改时间 + 大小）；读不到算 ``None``。"""
+        try:
+            stat = self.path_of("index.json").stat()
+        except OSError:
+            return None
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _scan_signature(self) -> tuple[tuple[str, str, int, int], ...]:
+        """存档目录的清单指纹：只看文件名/大小/修改时间，**不读文件内容**。
+
+        比 ``list_snapshots()`` 便宜得多（那一版要把每个快照 JSON 读进来解析），
+        用来判断「目录自上次调用后有没有动过」。
+        """
+        parts: list[tuple[str, str, int, int]] = []
+        for folder in (*KIND_NAMES, "players"):
+            try:
+                with os.scandir(self.path_of(folder)) as entries:
+                    for entry in entries:
+                        if not entry.name.lower().endswith(".json"):
+                            continue
+                        try:
+                            info = entry.stat()
+                        except OSError:
+                            continue
+                        parts.append(
+                            (folder, entry.name, info.st_size, info.st_mtime_ns)
+                        )
+            except OSError:  # 目录还没建：当空目录
+                continue
+        parts.sort()
+        return tuple(parts)
+
+    def _cached_index(self) -> dict[str, Any] | None:
+        """进程内缓存命中就返回上次那份清单（不扫盘、不读盘、不写盘）。
+
+        必须同时满足才算命中：上次记下的 ``index.json`` 指纹没变（没被别的进程
+        或手动改过），且存档目录的清单指纹没变（没有新存档、没有删/改名/改内容）。
+        """
+        if self._index_payload is None or self._index_sig is None:
+            return None
+        if self._index_file_sig() != self._index_sig:
+            return None
+        if self._scan_signature() != self._scan_sig:
+            return None
+        return dict(self._index_payload)  # 浅拷贝一份，别让调用方改坏缓存
+
+    def _read_index_file(self) -> tuple[dict[str, Any] | None, tuple[int, int] | None]:
+        """读回磁盘上现有的 ``index.json``（不存在/坏掉都算 ``None``，同时给出指纹）。"""
+        path = self.path_of("index.json")
+        try:
+            stat = path.stat()
+        except OSError:
+            return None, None
+        sig = (stat.st_mtime_ns, stat.st_size)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None, sig
+        return (data if isinstance(data, dict) else None), sig
+
+    def _remember_index(
+        self,
+        payload: dict[str, Any],
+        digest: str,
+        sig: tuple[int, int] | None,
+        scan_sig: tuple[tuple[str, str, int, int], ...] | None,
+    ) -> None:
+        """记下「盘上现在就是这份清单」，供下一次调用秒回。
+
+        ``scan_sig`` 用的是**扫盘之前**记下的目录指纹：万一扫盘/写盘期间目录又变了，
+        下次调用会指纹不符 → 老老实实重扫一遍，绝不会拿着旧清单糊弄过去。
+        """
+        self._index_payload = payload
+        self._index_digest = digest
+        self._index_sig = sig
+        self._scan_sig = scan_sig
+
+    def _forget_index(self) -> None:
+        """缓存作废（写盘失败时用）：下次调用重新扫盘、重试写入。"""
+        self._index_payload = None
+        self._index_digest = None
+        self._index_sig = None
+        self._scan_sig = None
+
+    def _warn_index(self, text: str) -> None:
+        """索引相关的告警：同一个错只告警一次（每 60 秒调一次，别刷屏）。"""
+        if self._index_error == text:
+            _log_debug(text)
+            return
+        self._index_error = text
+        _log_warning(text)
+
+    def _empty_index(self) -> dict[str, Any]:
+        """扫盘失败时的降级返回：结构与正常清单一致，数字清零。"""
+        updated_at, updated_text = _index_stamps()
+        return {
             SNAPSHOT_KEY: SNAPSHOT_VERSION,
-            "updated_at": int(time.time()),
-            "updated_text": _text(),
+            "updated_at": updated_at,
+            "updated_text": updated_text,
+            "data_version": self.data_version,
+            "root": str(self.root),
+            "total": 0,
+            "by_kind": {kind: 0 for kind in KIND_NAMES},
+            "snapshots": [],
+            "players": [],
+        }
+
+    def _build_index_payload(self) -> dict[str, Any]:
+        """扫一遍存档目录，拼出清单内容（不落盘）。"""
+        items = self.list_snapshots()
+        updated_at, updated_text = _index_stamps()
+        return {
+            SNAPSHOT_KEY: SNAPSHOT_VERSION,
+            "updated_at": updated_at,
+            "updated_text": updated_text,
             "data_version": self.data_version,
             "root": str(self.root),
             "total": len(items),
@@ -504,12 +698,83 @@ class BackupStore:
             "snapshots": items[:200],
             "players": self.list_exported()[:200],
         }
+
+    def _write_index_if_changed(
+        self,
+        payload: dict[str, Any],
+        scan_sig: tuple[tuple[str, str, int, int], ...],
+    ) -> bool:
+        """内容与磁盘上那份语义一致就跳过写入，否则原子替换。返回是否真写了。
+
+        比较口径：只看 ``_index_semantic()``（去掉 ``updated_at`` / ``updated_text``
+        这两个每次生成都会变的字段）之后的**完整内容**，与字段顺序、缩进、文件名
+        写法都无关 —— 时间戳要是也拿来比，就会永远判定成「变了」。
+        """
+        semantic = _index_semantic(payload)
+        digest = _content_digest(semantic)
+        # 同一进程内刚确认过「盘上就是这份内容」，且文件没被动过 → 连读盘都省了
+        if (
+            self._index_sig is not None
+            and digest == self._index_digest
+            and self._index_file_sig() == self._index_sig
+        ):
+            self._remember_index(payload, digest, self._index_sig, scan_sig)
+            return False
+        disk, sig = self._read_index_file()
+        if disk is not None and _index_semantic(disk) == semantic:
+            # 换进程后第一次调用也会走到这儿：内容一样就一个字节都不写（mtime 不动）
+            self._remember_index(disk, digest, sig, scan_sig)
+            return False
+        _atomic_write_text(
+            self.path_of("index.json"),
+            json.dumps(payload, ensure_ascii=False, indent=1),
+        )
+        self._remember_index(payload, digest, self._index_file_sig(), scan_sig)
+        return True
+
+    def rebuild_index(self) -> dict[str, Any]:
+        """重建 ``index.json``（网页面板/排查都读它），返回清单内容。
+
+        ``_data_admin._refresh_data_status()`` 每 60 秒就会调一次这里，所以做了三层
+        优化（**索引文件的对外结构一个字段都没改**，读它的人不用动）：
+
+        1. **进程内缓存**：上次写进去的内容摘要 + 文件/目录指纹都还在且没变，
+           直接返回上次那份（不扫盘、不读盘、不写盘）；
+        2. **内容不变不写盘**：重新扫出来的内容与磁盘上那份语义一致时跳过写入，
+           所以 ``index.json`` 的 mtime 不会被动；
+        3. **原子替换**：真要写时才「同目录临时文件 + ``os.replace``」，
+           出错不会留下半截 JSON，也绝不会破坏已有索引。
+
+        异常一律记日志降级返回，绝不抛给调用方。
+
+        Returns:
+            dict: 清单内容（结构见 ``_build_index_payload``）。
+        """
+        # 1) 进程内缓存命中：连扫盘都省了
         try:
-            self.path_of("index.json").write_text(
-                json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
-            )
-        except OSError:
-            pass
+            cached = self._cached_index()
+        except Exception as e:  # pragma: no cover - 指纹算不出来就按未命中处理
+            _log_debug(f"存档清单缓存检查失败（按未命中处理）：{e}")
+            cached = None
+        if cached is not None:
+            return cached
+
+        # 2) 重新扫一份（先记下扫盘前的目录指纹，写完之后它就是缓存指纹）
+        try:
+            scan_sig = self._scan_signature()
+            payload = self._build_index_payload()
+        except Exception as e:
+            self._warn_index(f"重建存档清单失败（本次不写盘）：{e}")
+            self._forget_index()
+            return self._empty_index()
+
+        # 3) 内容没变就不写盘；要写就原子替换
+        try:
+            if self._write_index_if_changed(payload, scan_sig):
+                _log_debug("存档清单有变化，已重写 index.json")
+        except Exception as e:
+            self._warn_index(f"写入存档清单失败（保留原文件）：{e}")
+            self._forget_index()
         return payload
 
     def total_size(self) -> int:

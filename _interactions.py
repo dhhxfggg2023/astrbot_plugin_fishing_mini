@@ -14,6 +14,29 @@
 from __future__ import annotations
 
 
+def _message_text(message: Any) -> str:
+    """从 AstrBot 的回复对象里取出纯文本（取不到就返回空串）。
+
+    AstrBot v4 的 ``event.plain_result(text)`` 返回的是 ``MessageEventResult``
+    （一条 ``MessageChain``，内容是 ``[Plain(text)]``），**没有** ``.text`` 属性；
+    单测里的假对象则直接带 ``.text``。两种形态都兼容；取不到就不取，调用方
+    会原样把消息交出去，绝不影响原有回复。
+    """
+    text = getattr(message, "text", None)
+    if isinstance(text, str):
+        return text
+    chain = getattr(message, "chain", None)
+    if isinstance(chain, (list, tuple)):
+        parts = []
+        for item in chain:
+            if type(item).__name__ == "Plain":
+                value = getattr(item, "text", None)
+                if isinstance(value, str):
+                    parts.append(value)
+        return "".join(parts)
+    return ""
+
+
 class InteractionsMixin:
     """交互与推送：按钮 payload、@ 提醒、随机插曲、群播报、拉线小游戏（由 FishingPlugin 继承，见 main.py 的类定义）。"""
 
@@ -180,15 +203,67 @@ class InteractionsMixin:
         self,
         event: AstrMessageEvent,
         text: str,
-        rows: list[list[dict[str, Any]]] | None = None,
+        scene: str | None = None,
+        values: dict[str, Any] | None = None,
     ):
-        """**统一输出出口**：能发按钮就发按钮，否则退回纯文本。
+        """**统一输出出口**：先按场景叠加文案覆盖，再能发按钮就发按钮，否则退回纯文本。
 
-        用法：``async for r in self._say(event, text, rows): yield r``
+        * ``scene``：回复场景 id（见 _calc.py 的 ``REPLY_SCENES``）。场景自己没配
+          按钮时会继承父场景（老版本的 cast/pull/bag/location/story 就是父场景），
+          所以升级前后默认按钮逐字不变；默认没有按钮的场景传进来也只是纯文本。
+        * ``values``：文案模板的占位符取值（只有少数场景用到）。``{原文}`` 永远
+          等于代码拼好的这段文本，所以站长不改文案时行为完全不变。
+
+        用法：``async for r in self._say(event, text, "bag.list"): yield r``
         """
+        text = self._scene_text(scene, text, values)
+        rows = self._scene_rows(scene) if scene else []
         if rows and await self._send_with_buttons(event, text, rows):
             return
         yield event.plain_result(text)
+
+    async def _say_msg(
+        self,
+        event: AstrMessageEvent,
+        scene: str | None,
+        message: Any,
+        values: dict[str, Any] | None = None,
+    ):
+        """``_say`` 的「消息对象版」：``message`` 一般来自 ``event.plain_result(文字)``。
+
+        存在的意义：让几百处已经在用的 ``yield event.plain_result(...)`` 只需要
+        在外面套一层就能带上场景按钮与文案覆盖，不用把里面的文案重写一遍。
+        取不到文本时原样交出对象（功能不受影响）。
+        """
+        text = _message_text(message)
+        if not text:
+            yield message
+            return
+        async for reply in self._say(event, text, scene, values):
+            yield reply
+
+    async def _push(
+        self,
+        event: AstrMessageEvent,
+        scene: str | None,
+        text: str,
+        values: dict[str, Any] | None = None,
+    ) -> bool:
+        """主动推送一条消息（不经过 ``yield`` 链：成就、彩蛋、群播报都走这里）。
+
+        失败只记日志，绝不影响主流程；返回是否推成功（发按钮成功也算成功）。
+        """
+        text = self._scene_text(scene, text, values)
+        try:
+            rows = self._scene_rows(scene) if scene else []
+            if rows and await self._send_with_buttons(event, text, rows):
+                return True
+            await event.send(event.plain_result(text))
+            return True
+        except Exception as e:
+            logger.warning(f"推送消息失败：{e}")
+            return False
+
 
 
 
@@ -310,11 +385,21 @@ class InteractionsMixin:
 
         tips = ["竿尖猛地弯了下去", "浮漂一下子沉进水里", "线被拽得吱吱响",
                 "水面炸开一朵水花", "手里的竿传来一股大力"]
+        tip = random.choice(tips)
         hook_text = (
-            f"{_fish_emoji(fish)} {fish['name']} 咬钩了！{random.choice(tips)}\n"
+            f"{_fish_emoji(fish)} {fish['name']} 咬钩了！{tip}\n"
             f"⚡ {window:.0f} 秒内发 /钓鱼 拉（或点下面的按钮）"
         )
-        async for reply in self._say(event, hook_text, self._pull_rows()):
+        async for reply in self._say(
+            event,
+            hook_text,
+            "pull.hook",
+            values={
+                "鱼名": str(fish.get("name") or ""),
+                "秒数": f"{window:.0f}",
+                "手感": tip,
+            },
+        ):
             yield reply
 
         started = time.monotonic()
@@ -333,10 +418,11 @@ class InteractionsMixin:
             self._pending_pulls.pop(user_id, None)
 
         if not hit:
-            yield event.plain_result(
-                f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
-                f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
-            )
+            async for _r in self._say_msg(event, "pull.timeout", event.plain_result(
+                    f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
+                    f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
+                )):
+                yield _r
             yield {"catch": None, "rating": "失败", "bonus": 0.0}
             return
 
@@ -346,9 +432,10 @@ class InteractionsMixin:
 
         escape = _clamp(spec["escape"] * factor, 0.0, 0.95)
         if random.random() < escape:
-            yield event.plain_result(
-                f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
-            )
+            async for _r in self._say_msg(event, "pull.escape", event.plain_result(
+                    f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
+                )):
+                yield _r
             yield {"catch": None, "rating": rating, "bonus": 0.0}
             return
 
@@ -422,15 +509,18 @@ class InteractionsMixin:
         player["event"] = {"id": story["id"], "ts": int(time.time())}
         self._recent_events[self._session_key(event)] = (user_id, time.time())
         await self._save_player(player)
-        text, rows = self._event_prompt(story)
-        async for reply in self._say(event, text, rows):
+        text, _rows = self._event_prompt(story)
+        async for reply in self._say(event, text, "story.prompt"):
             yield reply
 
-    async def _broadcast(self, event: AstrMessageEvent, catch: dict[str, Any]) -> None:
+    async def _broadcast(self, event: AstrMessageEvent, catch: dict[str, Any]) -> bool:
         try:
             sender = event.get_sender_name() or str(event.get_sender_id())
-            await event.send(
-                event.plain_result(f"📢 {sender} 钓到了 {_instance_line(catch)}！")
+            return await self._push(
+                event,
+                "broadcast.catch",
+                f"📢 {sender} 钓到了 {_instance_line(catch)}！",
+                values={"昵称": str(sender), "渔获": _instance_line(catch)},
             )
         except Exception as e:
             logger.warning(f"群播报失败：{e}")

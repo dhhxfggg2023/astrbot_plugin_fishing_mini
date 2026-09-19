@@ -51,7 +51,8 @@ class EngineMixin:
 
         lock = self._lock_for(user_id)
         if lock.locked():
-            yield event.plain_result("🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉")
+            async for _r in self._say_msg(event, "cast.busy", event.plain_result("🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉")):
+                yield _r
             return
 
         async with lock:
@@ -84,9 +85,10 @@ class EngineMixin:
                 matched = self._find_bait(bait_name)
                 if matched is None:
                     names = "、".join(self.baits[b]["name"] for b in self._bait_list())
-                    yield event.plain_result(
-                        f"🤔 没有「{bait_name}」这种饵。可买：{names}"
-                    )
+                    async for _r in self._say_msg(event, "cast.bad_bait", event.plain_result(
+                            f"🤔 没有「{bait_name}」这种饵。可买：{names}"
+                        )):
+                        yield _r
                     return
                 bait_id = matched
                 if bait_id != "none":
@@ -125,10 +127,11 @@ class EngineMixin:
                 if stamina < 1:
                     wait = _stamina_wait_seconds(player, cfg)
                     cap = _safe_int(cfg.get("stamina_max"), 20, 0)
-                    yield event.plain_result(
-                        f"⚡ 体力不够了（0/{cap}），再过 {wait} 秒恢复 1 点\n"
-                        f"　体力可以攒着，上限 {cap} 点（/钓鱼 体力 查看）"
-                    )
+                    async for _r in self._say_msg(event, "cast.no_stamina", event.plain_result(
+                            f"⚡ 体力不够了（0/{cap}），再过 {wait} 秒恢复 1 点\n"
+                            f"　体力可以攒着，上限 {cap} 点（/钓鱼 体力 查看）"
+                        )):
+                        yield _r
                     return
 
             # --- 费用 ---
@@ -136,19 +139,21 @@ class EngineMixin:
             # 空钩下竿完全免费（fish_cost 默认 0，站长仍可在配置里开启钓费）。
             total_cost = max(0, _safe_int(cfg["fish_cost"], 0, 0))
             if total_cost and _safe_int(player.get("gold"), 0, 0) < total_cost:
-                yield event.plain_result(
-                    f"💸 下竿需要 {total_cost} 金币，你只有 "
-                    f"{_fmt_gold(player.get('gold', 0))}。可 /钓鱼 签到 或 /钓鱼 卖"
-                )
+                async for _r in self._say_msg(event, "cast.no_gold", event.plain_result(
+                        f"💸 下竿需要 {total_cost} 金币，你只有 "
+                        f"{_fmt_gold(player.get('gold', 0))}。可 /钓鱼 签到 或 /钓鱼 卖"
+                    )):
+                    yield _r
                 return
 
             # --- 背包容量检查（限制无限囤货）---
             backpack_cap = _backpack_capacity(player, cfg)
             if len(player.get("inventory") or []) >= backpack_cap:
-                yield event.plain_result(
-                    f"🎒 背包满了（{backpack_cap}）！先 /钓鱼 卖 或 /钓鱼 水族馆 放，"
-                    f"也可以 /钓鱼 商店 买 扩建背包"
-                )
+                async for _r in self._say_msg(event, "cast.bag_full", event.plain_result(
+                        f"🎒 背包满了（{backpack_cap}）！先 /钓鱼 卖 或 /钓鱼 水族馆 放，"
+                        f"也可以 /钓鱼 商店 买 扩建背包"
+                    )):
+                    yield _r
                 return
 
             # --- 扣费 / 扣饵 / 扣体力（各一次）---
@@ -181,24 +186,35 @@ class EngineMixin:
                     lines = [t for t in (drop_text, bait_note) if t]
                     if lines:
                         async for reply in self._say(
-                            event, "\n".join(lines), self._cast_rows()
+                            event, "\n".join(lines), "cast.junk"
                         ):
                             yield reply
                     # 这一竿没钓到鱼：不计渔获、不进图鉴、不刷新最佳纪录、不播报
                     async for reply in self._maybe_trigger_story(event, user_id):
                         yield reply
                     return
-                tip = (
-                    "🪝 空钩在水里漂了半天，鱼碰了碰就游走了"
-                    if bait_id == "none"
-                    else f"🎣 咬了一口又吐掉了——{self._bait_label(bait_id)} 白搭了"
-                )
+                if bait_id == "none":
+                    scene = "cast.miss_none"
+                    tip = "🪝 空钩在水里漂了半天，鱼碰了碰就游走了"
+                else:
+                    scene = "cast.miss_bait"
+                    tip = f"🎣 咬了一口又吐掉了——{self._bait_label(bait_id)} 白搭了"
                 # 深水钓点本来就难：空竿时点一句，别让玩家以为是自己的问题
                 # （只描述现象，不带「去哪儿买什么」的教程尾巴）
                 factor = self._location_hook_factor(cast_loc.get("id"))
                 if factor is not None and factor < 0.75:
+                    scene = "cast.miss_deep"
                     tip = f"🌊 {cast_loc['emoji']}{cast_loc['name']} 水太深了，鱼不太愿意开口"
-                yield event.plain_result(tip)
+                async for _r in self._say(
+                    event,
+                    tip,
+                    scene,
+                    values={
+                        "鱼饵": self._bait_label(bait_id),
+                        "钓点": f"{cast_loc.get('emoji', '')}{cast_loc.get('name', '')}",
+                    },
+                ):
+                    yield _r
                 return
 
             # ---- 抽鱼种（按当前钓点的鱼池 + 今日天气）----
@@ -270,7 +286,8 @@ class EngineMixin:
                 # 鱼跑了：扣费已在前面完成（饵已经消耗掉），
                 # 但「饵用完了」这类提示必须照说，否则玩家只看到掉钱。
                 if bait_note:
-                    yield event.plain_result(bait_note)
+                    async for _r in self._say_msg(event, "cast.bait_note", event.plain_result(bait_note)):
+                        yield _r
                 return
 
             # 拉线技巧计数（用于成就）
@@ -287,7 +304,18 @@ class EngineMixin:
             )
             if bait_note:
                 result_text += f"\n{bait_note}"
-            async for reply in self._say(event, result_text, self._cast_rows()):
+            async for reply in self._say(
+                event,
+                result_text,
+                "cast.hit",
+                values={
+                    "鱼名": str((FISH_BY_ID.get(catch.get("fish_id", "")) or {}).get("name") or ""),
+                    "品质": str(catch.get("quality") or ""),
+                    "估值": _fmt_gold(_instance_value(catch)),
+                    "余额": _fmt_gold(player.get("gold", 0)),
+                    "评价": str(rating or ""),
+                },
+            ):
                 yield reply
             await self._finalize_catch(
                 event,
@@ -321,15 +349,17 @@ class EngineMixin:
         cfg = self.cfg
         limit = max(1, _safe_int(cfg.get("multi_cast_max"), 20, 1))
         if times > limit:
-            yield event.plain_result(
-                f"🔒 一次最多连钓 {limit} 次（你填的是 {times}）\n"
-                f"　想钓更多就分几次，体力本来就可以攒着"
-            )
+            async for _r in self._say_msg(event, "cast.multi_limit", event.plain_result(
+                    f"🔒 一次最多连钓 {limit} 次（你填的是 {times}）\n"
+                    f"　想钓更多就分几次，体力本来就可以攒着"
+                )):
+                yield _r
             return
 
         lock = self._lock_for(user_id)
         if lock.locked():
-            yield event.plain_result("🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉")
+            async for _r in self._say_msg(event, "cast.multi_busy", event.plain_result("🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉")):
+                yield _r
             return
 
         async with lock:
@@ -359,11 +389,12 @@ class EngineMixin:
                 stamina = _refresh_stamina(player, cfg)
                 if stamina < times:
                     wait = _stamina_wait_seconds(player, cfg)
-                    yield event.plain_result(
-                        f"⚡ 体力不够：连钓 {times} 次要 {times} 点，"
-                        f"你现在 {stamina}/{cap}\n"
-                        f"　再过 {wait} 秒恢复 1 点（体力能攒着，/钓鱼 体力 查看）"
-                    )
+                    async for _r in self._say_msg(event, "cast.multi_no_stamina", event.plain_result(
+                            f"⚡ 体力不够：连钓 {times} 次要 {times} 点，"
+                            f"你现在 {stamina}/{cap}\n"
+                            f"　再过 {wait} 秒恢复 1 点（体力能攒着，/钓鱼 体力 查看）"
+                        )):
+                        yield _r
                     return
 
             # --- 鱼饵：用当前装备的那一种；空钩不消耗饵 ---
@@ -379,12 +410,13 @@ class EngineMixin:
                     # 和单竿一样：没货就真的换回空钩，写进存档
                     player["equipped_bait"] = "none"
                 elif owned < times:
-                    yield event.plain_result(
-                        f"🎒 {self._bait_label(equipped)}只剩 {owned} 个，"
-                        f"连钓 {times} 次要 {times} 个\n"
-                        f"　/钓鱼 商店 买 {self.baits[equipped]['name']} 补货，"
-                        f"或先 /钓鱼 {owned} 把这几个用掉"
-                    )
+                    async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
+                            f"🎒 {self._bait_label(equipped)}只剩 {owned} 个，"
+                            f"连钓 {times} 次要 {times} 个\n"
+                            f"　/钓鱼 商店 买 {self.baits[equipped]['name']} 补货，"
+                            f"或先 /钓鱼 {owned} 把这几个用掉"
+                        )):
+                        yield _r
                     return
                 else:
                     bait_id = equipped
@@ -393,17 +425,19 @@ class EngineMixin:
             unit_cost = max(0, _safe_int(cfg["fish_cost"], 0, 0))
             cost_all = unit_cost * times
             if cost_all and _safe_int(player.get("gold"), 0, 0) < cost_all:
-                yield event.plain_result(
-                    f"💸 连钓 {times} 次要 {_fmt_gold(cost_all)} 金币，"
-                    f"你只有 {_fmt_gold(player.get('gold', 0))}"
-                )
+                async for _r in self._say_msg(event, "cast.multi_no_gold", event.plain_result(
+                        f"💸 连钓 {times} 次要 {_fmt_gold(cost_all)} 金币，"
+                        f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                    )):
+                    yield _r
                 return
             bag_cap = _backpack_capacity(player, cfg)
             free = max(0, bag_cap - len(player.get("inventory") or []))
             if free <= 0:
-                yield event.plain_result(
-                    f"🎒 背包满了（{bag_cap}）！先 /钓鱼 卖 或 /钓鱼 水族馆 放"
-                )
+                async for _r in self._say_msg(event, "cast.multi_bag_full", event.plain_result(
+                        f"🎒 背包满了（{bag_cap}）！先 /钓鱼 卖 或 /钓鱼 水族馆 放"
+                    )):
+                    yield _r
                 return
             planned = min(times, free)
             truncated = planned < times
@@ -546,15 +580,19 @@ class EngineMixin:
                 )
             lines.append(tail)
 
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "cast.multi_summary", event.plain_result("\n".join(lines))):
+                yield _r
             if new_ach:
-                yield event.plain_result("🎉 " + "；".join(new_ach))
+                async for _r in self._say_msg(event, "cast.multi_achievement", event.plain_result("🎉 " + "；".join(new_ach))):
+                    yield _r
             if milestone:
-                yield event.plain_result(milestone)
+                async for _r in self._say_msg(event, "cast.multi_milestone", event.plain_result(milestone)):
+                    yield _r
             if not saved:
-                yield event.plain_result(
-                    "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）"
-                )
+                async for _r in self._say_msg(event, "cast.multi_save_failed", event.plain_result(
+                        "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）"
+                    )):
+                    yield _r
 
     def _record_catch(self, player: dict[str, Any], catch: dict[str, Any]) -> None:
         """渔获入账（不含成就/存档）：背包、累计、图鉴、变异计数、最佳纪录。
@@ -633,19 +671,22 @@ class EngineMixin:
             await self._touch_leaderboard(player)
 
             if new_achievements:
-                await event.send(
-                    event.plain_result("🎉 " + "；".join(new_achievements))
+                await self._push(
+                    event,
+                    "cast.achievement",
+                    "🎉 " + "；".join(new_achievements),
+                    values={"列表": "；".join(new_achievements)},
                 )
             if egg_text:
-                await event.send(event.plain_result(egg_text))
+                await self._push(event, "cast.egg", egg_text)
             if milestone:
-                await event.send(event.plain_result(milestone))
+                await self._push(event, "cast.milestone", milestone)
             if not saved:
-                await event.send(
-                    event.plain_result(
-                        "⚠️ 数据保存失败，这条记录可能不会保留\n"
-                        "　请把这条消息发给管理员核对（日志里有详情）"
-                    )
+                await self._push(
+                    event,
+                    "cast.save_failed",
+                    "⚠️ 数据保存失败，这条记录可能不会保留\n"
+                    "　请把这条消息发给管理员核对（日志里有详情）",
                 )
         except Exception as e:
             logger.error(f"写入渔获失败（玩家 {user_id}）：{e}", exc_info=True)

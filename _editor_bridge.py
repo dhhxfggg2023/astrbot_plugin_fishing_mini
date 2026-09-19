@@ -57,6 +57,7 @@ from typing import Any
 ENDPOINT_CONFIG = "config"
 ENDPOINT_SNAPSHOT = "snapshot"
 ENDPOINT_PLAYERS = "players"
+ENDPOINT_SCENES = "scenes"
 
 #: 玩家金币的合法范围（防止手滑写出天文数字把经济系统写崩）
 PLAYER_GOLD_MAX = 1_000_000_000
@@ -364,6 +365,12 @@ class EditorApiMixin:
                 ["POST"],
                 "改玩家金币（实时玩家，或某份存档里的玩家）",
             ),
+            (
+                "/{plugin}/" + ENDPOINT_SCENES,
+                self.editor_api_scenes,
+                ["GET"],
+                "读取群钓鱼的回复场景表（每条回复的按钮 + 文案 + 预览）",
+            ),
         ]
 
     # ------------------------------------------------------------ GET config
@@ -387,6 +394,112 @@ class EditorApiMixin:
     async def editor_api_config(self):
         """GET config：返回当前配置，供页面渲染。"""
         data = self._editor_config_payload()
+        try:
+            from astrbot.api.web import json_response
+        except Exception:  # pragma: no cover - 单测里可能没有 astrbot
+            return data
+        return json_response(data)
+
+    # ------------------------------------------------------------ GET scenes
+    def _editor_default_buttons(self, scene: str) -> list[list[Any]]:
+        """某场景的**出厂**按钮（含继承：子场景没内置时用父场景的）。"""
+        items = _BUILTIN_BUTTONS.get(scene) or []
+        if not items:
+            parent = SCENE_PARENT.get(scene) or ""
+            if parent:
+                items = _BUILTIN_BUTTONS.get(parent) or []
+        return [[label, data, style] for label, data, style in items]
+
+    def _editor_scene_entry(self, scene: str) -> dict[str, Any]:
+        """一个回复场景的全部信息（编辑器的一张卡片）。"""
+        text_lib = TEXT_LIB
+        template = "{原文}"
+        placeholders: list[str] = ["原文"]
+        samples: dict[str, str] = {"原文": ""}
+        dynamic = False
+        if text_lib is not None:
+            template = str(text_lib.TEXTS.get(scene) or "{原文}")
+            placeholders = list(text_lib.PLACEHOLDERS.get(scene) or ("原文",))
+            samples = dict(text_lib.SAMPLES.get(scene) or {"原文": ""})
+            dynamic = scene in set(text_lib.DYNAMIC)
+        parent = SCENE_PARENT.get(scene) or ""
+        override = str(TEXT_OVERRIDES.get(scene) or "")
+        preview = ""
+        if text_lib is not None:
+            preview = text_lib.render_scene(
+                scene, samples.get("原文", ""), samples, {scene: template}
+            )
+        return {
+            "id": scene,
+            "label": SCENE_DESC.get(scene) or scene,
+            "desc": SCENE_DESC.get(scene) or "",
+            "parent": parent,
+            "parent_label": parent,
+            "group": SCENE_GROUP.get(scene) or "system",
+            "source": self._scene_source(scene),
+            "per_row": scene_rows_per_row(scene),
+            "default_buttons": self._editor_default_buttons(scene),
+            "buttons": [
+                [label, data, style] for label, data, style in self._scene_items(scene)
+            ],
+            "dynamic_text": dynamic,
+            "text": {
+                "template": template,
+                "placeholders": placeholders,
+                "samples": samples,
+                "override": override,
+                "preview": preview,
+                "dynamic": dynamic,
+            },
+        }
+
+    def _editor_scene_payload(self) -> dict[str, Any]:
+        """编辑器「💬 回复」页要的全部数据：按指令分组的场景卡片。"""
+        by_group: dict[str, list[str]] = {}
+        for scene in SCENE_IDS:
+            by_group.setdefault(SCENE_GROUP.get(scene) or "system", []).append(scene)
+        groups: list[dict[str, Any]] = []
+        for group_id, label, desc in SCENE_GROUPS:
+            scenes = by_group.pop(group_id, [])
+            if not scenes:
+                continue
+            groups.append({
+                "id": group_id,
+                "label": label,
+                "desc": desc,
+                "scenes": [self._editor_scene_entry(s) for s in scenes],
+            })
+        # 兜底：分组表里没登记的场景也照常给出来（防止以后新增场景忘了登记分组）
+        for group_id, scenes in by_group.items():
+            groups.append({
+                "id": group_id,
+                "label": group_id,
+                "desc": "（未登记分组的场景）",
+                "scenes": [self._editor_scene_entry(s) for s in scenes],
+            })
+        return {
+            "status": "ok",
+            "transport": "plugin-api",
+            "scene_total": len(SCENE_IDS),
+            "buttons_per_row_default": int(BUILTIN_BUTTONS_PER_ROW.get("*", 3)),
+            "buttons_per_row_max": int(CALC.BUTTONS_PER_ROW_MAX),
+            "button_styles": [
+                {"value": "default", "label": "默认（灰）"},
+                {"value": "primary", "label": "主要（蓝）"},
+            ],
+            "text_overrides_hint": (
+                "一行一条：场景|模板；{原文} = 插件原本拼好的那段文字"
+            ),
+            "groups": groups,
+        }
+
+    async def editor_api_scenes(self):
+        """GET scenes：回复场景表（按钮 + 文案模板 + 示例预览）。"""
+        try:
+            data = self._editor_scene_payload()
+        except Exception as e:  # pragma: no cover - 页面不该因此白屏
+            _log_warning(f"读取回复场景表失败：{e}")
+            return self._editor_api_error(f"读取回复场景表失败：{e}")
         try:
             from astrbot.api.web import json_response
         except Exception:  # pragma: no cover - 单测里可能没有 astrbot
@@ -839,6 +952,8 @@ class EditorBridgeMixin(EditorApiMixin):
         handlers = {
             "save_content": self._editor_save_content,
             "save_numbers": self._editor_save_numbers,
+            # 回复页：按钮 + 文案 + 每行几个（三份文本一起提交）
+            "save_replies": self._editor_save_replies,
             "snapshot_create": self._editor_snapshot_create,
             "snapshot_restore": self._editor_snapshot_restore,
             "snapshot_delete": self._editor_snapshot_delete,
@@ -901,6 +1016,48 @@ class EditorBridgeMixin(EditorApiMixin):
             # 内存里已经生效（游戏立刻用新内容），但配置没落盘 —— 重启会回到旧内容
             return True, f"已写入内容表：{names}（配置这次没落盘，重启会丢）"
         return True, f"已写入内容表：{names}"
+
+    # ------------------------------------------------------------ save_replies
+    async def _editor_save_replies(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """写回复相关的三项配置：``button_defs`` / ``text_overrides`` / ``button_layout``。
+
+        三份都是「一行一条」的文本，坏行由解析器跳过并告警（不会写坏配置），
+        所以这里只校验类型，然后把**实际生效**的数量回报给页面。
+        """
+        if not isinstance(payload, dict) or not payload:
+            return False, (
+                "save_replies 需要至少一项：button_defs / text_overrides / button_layout"
+            )
+        changed: dict[str, str] = {}
+        for key in ("button_defs", "text_overrides", "button_layout"):
+            if key not in payload:
+                continue
+            value = payload.get(key)
+            if not isinstance(value, str):
+                return False, f"「{key}」需要多行文本（字符串）"
+            changed[key] = value
+        if not changed:
+            return False, (
+                "save_replies 只认 button_defs / text_overrides / button_layout 三键"
+            )
+        try:
+            self.config.update(changed)
+        except Exception as e:
+            return False, f"写入配置失败：{e}"
+        saved = await self._editor_save_config()
+        self._editor_refresh_runtime()
+        detail = "；".join(
+            [
+                f"按钮 {sum(len(v) for v in BUTTONS.values())} 个（{len(BUTTONS)} 个场景）",
+                f"文案覆盖 {len(TEXT_OVERRIDES)} 条",
+                "排布 " + "、".join(
+                    f"{k}×{v}" for k, v in sorted(BUTTONS_PER_ROW.items())
+                ),
+            ]
+        )
+        if not saved:
+            return True, f"已保存回复设置：{detail}（配置这次没落盘，重启会丢）"
+        return True, f"已保存回复设置：{detail}"
 
     # ------------------------------------------------------------ save_numbers
     async def _editor_save_numbers(self, payload: dict[str, Any]) -> tuple[bool, str]:

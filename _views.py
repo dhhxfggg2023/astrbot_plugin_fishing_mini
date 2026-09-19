@@ -64,16 +64,85 @@ class ViewsMixin:
             items = _BUILTIN_BUTTONS.get(scene) or []
         return list(items)
 
+    def _scene_configured_rows(self, scene: str) -> list[tuple[str, str, int]]:
+        """站长在 button_defs 里**专门给这个场景**配的按钮（不含继承、不含内置）。"""
+        return list(BUTTONS.get(scene) or [])
+
+    def _scene_source(self, scene: str) -> str:
+        """该场景按钮的来源：``config`` / ``inherit`` / ``default`` / ``none``。
+
+        编辑器页面用它显示「这组按钮是哪来的」，排查「为什么这里没按钮」很有用。
+        """
+        if self._scene_configured_rows(scene):
+            return "config"
+        parent = SCENE_PARENT.get(scene) or ""
+        if parent and (BUTTONS.get(parent) or _BUILTIN_BUTTONS.get(parent)):
+            return "inherit"
+        if _BUILTIN_BUTTONS.get(scene):
+            return "default"
+        return "none"
+
+    def _scene_items(self, scene: str) -> list[tuple[str, str, int]]:
+        """取某场景生效的按钮（元组形态）：自己配的 > 继承父场景 > 内置默认。"""
+        items = BUTTONS.get(scene) or []
+        if not items:
+            parent = SCENE_PARENT.get(scene) or ""
+            if parent:
+                items = BUTTONS.get(parent) or []
+        if not items:
+            items = _BUILTIN_BUTTONS.get(scene) or []
+        return list(items)
+
+    def _scene_rows(self, scene: str) -> list[list[dict[str, Any]]]:
+        """取某场景生效的按钮行（可直接塞给 ``_say``）。
+
+        「继承」是为了**升级前后默认行为逐字不变**：老版本只有 5 个场景，
+        现在同一个回复有了更细的场景键，没单独配时就沿用老场景那一组。
+        """
+        return self._layout_rows(scene, self._scene_items(scene))
+
+    def _scene_text(
+        self, scene: str | None, text: str, values: dict[str, Any] | None = None
+    ) -> str:
+        """按场景叠加 ``text_overrides`` 里的文案覆盖；没覆盖或渲染失败一律用原文。
+
+        与按钮同一套继承规则：某场景没单独配文案时，看它的父场景有没有配
+        （于是 ``cast|🎣 {原文}`` 能给一整组下竿回复统一加前缀）。
+        """
+        if not scene:
+            return text
+        template = TEXT_OVERRIDES.get(scene)
+        if not template:
+            parent = SCENE_PARENT.get(scene) or ""
+            if parent:
+                template = TEXT_OVERRIDES.get(parent)
+        if not template:
+            return text
+        return TEXT_LIB.render_scene(scene, text, values, {scene: template})
+
+    def _layout_rows(
+        self, scene: str, items: list[tuple[str, str, int]]
+    ) -> list[list[dict[str, Any]]]:
+        """把 ``[(文案, 指令, 样式), ...]`` 按「每行几个」排成按钮行。"""
+        per_row = scene_rows_per_row(scene)
+        rows: list[list[dict[str, Any]]] = []
+        for start in range(0, len(items), per_row):
+            rows.append([
+                self._btn(text, data, style)
+                for text, data, style in items[start:start + per_row]
+            ])
+        return rows
+
     def _button_rows(
         self, scene: str, label: str = "", n: int = 0
     ) -> list[list[dict[str, Any]]]:
-        """按配置生成按钮行：每行最多 ``BUTTONS_PER_ROW[scene]`` 个。
+        """按配置生成按钮行：每行最多 ``scene_rows_per_row(scene)`` 个。
 
         ``label`` / ``n`` 供 story 场景的模板占位符 ``{label}`` / ``{n}`` 使用；
         其它场景没有占位符时就是原样文案。内容全部来自配置项 ``button_defs``。
         """
         items = self._scene_buttons(scene)
-        per_row = max(1, int(BUTTONS_PER_ROW.get(scene, 3)))
+        per_row = scene_rows_per_row(scene)
         rows: list[list[dict[str, Any]]] = []
         for start in range(0, len(items), per_row):
             rows.append([
@@ -87,20 +156,20 @@ class ViewsMixin:
         return rows
 
     def _bag_rows(self) -> list[list[dict[str, Any]]]:
-        """背包视图的按钮（button_defs 的 bag 行）。"""
-        return self._button_rows("bag")
+        """背包视图的按钮（button_defs 的 bag.list 行，未配置则继承 bag）。"""
+        return self._scene_rows("bag.list")
 
     def _location_rows(self) -> list[list[dict[str, Any]]]:
-        """钓点视图的按钮（button_defs 的 location 行）。"""
-        return self._button_rows("location")
+        """钓点视图的按钮（button_defs 的 location.list 行）。"""
+        return self._scene_rows("location.list")
 
     def _cast_rows(self) -> list[list[dict[str, Any]]]:
-        """抛竿结果下面的常用按钮（button_defs 的 cast 行）。"""
-        return self._button_rows("cast")
+        """抛竿结果下面的常用按钮（button_defs 的 cast 共用行）。"""
+        return self._scene_rows("cast")
 
     def _pull_rows(self) -> list[list[dict[str, Any]]]:
-        """咬钩提示下面的按钮（button_defs 的 pull 行）。"""
-        return self._button_rows("pull")
+        """咬钩提示下面的按钮（button_defs 的 pull.hook 行）。"""
+        return self._scene_rows("pull.hook")
 
     def _event_rows(self, event_def: dict[str, Any]) -> list[list[dict[str, Any]]]:
         """随机插曲的按钮：button_defs 的 story 行是模板，每个选项生成一行。"""

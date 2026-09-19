@@ -1,0 +1,426 @@
+# -*- coding: utf-8 -*-
+"""回复文案表（配置项 ``text_overrides``）：**每一条回复**的文案都可以改。
+
+## 这套东西怎么运作
+
+* 插件里每条回复都有一个**场景键**（scene id），键的清单在 ``_calc.py`` 的
+  ``REPLY_SCENES`` 里（例如 ``cast.hit`` = 钓到鱼之后那条结果、``bag.list`` =
+  背包列表、``shop.bought`` = 买到东西）。**按钮场景与文案键是同一套键名**：
+  给 ``cast.hit`` 配按钮就是给这条回复配按钮，给 ``cast.hit`` 配文案就是给
+  这条回复配文案 —— 编辑器页面「💬 回复」页一张卡片同时管这两件事。
+* 默认文案写在 ``TEXTS`` 里。**由代码按玩家数据拼装的长文本**（背包列表、
+  连钓战报…）默认模板是 ``{原文}``：``{原文}`` 就是代码原本拼好的那段文字，
+  站长可以在它前后加词、换 emoji、改语气，但**不能把它删掉**（删掉就等于丢掉
+  全部数据）。带 ``{原文}`` 的场景都在 ``DYNAMIC`` 里，运行时也会再拦一道。
+* 除 ``{原文}`` 外，少数场景还额外提供具体占位符（见 ``EXTRA_PLACEHOLDERS``，
+  例如 ``cast.hit`` 的 ``{鱼名}``/``{估值}``）。这些占位符的值由调用点传进来，
+  所以只有这里登记过的才允许出现在模板里 —— 写错的占位符在保存时就会被跳过
+  并告警，绝不会让玩家看到 ``{鱼名}`` 这种原文。
+* 渲染在 ``render_scene()``：**覆盖模板渲染失败就当没写**，一律回退代码原文。
+
+## 配置写法（配置项 text_overrides / 编辑器页面「💬 回复」页）
+
+```
+cast.miss_none|🪝 水面静悄悄的，连个泡都没有
+pull.hook|{原文}\n　⚡ 快！{秒数} 秒内发 /钓鱼 拉
+bag.list|{原文}\n　💡 想清空就发 /钓鱼 卖光光
+```
+
+一行一条：``场景|模板``；``#`` 开头的行是注释；没写到的场景用内置默认。
+
+## 与按钮场景的对应关系（护栏）
+
+``_calc.SCENE_IDS`` 与这里的 ``TEXTS`` **必须一一对应**，少一个就说明有人新增
+回复忘了登记 —— ``test_local.py`` 里有一条断言专门卡这件事，会红。
+"""
+
+from __future__ import annotations
+
+#: 场景 id -> 默认文案模板。**由代码拼装的长文本用 ``{原文}`` 占位**
+TEXTS: dict[str, str] = {
+    "sell.result": "{原文}",  # 动态文本
+    "pull.none": "🤔 现在没有鱼咬钩。直接发 /钓鱼 下竿，等提示「咬钩了」再发 /钓鱼 拉",
+    "help.page": "{原文}",  # 动态文本
+    "help.unknown": "{原文}",  # 动态文本
+    "custom.send": "{原文}",  # 动态文本
+    "pull.confirm": "✅ 收到，正在收线…",
+    "cast.multi_bad_times": "🤔 连钓次数要写正整数，例如 /钓鱼 10",
+    "system.error": "😵 操作没有成功（已记录到日志）\n　可以再试一次；如果一直失败，请把这条消息发给管理员",
+    "cast.busy": "🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉",
+    "cast.hit": "{原文}",  # 动态文本
+    "cast.multi_limit": "{原文}",  # 动态文本
+    "cast.multi_busy": "🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉",
+    "cast.multi_summary": "{原文}",  # 动态文本
+    "cast.no_gold": "{原文}",  # 动态文本
+    "cast.bag_full": "{原文}",  # 动态文本
+    "cast.multi_no_gold": "{原文}",  # 动态文本
+    "cast.multi_bag_full": "{原文}",  # 动态文本
+    "cast.multi_achievement": "{原文}",  # 动态文本
+    "cast.multi_milestone": "{原文}",  # 动态文本
+    "cast.multi_save_failed": "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）",
+    "cast.bad_bait": "{原文}",  # 动态文本
+    "cast.no_stamina": "{原文}",  # 动态文本
+    "cast.bait_note": "{原文}",  # 动态文本
+    "cast.multi_no_stamina": "{原文}",  # 动态文本
+    "cast.junk": "{原文}",  # 动态文本
+    "cast.multi_no_bait": "{原文}",  # 动态文本
+    "backpack.upgraded": "{原文}",  # 动态文本
+    "rank.view": "{原文}",  # 动态文本
+    "lock.done": "{原文}",  # 动态文本
+    "unlock.done": "{原文}",  # 动态文本
+    "bag.list": "{原文}",  # 动态文本
+    "fishinfo.detail": "{原文}",  # 动态文本
+    "collection.view": "{原文}",  # 动态文本
+    "stamina.view": "{原文}",  # 动态文本
+    "profile.renamed": "{原文}",  # 动态文本
+    "profile.view": "{原文}",  # 动态文本
+    "sign.result": "{原文}",  # 动态文本
+    "story.result": "{原文}",  # 动态文本
+    "orders.list": "{原文}",  # 动态文本
+    "location.list": "{原文}",  # 动态文本
+    "rod.list": "{原文}",  # 动态文本
+    "backpack.max": "{原文}",  # 动态文本
+    "backpack.no_gold": "{原文}",  # 动态文本
+    "today.view": "{原文}",  # 动态文本
+    "rank.empty": "📊 还没有排行数据，先去 /钓鱼 抛几竿吧",
+    "rank.no_data": "{原文}",  # 动态文本
+    "bag.empty": "{原文}",  # 动态文本
+    "fishinfo.usage": "{原文}",  # 动态文本
+    "fishinfo.location_detail": "{原文}",  # 动态文本
+    "fishinfo.not_found": "{原文}",  # 动态文本
+    "collection.detail": "{原文}",  # 动态文本
+    "collection.location": "{原文}",  # 动态文本
+    "aquarium.usage": "📖 水族馆用法\n　/钓鱼 水族馆　　　　　　欣赏\n　/钓鱼 水族馆 放 1　　　 从背包放入\n　/钓鱼 水族馆 取 1　　　 取回（估值+加成）\n　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n　/钓鱼 用 <道具> 1　　　投喂提升三维\n　/钓鱼 水族馆 领　　　　 领取每日收益\n　/钓鱼 水族馆 扩建　　　 花金币扩容",
+    "shop.usage_short": "📖 /钓鱼 商店　　　　　　看货架\n　/钓鱼 商店 买 <名字> [数量]\n　/钓鱼 商店 扩容　　　 背包扩容",
+    "bait.empty": "{原文}",  # 动态文本
+    "item.feed_done": "{原文}",  # 动态文本
+    "story.none": "🤔 眼下没什么需要你决定的事",
+    "story.expired": "💨 你犹豫了一会儿，那点动静已经过去了",
+    "story.bad_choice": "{原文}",  # 动态文本
+    "orders.locked": "{原文}",  # 动态文本
+    "orders.submit_result": "{原文}",  # 动态文本
+    "location.moved": "{原文}",  # 动态文本
+    "location.unlock_go": "{原文}",  # 动态文本
+    "rod.bought": "{原文}",  # 动态文本
+    "rod.equipped": "{原文}",  # 动态文本
+    "lock.usage": "📖 /钓鱼 锁定 <序号…>　锁定的鱼不会被卖出\n　/钓鱼 解锁 <序号…>\n　先用 /钓鱼 背包 看序号",
+    "lock.bad_index": "{原文}",  # 动态文本
+    "lock.all_done": "{原文}",  # 动态文本
+    "sell.empty": "🎒 背包空空的，没东西可卖",
+    "sell.removed": "🧹 「卖 垃圾」这个玩法已经去掉了\n　想一次清空背包：/钓鱼 卖光光（锁定的鱼会留下）\n　想只卖某种鱼：/钓鱼 卖 鲤鱼（可加数量）\n　想按序号卖：/钓鱼 卖 1 2 3",
+    "sell.nothing": "🤔 没有可卖的鱼\n　可能原因：背包是空的、序号超范围、或这种鱼你还没有\n　发 /钓鱼 背包 看背包，或用 /钓鱼 卖光光 一次卖光",
+    "sell.locked_note": "{原文}",  # 动态文本
+    "fishinfo.empty": "{原文}",  # 动态文本
+    "aquarium.view": "{原文}",  # 动态文本
+    "aquarium.upgraded": "{原文}",  # 动态文本
+    "aquarium.income": "{原文}",  # 动态文本
+    "aquarium.feed_usage": "📖 投喂请用：/钓鱼 用 <道具名> <水族馆栏位号>\n　例：/钓鱼 用 高级饲料 1",
+    "aquarium.put_done": "{原文}",  # 动态文本
+    "aquarium.take_done": "{原文}",  # 动态文本
+    "aquarium.sell_done": "{原文}",  # 动态文本
+    "shop.list": "{原文}",  # 动态文本
+    "shop.bought": "{原文}",  # 动态文本
+    "bait.equipped": "{原文}",  # 动态文本
+    "bait.not_found": "{原文}",  # 动态文本
+    "bait.not_owned": "{原文}",  # 动态文本
+    "bait.same": "{原文}",  # 动态文本
+    "item.usage": "{原文}",  # 动态文本
+    "item.missing": "{原文}",  # 动态文本
+    "item.used": "{原文}",  # 动态文本
+    "item.deco_used": "{原文}",  # 动态文本
+    "item.breed_done": "{原文}",  # 动态文本
+    "item.feed_no_fish": "🐠 水族馆是空的，先把鱼放进去养",
+    "item.feed_usage": "{原文}",  # 动态文本
+    "sign.done": "{原文}",  # 动态文本
+    "story.wrong_owner": "🙅 这是别人的动静，你插不上手\n　自己下竿的时候才会遇到属于你的小插曲",
+    "orders.usage": "{原文}",  # 动态文本
+    "location.not_found": "🤔 没有这个钓点，/钓鱼 钓点 看看",
+    "location.locked": "{原文}",  # 动态文本
+    "location.already_here": "{原文}",  # 动态文本
+    "location.unlocked": "{原文}",  # 动态文本
+    "location.unlock_need": "{原文}",  # 动态文本
+    "rod.not_found": "🤔 没有这款鱼竿",
+    "rod.owned": "{原文}",  # 动态文本
+    "rod.level_low": "{原文}",  # 动态文本
+    "rod.no_gold": "{原文}",  # 动态文本
+    "rod.not_owned": "{原文}",  # 动态文本
+    "sell.all_locked": "{原文}",  # 动态文本
+    "aquarium.max": "🏠 已经扩到最大了",
+    "aquarium.no_gold": "{原文}",  # 动态文本
+    "aquarium.income_start": "{原文}",  # 动态文本
+    "aquarium.income_empty": "🐠 水族馆是空的，鱼塘没有产出",
+    "aquarium.income_wait": "{原文}",  # 动态文本
+    "aquarium.put_usage": "{原文}",  # 动态文本
+    "aquarium.full": "{原文}",  # 动态文本
+    "aquarium.take_usage": "{原文}",  # 动态文本
+    "aquarium.sell_usage": "📖 /钓鱼 水族馆 卖 <栏位号…>\n　例：/钓鱼 水族馆 卖 1　或　卖 1 3 5",
+    "aquarium.bad_slot": "{原文}",  # 动态文本
+    "shop.usage": "📖 /钓鱼 商店 买 <名字> [数量]\n　例：/钓鱼 商店 买 蚯蚓（1 个）　买 蚯蚓 20（20 个）\n　鱼饵和道具都按「个」买，数量不写就是 1",
+    "shop.free_hook": "🪝 空钩是免费的，不需要购买\n　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿",
+    "shop.not_found": "{原文}",  # 动态文本
+    "bait.locked": "{原文}",  # 动态文本
+    "item.empty": "🎒 没有道具，去 /钓鱼 商店 买",
+    "item.deco_disabled": "🪸 本服没有开放装饰位（decoration_slots = 0）",
+    "item.deco_full": "{原文}",  # 动态文本
+    "item.breed_no_fish": "🐠 水族馆是空的，先把鱼放进去再培育",
+    "item.breed_usage": "{原文}",  # 动态文本
+    "item.breed_bad_slot": "🤔 栏位号不对，/钓鱼 水族馆 看看序号",
+    "item.breed_failed": "{原文}",  # 动态文本
+    "item.feed_full": "{原文}",  # 动态文本
+    "item.feed_missing": "{原文}",  # 动态文本
+    "sell.bad_index": "{原文}",  # 动态文本
+    "sell.no_fish": "{原文}",  # 动态文本
+    "sell.missing": "{原文}",  # 动态文本
+    "shop.locked": "{原文}",  # 动态文本
+    "shop.no_gold_bait": "{原文}",  # 动态文本
+    "shop.no_gold_item": "{原文}",  # 动态文本
+    "pull.hook": "{原文}",  # 动态文本
+    "story.prompt": "{原文}",  # 动态文本
+    "pull.timeout": "{原文}",  # 动态文本
+    "pull.escape": "{原文}",  # 动态文本
+    # ---- 共用按钮组：它们自己的回复不存在，写在这里是为了「给整组回复统一改文案」----
+    # （某个子场景没单独配文案时，会继承这里的模板，规则与按钮完全一样）
+    "cast": "{原文}",  # 共用组（下竿）
+    "pull": "{原文}",  # 共用组（拉线）
+    "bag": "{原文}",  # 共用组（背包）
+    "location": "{原文}",  # 共用组（钓点）
+    "story": "{原文}",  # 共用组（小插曲）
+    # ---- 特殊分支：文案随分支/推送走，由代码在出口处选场景 ----
+    "cast.miss_none": "🪝 空钩在水里漂了半天，鱼碰了碰就游走了",
+    "cast.miss_bait": "{原文}",  # 动态文本（带回鱼饵名）
+    "cast.miss_deep": "{原文}",  # 动态文本（带回钓点名）
+    "cast.achievement": "{原文}",  # 动态文本（推送：新成就）
+    "cast.milestone": "{原文}",  # 动态文本（推送：里程碑）
+    "cast.egg": "{原文}",  # 动态文本（推送：彩蛋）
+    "cast.save_failed": (
+        "⚠️ 数据保存失败，这条记录可能不会保留\n"
+        "　请把这条消息发给管理员核对（日志里有详情）"
+    ),
+    "collectibles.view": "{原文}",  # 动态文本
+    "broadcast.catch": "{原文}",  # 动态文本
+}
+
+#: 少数场景在「原文」之外还提供的占位符：(占位符, 示例值)。
+#: ⚠️ 只有调用点真的把值传进来了才能登记在这里，否则模板永远渲染不出来。
+EXTRA_PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
+    "cast.hit": (
+        ("鱼名", "鲤鱼"),
+        ("品质", "⚪普通"),
+        ("估值", "1,240"),
+        ("余额", "3,800"),
+        ("评价", "完美"),
+    ),
+    "cast.miss_none": (
+        ("鱼饵", "🪝空钩"),
+        ("钓点", "🏡新手村"),
+    ),
+    "cast.miss_bait": (
+        ("鱼饵", "🪱蚯蚓"),
+        ("钓点", "🏞️山间湖泊"),
+    ),
+    "cast.miss_deep": (
+        ("鱼饵", "🪱蚯蚓"),
+        ("钓点", "🌊近海渔场"),
+    ),
+    "pull.hook": (
+        ("鱼名", "鲤鱼"),
+        ("秒数", "6"),
+        ("手感", "竿尖猛地弯了下去"),
+    ),
+    "cast.achievement": (("列表", "初次下水"),),
+    "broadcast.catch": (
+        ("昵称", "小明"),
+        ("渔获", "🐟鲤鱼"),
+    ),
+}
+
+#: 「原文」的示例值（编辑器预览用）。没登记的用下面那句通用说明
+SAMPLE_ORIGINAL: dict[str, str] = {
+    "cast.hit": "🎣 🐟鲤鱼　💰 1,240　⚪普通　余额 3,800",
+    "cast.junk": "🪝 钩上来一只旧鞋（杂物 +1）",
+    "cast.miss_none": "🪝 空钩在水里漂了半天，鱼碰了碰就游走了",
+    "cast.miss_bait": "🎣 咬了一口又吐掉了——🪱蚯蚓 白搭了",
+    "cast.miss_deep": "🌊 🌊近海渔场 水太深了，鱼不太愿意开口",
+    "cast.multi_summary": "🎣 连钓 10 次\n1. 🐟鲤鱼 常见 120金\n…\n✅ 上鱼 8 条｜空竿 2 次｜杂物 0 个",
+    "pull.hook": "🐟 鲤鱼 咬钩了！竿尖猛地弯了下去\n⚡ 6 秒内发 /钓鱼 拉（或点下面的按钮）",
+    "pull.timeout": "💨 超时了——鲤鱼 吐钩跑了（这一竿的鱼饵已经用掉了）",
+    "pull.escape": "👍良好　但线一松——鲤鱼 挣脱跑了",
+    "bag.list": "🎒 背包 3/30 条 · 总估值 1,860 金币\n 1.🐟鲤鱼　⚪普通　120 金币",
+    "bag.empty": "🎒 背包空空的（容量 30）\n💡 发 /钓鱼 下竿试试手气",
+    "sell.result": "💰 卖出 3 条，收入 360 金币\n　余额 4,160",
+    "shop.list": "🛒 商店　💰 3,800\n🎣 当前鱼饵：🪝空钩\n— 鱼饵 —",
+    "shop.bought": "🛒 购买 🪱蚯蚓 ×20",
+    "rod.bought": "🎣 买到 🎣碳素竿！",
+    "location.list": "📍 钓点列表\n　🏡新手村　×1.00　需1级\n💡 点按钮看图鉴",
+    "help.page": "🎣 帮助 1/7 · 基础\n\n　/钓鱼　　　　　下竿\n\n💡 /钓鱼 帮助 2",
+    "rank.view": "📊 群内排行\n🥇 小明　1,240 金币\n　你的排名：第 3 名",
+    "story.prompt": "❔ 水面上漂来一个木箱\n　1. 打开看看　/钓鱼 事件 1\n　2. 不理它　/钓鱼 事件 2",
+    "story.result": "📦 箱子里是几枚旧硬币。",
+    "aquarium.view": "🐠 水族馆 1/8\n 1.🐟鲤鱼　⚪普通\n🧮 估值 120",
+    "collection.view": "📖 鱼种图鉴 12/232",
+    "profile.view": "📇 档案\n等级 5　金币 3,800",
+    "today.view": "🌤️ 今日　晴　💰 行情：鲤鱼 +10%",
+    "sign.result": "✅ 签到 +30　💰 3,830",
+    "broadcast.catch": "📢 小明 钓到了 🐟鲤鱼！",
+    "sell.locked_note": "🔒 另有 2 条锁定的鱼留在背包里（/钓鱼 解锁 1 可以解锁）",
+    "cast.achievement": "🎉 初次下水",
+}
+
+#: 通用兜底示例（没登记的动态场景用它）
+SAMPLE_FALLBACK = "（这条回复由插件按玩家数据拼装，这里只是示意）"
+
+#: 模板必须保留 ``{原文}`` 的场景（= 文本由代码拼装，默认模板就是 ``{原文}``）
+DYNAMIC: frozenset[str] = frozenset(
+    scene for scene, template in TEXTS.items() if template == "{原文}"
+)
+
+#: 场景 -> 允许出现的占位符（含永远允许的 ``原文``）
+PLACEHOLDERS: dict[str, tuple[str, ...]] = {
+    scene: ("原文",) + tuple(name for name, _sample in EXTRA_PLACEHOLDERS.get(scene, ()))
+    for scene in TEXTS
+}
+
+#: 场景 -> 占位符示例值（编辑器预览 + 校验提示用）
+SAMPLES: dict[str, dict[str, str]] = {
+    scene: dict(
+        {"原文": SAMPLE_ORIGINAL.get(scene, SAMPLE_FALLBACK)},
+        **{name: sample for name, sample in EXTRA_PLACEHOLDERS.get(scene, ())},
+    )
+    for scene in TEXTS
+}
+
+#: ``text_overrides`` 的默认值（空 = 全用内置文案，行为与没有这个功能时逐字一致）
+TEXT_OVERRIDES_DEFAULT: str = ""
+
+#: 全部可改的场景键（给编辑器页面与护栏断言用；顺序即 TEXTS 的定义顺序）
+TEXT_KEYS: tuple[str, ...] = tuple(TEXTS.keys())
+
+#: 能被 ``TEXTS`` 渲染的合法占位符写法（字母/下划线开头，或中文键）
+_PLACEHOLDER_RE = None
+
+
+def _placeholder_names(template: str) -> tuple[str, ...]:
+    """取出模板里的 ``{占位符}`` 名字（支持中文键）。"""
+    global _PLACEHOLDER_RE
+    if _PLACEHOLDER_RE is None:
+        import re
+
+        _PLACEHOLDER_RE = re.compile(r"\{([^{}\s]+)\}")
+    return tuple(dict.fromkeys(_PLACEHOLDER_RE.findall(str(template or ""))))
+
+
+def needs_original(scene: str) -> bool:
+    """这个场景的模板是否**必须**保留 ``{原文}``。
+
+    只有「文本由代码拼装、又没有别的具体占位符可用」的场景才必须保留：
+    ``bag.list|只有这句`` 会把整个背包列表吃掉，所以直接不生效；
+    而 ``cast.hit|🎣 恭喜 {鱼名}`` 有具体占位符可用，是站长的正当改写。
+    """
+    return scene in DYNAMIC and len(PLACEHOLDERS.get(scene, ("原文",))) <= 1
+
+
+def bad_placeholders(scene: str, template: str) -> tuple[str, ...]:
+    """模板里出现了该场景不允许的占位符时返回它们（保存时告警并跳过该行）。"""
+    allowed = PLACEHOLDERS.get(scene)
+    if allowed is None:
+        return ()
+    return tuple(name for name in _placeholder_names(template) if name not in allowed)
+
+
+def parse_overrides(raw: object, *, warn=None) -> dict[str, str]:
+    """解析 ``text_overrides``：``场景|模板``（一行一条）。
+
+    * ``#`` 开头 / 空行 → 跳过（不算错）
+    * 未知场景 → 跳过并告警（只报一次，附首条坏行）
+    * 缺竖线 / 空场景 / 空模板 → 跳过并告警
+    * 占位符不在该场景允许集合里 → 跳过并告警
+      （避免出现「站长写了 {鱼名} 但这条回复根本没这个值」这种静默失效）
+    """
+    out: dict[str, str] = {}
+    bad = 0
+    first_bad = ""
+    first_reason = ""
+    for line in str(raw or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        scene, sep, template = text.partition("|")
+        scene = scene.strip()
+        template = template.strip()
+        if not sep or not scene or not template:
+            bad += 1
+            first_bad = first_bad or text
+            first_reason = first_reason or "缺竖线或内容为空"
+            continue
+        if scene not in TEXTS:
+            bad += 1
+            first_bad = first_bad or text
+            first_reason = first_reason or f"没有这个场景键（{scene}）"
+            continue
+        wrong = bad_placeholders(scene, template)
+        if wrong:
+            bad += 1
+            first_bad = first_bad or text
+            first_reason = first_reason or (
+                f"{scene} 里不该出现 {{{wrong[0]}}}（可用："
+                f"{'、'.join(PLACEHOLDERS.get(scene, ())) or '无'}）"
+            )
+            continue
+        if needs_original(scene) and "{原文}" not in template:
+            bad += 1
+            first_bad = first_bad or text
+            first_reason = first_reason or (
+                f"{scene} 的正文由插件按数据拼装，模板里必须保留 {{原文}}"
+            )
+            continue
+        out[scene] = template
+    if bad and warn:
+        warn(
+            f"text_overrides 有 {bad} 行没生效（{first_reason}；首条：{first_bad[:40]}）"
+        )
+    return out
+
+
+def render_scene(
+    scene: str,
+    original: str,
+    values: dict | None = None,
+    overrides: dict | None = None,
+) -> str:
+    """算出一条回复的最终文案：站长的覆盖模板优先，渲染不了就用代码原文。
+
+    永远不会把 ``{占位符}`` 原文丢给玩家：
+      1. 没有覆盖 / 覆盖为空 → 代码原文
+      2. 动态文本的模板丢了 ``{原文}`` → 代码原文（当没写）
+      3. 模板渲染异常（占位符没值、格式写坏）→ 代码原文
+    """
+    text = "" if original is None else str(original)
+    if not overrides or not scene:
+        return text
+    template = str(overrides.get(scene) or "")
+    if not template:
+        return text
+    if needs_original(scene) and "{原文}" not in template:
+        return text
+    data = {"原文": text}
+    for key, value in (values or {}).items():
+        data[str(key)] = "" if value is None else str(value)
+    try:
+        return template.format(**data)
+    except (KeyError, IndexError, ValueError):
+        return text
+
+
+__all__ = [
+    "TEXTS",
+    "TEXT_KEYS",
+    "TEXT_OVERRIDES_DEFAULT",
+    "PLACEHOLDERS",
+    "SAMPLES",
+    "DYNAMIC",
+    "EXTRA_PLACEHOLDERS",
+    "bad_placeholders",
+    "needs_original",
+    "parse_overrides",
+    "render_scene",
+]

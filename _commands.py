@@ -26,25 +26,29 @@ class CommandsMixin:
             if not isinstance(event_def, dict):
                 owner, ts = self._recent_events.get(self._session_key(event), ("", 0.0))
                 if owner and owner != user_id and time.time() - ts < 600:
-                    yield event.plain_result(
-                        "🙅 这是别人的动静，你插不上手\n"
-                        "　自己下竿的时候才会遇到属于你的小插曲"
-                    )
+                    async for _r in self._say_msg(event, "story.wrong_owner", event.plain_result(
+                            "🙅 这是别人的动静，你插不上手\n"
+                            "　自己下竿的时候才会遇到属于你的小插曲"
+                        )):
+                        yield _r
                     return
-                yield event.plain_result("🤔 眼下没什么需要你决定的事")
+                async for _r in self._say_msg(event, "story.none", event.plain_result("🤔 眼下没什么需要你决定的事")):
+                    yield _r
                 return
             # 插曲放着不管会自己散掉（10 分钟）
             if int(time.time()) - _safe_int(current.get("ts"), 0, 0) > 600:
                 player.pop("event", None)
                 await self._save_player(player)
-                yield event.plain_result("💨 你犹豫了一会儿，那点动静已经过去了")
+                async for _r in self._say_msg(event, "story.expired", event.plain_result("💨 你犹豫了一会儿，那点动静已经过去了")):
+                    yield _r
                 return
 
             choices = event_def.get("choices") or []
             idx = _to_int(a2, 0)
             if not (1 <= idx <= len(choices)):
                 text, _ = self._event_prompt(event_def, rows=False)
-                yield event.plain_result(text)
+                async for _r in self._say_msg(event, "story.bad_choice", event.plain_result(text)):
+                    yield _r
                 return
 
             choice = choices[idx - 1]
@@ -83,7 +87,8 @@ class CommandsMixin:
 
             new_ach = self._check_achievements(player)
             saved = await self._save_player(player)
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "story.result", event.plain_result("\n".join(lines))):
+                yield _r
 
     def _order_rarities(self, level: int) -> tuple[str, ...]:
         """按等级取当前可出现的订单品质。"""
@@ -170,10 +175,11 @@ class CommandsMixin:
             if level < int(self.cfg["order_unlock_level"]):
                 if changed:
                     await self._save_player(player)
-                yield event.plain_result(
-                    f"📋 订单需要 {int(self.cfg['order_unlock_level'])} 级"
-                    f"（你现在 {level} 级，多钓鱼吧）"
-                )
+                async for _r in self._say_msg(event, "orders.locked", event.plain_result(
+                        f"📋 订单需要 {int(self.cfg['order_unlock_level'])} 级"
+                        f"（你现在 {level} 级，多钓鱼吧）"
+                    )):
+                    yield _r
                 return
 
             orders: list[dict[str, Any]] = player.get("orders") or []
@@ -188,10 +194,11 @@ class CommandsMixin:
             if sub in ("交", "提交", "submit"):
                 idxs = self._parse_indices(a3, orders)
                 if not idxs:
-                    yield event.plain_result(
-                        f"📖 /钓鱼 订单 交 <序号>　1~{len(orders)}，"
-                        f"支持 1 2 3 / 1-3 / 全部"
-                    )
+                    async for _r in self._say_msg(event, "orders.usage", event.plain_result(
+                            f"📖 /钓鱼 订单 交 <序号>　1~{len(orders)}，"
+                            f"支持 1 2 3 / 1-3 / 全部"
+                        )):
+                        yield _r
                     return
 
                 done_lines: list[str] = []
@@ -242,7 +249,8 @@ class CommandsMixin:
                         )
                     if short:
                         msg += "\n　鱼不够：" + "；".join(short)
-                    yield event.plain_result(msg)
+                    async for _r in self._say_msg(event, "orders.submit_result", event.plain_result(msg)):
+                        yield _r
                     return
 
                 player["inventory"] = inventory
@@ -258,7 +266,8 @@ class CommandsMixin:
                 if short:
                     lines.append("　（鱼不够：" + "；".join(short) + "）")
                 saved = await self._save_with_notices(player, lines)
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "orders.submit_result", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 查看订单 ----
@@ -287,7 +296,8 @@ class CommandsMixin:
                     f"{have}/{need}　→ {_fmt_gold(order.get('reward', 0))}"
                 )
             lines.append("💡 /钓鱼 订单 交 1 提交（支持 交 1 2 3 / 交 全部）")
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "orders.list", event.plain_result("\n".join(lines))):
+                yield _r
 
     # -------------------------------------------------------------------------
     # 钓点 / 鱼竿 / 背包
@@ -317,15 +327,18 @@ class CommandsMixin:
             if sub in ("去", "前往", "go"):
                 target = self._find_location(a3 or a2)
                 if target is None:
-                    yield event.plain_result("🤔 没有这个钓点，/钓鱼 钓点 看看")
+                    async for _r in self._say_msg(event, "location.not_found", event.plain_result("🤔 没有这个钓点，/钓鱼 钓点 看看")):
+                        yield _r
                     return
                 if target["id"] not in unlocked:
-                    yield event.plain_result(
-                        f"🔒 {target['name']} 还没解锁，先 /钓鱼 钓点 解锁 {target['name']}"
-                    )
+                    async for _r in self._say_msg(event, "location.locked", event.plain_result(
+                            f"🔒 {target['name']} 还没解锁，先 /钓鱼 钓点 解锁 {target['name']}"
+                        )):
+                        yield _r
                     return
                 if target["id"] == current:
-                    yield event.plain_result(f"📍 你已经在 {target['name']} 了")
+                    async for _r in self._say_msg(event, "location.already_here", event.plain_result(f"📍 你已经在 {target['name']} 了")):
+                        yield _r
                     return
                 player["current_location"] = target["id"]
                 saved = await self._save_player(player)
@@ -335,17 +348,20 @@ class CommandsMixin:
                 ]
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "location.moved", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 解锁 ----
             if sub in ("解锁", "unlock", "开"):
                 target = self._find_location(a3 or a2)
                 if target is None:
-                    yield event.plain_result("🤔 没有这个钓点")
+                    async for _r in self._say_msg(event, "location.not_found", event.plain_result("🤔 没有这个钓点")):
+                        yield _r
                     return
                 if target["id"] in unlocked:
-                    yield event.plain_result(f"✅ {target['name']} 已解锁")
+                    async for _r in self._say_msg(event, "location.unlocked", event.plain_result(f"✅ {target['name']} 已解锁")):
+                        yield _r
                     return
                 # 解锁条件：等级 + 上一个钓点图鉴 80% + 一次性金币
                 ratio = _clamp(
@@ -374,11 +390,12 @@ class CommandsMixin:
                 if level < target["level_gate"]:
                     lacks.append(f"等级 {target['level_gate']} 级（你现在 {level} 级）")
                 if lacks:
-                    yield event.plain_result(
-                        f"🔒 还不能去 {target['emoji']}{target['name']}，还差：\n"
-                        + "\n".join(f"　· {x}" for x in lacks)
-                        + "\n　（图鉴里的隐藏生物不算数）"
-                    )
+                    async for _r in self._say_msg(event, "location.unlock_need", event.plain_result(
+                            f"🔒 还不能去 {target['emoji']}{target['name']}，还差：\n"
+                            + "\n".join(f"　· {x}" for x in lacks)
+                            + "\n　（图鉴里的隐藏生物不算数）"
+                        )):
+                        yield _r
                     return
                 player["gold"] = gold_now - price
                 unlocked.append(target["id"])
@@ -392,7 +409,8 @@ class CommandsMixin:
                     f"💰 余额 {_fmt_gold(player['gold'])}",
                 ]
                 saved = await self._save_with_notices(player, lines)
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "location.unlock_go", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 查看 ----
@@ -413,7 +431,7 @@ class CommandsMixin:
                 else:
                     lines.append(f"🔒{loc['emoji']}{loc['name']}")
             lines.append("💡 点按钮看图鉴，或写：/钓鱼 去 <钓点名>")
-            async for reply in self._say(event, "\n".join(lines), self._location_rows()):
+            async for reply in self._say(event, "\n".join(lines), "location.list"):
                 yield reply
 
     async def _cmd_rods(
@@ -434,24 +452,28 @@ class CommandsMixin:
             if sub in ("买", "购买", "buy"):
                 rod = self._find_rod(a3 or a2)
                 if rod is None:
-                    yield event.plain_result("🤔 没有这款鱼竿")
+                    async for _r in self._say_msg(event, "rod.not_found", event.plain_result("🤔 没有这款鱼竿")):
+                        yield _r
                     return
                 if rod["id"] in owned:
-                    yield event.plain_result(f"✅ 你已经有 {rod['name']} 了")
+                    async for _r in self._say_msg(event, "rod.owned", event.plain_result(f"✅ 你已经有 {rod['name']} 了")):
+                        yield _r
                     return
                 # 等级门槛：不够就明确告诉他还差多少
                 refuse = self._unlock_refuse_text(player, rod)
                 if refuse:
-                    yield event.plain_result(
-                        f"{refuse}\n　多钓几竿就升级了，升级后回来 /钓鱼 鱼竿 买 {rod['name']}"
-                    )
+                    async for _r in self._say_msg(event, "rod.level_low", event.plain_result(
+                            f"{refuse}\n　多钓几竿就升级了，升级后回来 /钓鱼 鱼竿 买 {rod['name']}"
+                        )):
+                        yield _r
                     return
                 price = int(rod["price"])
                 if _safe_int(player.get("gold"), 0, 0) < price:
-                    yield event.plain_result(
-                        f"💸 {rod['name']} 需要 {_fmt_gold(price)} 金币，"
-                        f"你只有 {_fmt_gold(player.get('gold', 0))}"
-                    )
+                    async for _r in self._say_msg(event, "rod.no_gold", event.plain_result(
+                            f"💸 {rod['name']} 需要 {_fmt_gold(price)} 金币，"
+                            f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                        )):
+                        yield _r
                     return
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
                 owned.append(rod["id"])
@@ -463,23 +485,27 @@ class CommandsMixin:
                     f"　💰 {_fmt_gold(player['gold'])}",
                 ]
                 saved = await self._save_with_notices(player, lines)
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "rod.bought", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             if sub in ("用", "装备", "换", "use", "equip"):
                 rod = self._find_rod(a3 or a2)
                 if rod is None:
-                    yield event.plain_result("🤔 没有这款鱼竿")
+                    async for _r in self._say_msg(event, "rod.not_found", event.plain_result("🤔 没有这款鱼竿")):
+                        yield _r
                     return
                 if rod["id"] not in owned:
-                    yield event.plain_result(f"🎒 你还没买 {rod['name']}")
+                    async for _r in self._say_msg(event, "rod.not_owned", event.plain_result(f"🎒 你还没买 {rod['name']}")):
+                        yield _r
                     return
                 player["equipped_rod"] = rod["id"]
                 saved = await self._save_player(player)
                 lines = [f"✅ 已装备 {self._rod_label(player)}"]
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "rod.equipped", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             lines = [f"🎣 鱼竿　当前 {self._rod_label(player)}"]
@@ -499,7 +525,8 @@ class CommandsMixin:
             if hidden:
                 lines.append("🔒 还有更多鱼竿，等级更高之后会陆续上架")
             lines.append("💡 /钓鱼 鱼竿 买 <名称> ｜ /钓鱼 鱼竿 用 <名称>")
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "rod.list", event.plain_result("\n".join(lines))):
+                yield _r
 
     async def _cmd_backpack_upgrade(self, event: AstrMessageEvent, user_id: str):
         """背包扩容（公开入口，自己加锁）。"""
@@ -524,16 +551,18 @@ class CommandsMixin:
             (i for i in range(len(self.backpack_upgrades)) if i not in owned), None
         )
         if nxt is None:
-            yield event.plain_result(f"🎒 背包已扩到最大（{capacity}）")
+            async for _r in self._say_msg(event, "backpack.max", event.plain_result(f"🎒 背包已扩到最大（{capacity}）")):
+                yield _r
             return
 
         up = self.backpack_upgrades[nxt]
         price = int(up.get("price", 0))
         if _safe_int(player.get("gold"), 0, 0) < price:
-            yield event.plain_result(
-                f"💸 扩容 +{up['add']} 需要 {_fmt_gold(price)} 金币，"
-                f"你只有 {_fmt_gold(player.get('gold', 0))}"
-            )
+            async for _r in self._say_msg(event, "backpack.no_gold", event.plain_result(
+                    f"💸 扩容 +{up['add']} 需要 {_fmt_gold(price)} 金币，"
+                    f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                )):
+                yield _r
             return
         player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
         owned.append(nxt)
@@ -546,7 +575,8 @@ class CommandsMixin:
         ]
         if not saved:
             lines.append("⚠️ 保存失败")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "backpack.upgraded", event.plain_result("\n".join(lines))):
+            yield _r
 
     async def _cmd_today(self, event: AstrMessageEvent, user_id: str):
         """今日天气 + 鱼市行情 + 图鉴加成，一眼看完今天的看点。"""
@@ -582,13 +612,15 @@ class CommandsMixin:
                 lines.append(
                     "　已集齐：" + "、".join(self._rarity_name(r) for r in completed)
                 )
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "today.view", event.plain_result("\n".join(lines))):
+                yield _r
 
     async def _cmd_leaderboard(self, event: AstrMessageEvent, user_id: str, a2: str):
         """群内排行榜：/钓鱼 排行 [金币|图鉴|收获|最贵]"""
         index = await self.get_kv_data(self._leaderboard_key(), {})
         if not isinstance(index, dict) or not index:
-            yield event.plain_result("📊 还没有排行数据，先去 /钓鱼 抛几竿吧")
+            async for _r in self._say_msg(event, "rank.empty", event.plain_result("📊 还没有排行数据，先去 /钓鱼 抛几竿吧")):
+                yield _r
             return
 
         key = (a2 or "").strip().lower()
@@ -611,7 +643,8 @@ class CommandsMixin:
             name = entry.get("name") or uid
             rows.append((value, str(name), str(uid), entry))
         if not rows:
-            yield event.plain_result(f"📊 还没有「{title}」的数据")
+            async for _r in self._say_msg(event, "rank.no_data", event.plain_result(f"📊 还没有「{title}」的数据")):
+                yield _r
             return
 
         rows.sort(key=lambda r: -r[0])
@@ -633,7 +666,8 @@ class CommandsMixin:
         elif my_rank > 10:
             lines.append(f"　你的排名：第 {my_rank} 名")
         lines.append("💡 /钓鱼 排行 金币｜图鉴｜最贵")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "rank.view", event.plain_result("\n".join(lines))):
+            yield _r
 
     async def _cmd_lock(self, event: AstrMessageEvent, user_id: str, *rest):
         """锁定/解锁：/钓鱼 锁定 1 2 ｜ /钓鱼 解锁 1
@@ -650,17 +684,19 @@ class CommandsMixin:
             indices = self._parse_indices(" ".join(self._tokens(*rest)), ordered)
 
             if not indices:
-                yield event.plain_result(
-                    "📖 /钓鱼 锁定 <序号…>　锁定的鱼不会被卖出\n"
-                    "　/钓鱼 解锁 <序号…>\n"
-                    "　先用 /钓鱼 背包 看序号"
-                )
+                async for _r in self._say_msg(event, "lock.usage", event.plain_result(
+                        "📖 /钓鱼 锁定 <序号…>　锁定的鱼不会被卖出\n"
+                        "　/钓鱼 解锁 <序号…>\n"
+                        "　先用 /钓鱼 背包 看序号"
+                    )):
+                    yield _r
                 return
             bad = [i for i in indices if i > len(ordered)]
             if bad:
-                yield event.plain_result(
-                    f"🤔 序号 {'/'.join(map(str, bad))} 超出 1~{len(ordered)}"
-                )
+                async for _r in self._say_msg(event, "lock.bad_index", event.plain_result(
+                        f"🤔 序号 {'/'.join(map(str, bad))} 超出 1~{len(ordered)}"
+                    )):
+                    yield _r
                 return
             touched = 0
             for idx in indices:
@@ -675,7 +711,8 @@ class CommandsMixin:
         lines.append("　这些鱼不会被 /钓鱼 卖 或 /钓鱼 卖光光 卖掉")
         if not saved:
             lines.append("⚠️ 保存失败")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "lock.done", event.plain_result("\n".join(lines))):
+            yield _r
 
     async def _cmd_unlock(self, event: AstrMessageEvent, user_id: str, *rest):
         """解锁：/钓鱼 解锁 1 2"""
@@ -699,14 +736,16 @@ class CommandsMixin:
                 lines = [f"🔓 已解锁全部 {touched} 条鱼"]
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "lock.all_done", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             bad = [i for i in indices if i > len(ordered)]
             if bad:
-                yield event.plain_result(
-                    f"🤔 序号 {'/'.join(map(str, bad))} 超出 1~{len(ordered)}"
-                )
+                async for _r in self._say_msg(event, "lock.bad_index", event.plain_result(
+                        f"🤔 序号 {'/'.join(map(str, bad))} 超出 1~{len(ordered)}"
+                    )):
+                    yield _r
                 return
             touched = 0
             for idx in indices:
@@ -719,7 +758,8 @@ class CommandsMixin:
         lines = [f"🔓 解锁了 {touched} 条鱼"]
         if not saved:
             lines.append("⚠️ 保存失败")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "unlock.done", event.plain_result("\n".join(lines))):
+            yield _r
 
 
     async def _cmd_collectibles(self, event: AstrMessageEvent, user_id: str):
@@ -750,7 +790,10 @@ class CommandsMixin:
         lines.append(f"📜 纸条 {len(notes)}/{len(BOTTLE_NOTES)} 张")
         if notes:
             lines.append(f"　最近：{notes[-1]}")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(
+            event, "collectibles.view", event.plain_result("\n".join(lines))
+        ):
+            yield _r
 
     # =========================================================================
     # 指令入口
@@ -767,9 +810,10 @@ class CommandsMixin:
         inventory: list[dict[str, Any]] = player.get("inventory") or []
         cap = _backpack_capacity(player, self.cfg)
         if not inventory:
-            yield event.plain_result(
-                f"🎒 背包空空的（容量 {cap}）\n💡 发 /钓鱼 下竿试试手气"
-            )
+            async for _r in self._say_msg(event, "bag.empty", event.plain_result(
+                    f"🎒 背包空空的（容量 {cap}）\n💡 发 /钓鱼 下竿试试手气"
+                )):
+                yield _r
             return
 
         per_page = 20
@@ -799,7 +843,7 @@ class CommandsMixin:
         lines.append("　/钓鱼 水族馆 放 1 2　放进水族馆")
         if total_pages > 1:
             lines.append(f"💡 /钓鱼 背包 {page % total_pages + 1} 看下一页")
-        async for reply in self._say(event, "\n".join(lines), self._bag_rows()):
+        async for reply in self._say(event, "\n".join(lines), "bag.list"):
             yield reply
 
     async def _cmd_sell(self, event: AstrMessageEvent, user_id: str, *rest):
@@ -819,7 +863,8 @@ class CommandsMixin:
             self._ensure_market(player)  # 确保今日行情已生成
             inventory: list[dict[str, Any]] = player.get("inventory") or []
             if not inventory:
-                yield event.plain_result("🎒 背包空空的，没东西可卖")
+                async for _r in self._say_msg(event, "sell.empty", event.plain_result("🎒 背包空空的，没东西可卖")):
+                    yield _r
                 return
 
             ordered = sorted(inventory, key=_sort_key)
@@ -836,12 +881,13 @@ class CommandsMixin:
             if tokens and tokens[0] in (
                 "__junk_removed__", "垃圾", "小鱼", "杂鱼", "junk", "trash",
             ):
-                yield event.plain_result(
-                    "🧹 「卖 垃圾」这个玩法已经去掉了\n"
-                    "　想一次清空背包：/钓鱼 卖光光（锁定的鱼会留下）\n"
-                    "　想只卖某种鱼：/钓鱼 卖 鲤鱼（可加数量）\n"
-                    "　想按序号卖：/钓鱼 卖 1 2 3"
-                )
+                async for _r in self._say_msg(event, "sell.removed", event.plain_result(
+                        "🧹 「卖 垃圾」这个玩法已经去掉了\n"
+                        "　想一次清空背包：/钓鱼 卖光光（锁定的鱼会留下）\n"
+                        "　想只卖某种鱼：/钓鱼 卖 鲤鱼（可加数量）\n"
+                        "　想按序号卖：/钓鱼 卖 1 2 3"
+                    )):
+                    yield _r
                 return
 
             # ---- 解析目标 ----
@@ -859,9 +905,10 @@ class CommandsMixin:
             elif all(self._is_index_token(t) or "-" in t or "~" in t for t in tokens):
                 indices = self._parse_indices(" ".join(tokens), ordered)
                 if not indices:
-                    yield event.plain_result(
-                        f"🤔 序号要在 1~{len(ordered)} 之间（发 /钓鱼 背包 看序号）"
-                    )
+                    async for _r in self._say_msg(event, "sell.bad_index", event.plain_result(
+                            f"🤔 序号要在 1~{len(ordered)} 之间（发 /钓鱼 背包 看序号）"
+                        )):
+                        yield _r
                     return
                 targets = [ordered[i - 1] for i in indices]
             else:
@@ -875,11 +922,12 @@ class CommandsMixin:
                 fish = self._find_fish_by_name(first)
                 if fish is None:
                     sample = "、".join(f["name"] for f in FISH_POOL[:6])
-                    yield event.plain_result(
-                        f"🤔 没有叫「{first}」的鱼\n"
-                        f"　可卖示例：{sample} …\n"
-                        f"　也可以按序号卖：/钓鱼 卖 1 2 3"
-                    )
+                    async for _r in self._say_msg(event, "sell.no_fish", event.plain_result(
+                            f"🤔 没有叫「{first}」的鱼\n"
+                            f"　可卖示例：{sample} …\n"
+                            f"　也可以按序号卖：/钓鱼 卖 1 2 3"
+                        )):
+                        yield _r
                     return
                 count = (
                     _to_int(tokens[1], 0)
@@ -891,22 +939,25 @@ class CommandsMixin:
                     key=_instance_value,
                 )
                 if not group:
-                    yield event.plain_result(f"🤔 你还没有 {fish['name']}")
+                    async for _r in self._say_msg(event, "sell.missing", event.plain_result(f"🤔 你还没有 {fish['name']}")):
+                        yield _r
                     return
                 targets = group if count <= 0 else group[: min(count, len(group))]
 
             if not targets:
                 if sell_all and skipped_locked:
-                    yield event.plain_result(
-                        f"🔒 背包里 {skipped_locked} 条鱼都锁着，卖光光不会动它们\n"
-                        f"　想一起卖：/钓鱼 解锁 1 2 3 之后再 /钓鱼 卖光光"
-                    )
+                    async for _r in self._say_msg(event, "sell.all_locked", event.plain_result(
+                            f"🔒 背包里 {skipped_locked} 条鱼都锁着，卖光光不会动它们\n"
+                            f"　想一起卖：/钓鱼 解锁 1 2 3 之后再 /钓鱼 卖光光"
+                        )):
+                        yield _r
                     return
-                yield event.plain_result(
-                    "🤔 没有可卖的鱼\n"
-                    "　可能原因：背包是空的、序号超范围、或这种鱼你还没有\n"
-                    "　发 /钓鱼 背包 看背包，或用 /钓鱼 卖光光 一次卖光"
-                )
+                async for _r in self._say_msg(event, "sell.nothing", event.plain_result(
+                        "🤔 没有可卖的鱼\n"
+                        "　可能原因：背包是空的、序号超范围、或这种鱼你还没有\n"
+                        "　发 /钓鱼 背包 看背包，或用 /钓鱼 卖光光 一次卖光"
+                    )):
+                    yield _r
                 return
 
             sold = [(x, price_of(x)[0]) for x in targets]
@@ -917,10 +968,11 @@ class CommandsMixin:
             async for out in self._finalize_sale(event, player, sold, "💵 卖出", bonus):
                 yield out
             if skipped_locked:
-                yield event.plain_result(
-                    f"🔒 另有 {skipped_locked} 条锁定的鱼留在背包里"
-                    f"（/钓鱼 解锁 1 可以解锁）"
-                )
+                async for _r in self._say_msg(event, "sell.locked_note", event.plain_result(
+                        f"🔒 另有 {skipped_locked} 条锁定的鱼留在背包里"
+                        f"（/钓鱼 解锁 1 可以解锁）"
+                    )):
+                    yield _r
 
     async def _cmd_fish_info(self, event: AstrMessageEvent, user_id: str, a2: str = ""):
         """查鱼：``/钓鱼 查 鲤鱼`` 或 ``/钓鱼 查 山间湖泊``。
@@ -932,12 +984,13 @@ class CommandsMixin:
         name = (a2 or "").strip()
         if not name:
             sample = "、".join(f["name"] for f in FISH_POOL[:5])
-            yield event.plain_result(
-                "📖 /钓鱼 查 <鱼名 或 钓点名>\n"
-                f"　例：/钓鱼 查 鲤鱼　/钓鱼 查 山间湖泊\n"
-                f"　常见鱼：{sample} …\n"
-                "　不知道名字就发 /钓鱼 图鉴 看进度、/钓鱼 图鉴 详 看完整清单"
-            )
+            async for _r in self._say_msg(event, "fishinfo.usage", event.plain_result(
+                    "📖 /钓鱼 查 <鱼名 或 钓点名>\n"
+                    f"　例：/钓鱼 查 鲤鱼　/钓鱼 查 山间湖泊\n"
+                    f"　常见鱼：{sample} …\n"
+                    "　不知道名字就发 /钓鱼 图鉴 看进度、/钓鱼 图鉴 详 看完整清单"
+                )):
+                yield _r
             return
 
         player = await self._load_player(user_id)
@@ -959,7 +1012,8 @@ class CommandsMixin:
                 if w > 0 and fid in FISH_BY_ID
             ]
             if not ids:
-                yield event.plain_result(f"🐟 {loc['name']} 没有配置鱼种")
+                async for _r in self._say_msg(event, "fishinfo.empty", event.plain_result(f"🐟 {loc['name']} 没有配置鱼种")):
+                    yield _r
                 return
             lines = [
                 f"{loc['emoji']} {loc['name']}　共 {len(ids)} 种"
@@ -983,17 +1037,19 @@ class CommandsMixin:
                         + (f"　存{now}" if now else "")
                     )
             lines.append("💡 /钓鱼 查 <鱼名> 看它在哪些钓点出现")
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "fishinfo.location_detail", event.plain_result("\n".join(lines))):
+                yield _r
             return
 
         # ---- 按鱼名查 ----
         fish = self._find_fish_by_name(name)
         if fish is None:
-            yield event.plain_result(
-                f"🤔 没有叫「{name}」的鱼，也没这个钓点\n"
-                "　试试 /钓鱼 图鉴 详 [页码] 看完整鱼名单，"
-                "或 /钓鱼 钓点 看钓点列表"
-            )
+            async for _r in self._say_msg(event, "fishinfo.not_found", event.plain_result(
+                    f"🤔 没有叫「{name}」的鱼，也没这个钓点\n"
+                    "　试试 /钓鱼 图鉴 详 [页码] 看完整鱼名单，"
+                    "或 /钓鱼 钓点 看钓点列表"
+                )):
+                yield _r
             return
         homes = [
             loc_cfg
@@ -1024,7 +1080,8 @@ class CommandsMixin:
         else:
             lines.append("　我的记录：还没钓到过 ❔")
         lines.append("💡 /钓鱼 查 <钓点名> 看那个钓点的全部鱼种")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "fishinfo.detail", event.plain_result("\n".join(lines))):
+            yield _r
 
     async def _cmd_collection(self, event: AstrMessageEvent, user_id: str, a2: str = ""):
         """鱼种图鉴（203 种鱼，所以按钓点分区 + 可翻页）。
@@ -1096,7 +1153,8 @@ class CommandsMixin:
             if total_pages > 1:
                 tail_page = page % total_pages + 1
                 lines.append(f"💡 /钓鱼 图鉴 详 {tail_page} 看下一页")
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "collection.detail", event.plain_result("\n".join(lines))):
+                yield _r
             return
 
         # ---- 图鉴 <钓点名>：这个钓点里已收集的鱼 ----
@@ -1137,7 +1195,8 @@ class CommandsMixin:
                 else f"🏅 这个钓点已集齐（共 {len(ids)} 种）"
             )
             lines.append("💡 /钓鱼 图鉴 看各钓点总进度")
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "collection.location", event.plain_result("\n".join(lines))):
+                yield _r
             return
 
         # ---- 主视图：一行一个钓点（✅ = 已够八成，可以前往下一个钓点）----
@@ -1174,7 +1233,8 @@ class CommandsMixin:
             )
         lines.extend(self._best_records_text(player))
         lines.append("💡 /钓鱼 图鉴 <钓点名> 看还差哪些　/钓鱼 图鉴 详 看完整清单")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "collection.view", event.plain_result("\n".join(lines))):
+            yield _r
 
     # =========================================================================
     # 水族馆
@@ -1208,7 +1268,8 @@ class CommandsMixin:
 
             # ---- 欣赏 ----
             if not sub:
-                yield event.plain_result(self._aquarium_view(player))
+                async for _r in self._say_msg(event, "aquarium.view", event.plain_result(self._aquarium_view(player))):
+                    yield _r
                 return
 
             # ---- 扩建 ----
@@ -1218,13 +1279,15 @@ class CommandsMixin:
                     (s for s in self.aquarium_slots if s["name"] not in unlocked), None
                 )
                 if nxt is None:
-                    yield event.plain_result("🏠 已经扩到最大了")
+                    async for _r in self._say_msg(event, "aquarium.max", event.plain_result("🏠 已经扩到最大了")):
+                        yield _r
                     return
                 price = int(nxt["price"])
                 if _safe_int(player.get("gold"), 0, 0) < price:
-                    yield event.plain_result(
-                        f"💸 扩建「{nxt['name']}」需要 {_fmt_gold(price)}，金币不足"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.no_gold", event.plain_result(
+                            f"💸 扩建「{nxt['name']}」需要 {_fmt_gold(price)}，金币不足"
+                        )):
+                        yield _r
                     return
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
                 unlocked.append(nxt["name"])
@@ -1233,7 +1296,8 @@ class CommandsMixin:
                     f"💰 余额 {_fmt_gold(player['gold'])}",
                 ]
                 saved = await self._save_with_notices(player, lines)
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "aquarium.upgraded", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 领取鱼塘挂机收益（按小时累积，与水族馆合并）----
@@ -1244,18 +1308,20 @@ class CommandsMixin:
                     # 第一次：开始计时
                     player["pond_last_ts"] = now_ts
                     await self._save_player(player)
-                    yield event.plain_result(
-                        "🏞️ 鱼塘开始计产了！\n"
-                        "　每小时产出馆藏估值的 "
-                        f"{float(self.cfg['pond_income_per_hour']) * 100:.1f}%，"
-                        f"最多累积 {int(self.cfg['pond_income_cap_hours'])} 小时\n"
-                        "　过一阵子再来 /钓鱼 水族馆 领"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.income_start", event.plain_result(
+                            "🏞️ 鱼塘开始计产了！\n"
+                            "　每小时产出馆藏估值的 "
+                            f"{float(self.cfg['pond_income_per_hour']) * 100:.1f}%，"
+                            f"最多累积 {int(self.cfg['pond_income_cap_hours'])} 小时\n"
+                            "　过一阵子再来 /钓鱼 水族馆 领"
+                        )):
+                        yield _r
                     return
 
                 total_value = _inventory_value(aquarium)
                 if total_value <= 0:
-                    yield event.plain_result("🐠 水族馆是空的，鱼塘没有产出")
+                    async for _r in self._say_msg(event, "aquarium.income_empty", event.plain_result("🐠 水族馆是空的，鱼塘没有产出")):
+                        yield _r
                     return
 
                 hours = min(
@@ -1270,9 +1336,10 @@ class CommandsMixin:
                 )
                 if income <= 0:
                     wait_min = max(1, int(60 - (now_ts - last) / 60.0))
-                    yield event.plain_result(
-                        f"⏳ 产出还不够，再等约 {wait_min} 分钟（每小时结算一次）"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.income_wait", event.plain_result(
+                            f"⏳ 产出还不够，再等约 {wait_min} 分钟（每小时结算一次）"
+                        )):
+                        yield _r
                     return
 
                 player["pond_last_ts"] = now_ts
@@ -1290,15 +1357,17 @@ class CommandsMixin:
                     lines.append(f"　🪸 装饰加成 +{deco_bonus:.0%}")
                 lines.append(f"💰 余额 {_fmt_gold(player['gold'])}")
                 saved = await self._save_with_notices(player, lines)
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "aquarium.income", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 投喂（统一走 /钓鱼 用 <道具> <栏位号>）----
             if sub in ("喂", "投喂", "feed"):
-                yield event.plain_result(
-                    "📖 投喂请用：/钓鱼 用 <道具名> <水族馆栏位号>\n"
-                    "　例：/钓鱼 用 高级饲料 1"
-                )
+                async for _r in self._say_msg(event, "aquarium.feed_usage", event.plain_result(
+                        "📖 投喂请用：/钓鱼 用 <道具名> <水族馆栏位号>\n"
+                        "　例：/钓鱼 用 高级饲料 1"
+                    )):
+                    yield _r
                 return
 
             # ---- 放入（支持批量序号：放 1 2 3 / 放 1-3 / 放 全部）----
@@ -1306,20 +1375,22 @@ class CommandsMixin:
                 ordered = sorted(inventory, key=_sort_key)
                 indices = self._parse_indices(spec_text, ordered)
                 if not indices:
-                    yield event.plain_result(
-                        "📖 /钓鱼 水族馆 放 <背包序号…>\n"
-                        "　例：/钓鱼 水族馆 放 1　或　放 1 3 5　或　放 1-5\n"
-                        f"　背包有 {len(inventory)} 条，水族馆 {len(aquarium)}/{capacity}\n"
-                        "　先用 /钓鱼 背包 看序号"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.put_usage", event.plain_result(
+                            "📖 /钓鱼 水族馆 放 <背包序号…>\n"
+                            "　例：/钓鱼 水族馆 放 1　或　放 1 3 5　或　放 1-5\n"
+                            f"　背包有 {len(inventory)} 条，水族馆 {len(aquarium)}/{capacity}\n"
+                            "　先用 /钓鱼 背包 看序号"
+                        )):
+                        yield _r
                     return
 
                 room = capacity - len(aquarium)
                 if room <= 0:
-                    yield event.plain_result(
-                        f"🐠 水族馆已满（{len(aquarium)}/{capacity}）\n"
-                        "　可 /钓鱼 水族馆 扩建 扩容，或先 /钓鱼 水族馆 取/卖"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.full", event.plain_result(
+                            f"🐠 水族馆已满（{len(aquarium)}/{capacity}）\n"
+                            "　可 /钓鱼 水族馆 扩建 扩容，或先 /钓鱼 水族馆 取/卖"
+                        )):
+                        yield _r
                     return
 
                 # 先取出要放的鱼（按序号降序 pop，避免索引错位）
@@ -1357,18 +1428,20 @@ class CommandsMixin:
                     )
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "aquarium.put_done", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 取出（支持批量序号）----
             if sub in ("取", "取出", "拿", "take"):
                 indices = self._parse_indices(spec_text, aquarium)
                 if not indices:
-                    yield event.plain_result(
-                        f"📖 /钓鱼 水族馆 取 <栏位号…>\n"
-                        f"　例：/钓鱼 水族馆 取 1　或　取 1 3 5\n"
-                        f"　当前水族馆有 {len(aquarium)} 条（发 /钓鱼 水族馆 看栏位）"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.take_usage", event.plain_result(
+                            f"📖 /钓鱼 水族馆 取 <栏位号…>\n"
+                            f"　例：/钓鱼 水族馆 取 1　或　取 1 3 5\n"
+                            f"　当前水族馆有 {len(aquarium)} 条（发 /钓鱼 水族馆 看栏位）"
+                        )):
+                        yield _r
                     return
                 got: list[tuple[dict[str, Any], int]] = []
                 for idx in sorted(indices, reverse=True):
@@ -1393,17 +1466,19 @@ class CommandsMixin:
                 lines.append(f"🧺 背包 {len(inventory)}/{_backpack_capacity(player, self.cfg)}")
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "aquarium.take_done", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # ---- 卖掉馆藏（支持批量序号）----
             if sub in ("卖", "卖出", "sell"):
                 indices = self._parse_indices(spec_text, aquarium)
                 if not indices:
-                    yield event.plain_result(
-                        "📖 /钓鱼 水族馆 卖 <栏位号…>\n"
-                        "　例：/钓鱼 水族馆 卖 1　或　卖 1 3 5"
-                    )
+                    async for _r in self._say_msg(event, "aquarium.sell_usage", event.plain_result(
+                            "📖 /钓鱼 水族馆 卖 <栏位号…>\n"
+                            "　例：/钓鱼 水族馆 卖 1　或　卖 1 3 5"
+                        )):
+                        yield _r
                     return
                 discount = float(self.cfg["sell_discount"])
                 income = 0
@@ -1417,7 +1492,8 @@ class CommandsMixin:
                     income += price
                     sold.append((instance, price, gain))
                 if not sold:
-                    yield event.plain_result(f"🤔 没有有效的栏位号（1~{len(aquarium)}）")
+                    async for _r in self._say_msg(event, "aquarium.bad_slot", event.plain_result(f"🤔 没有有效的栏位号（1~{len(aquarium)}）")):
+                        yield _r
                     return
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) + income
                 player["total_sold"] = _safe_int(player.get("total_sold"), 0, 0) + len(
@@ -1434,19 +1510,21 @@ class CommandsMixin:
                     lines.append(f"　… 其余 {len(sold) - 5} 条同上")
                 lines.append(f"💰 余额 {_fmt_gold(player['gold'])}")
                 saved = await self._save_with_notices(player, lines)
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "aquarium.sell_done", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
-            yield event.plain_result(
-                "📖 水族馆用法\n"
-                "　/钓鱼 水族馆　　　　　　欣赏\n"
-                "　/钓鱼 水族馆 放 1　　　 从背包放入\n"
-                "　/钓鱼 水族馆 取 1　　　 取回（估值+加成）\n"
-                "　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n"
-                "　/钓鱼 用 <道具> 1　　　投喂提升三维\n"
-                "　/钓鱼 水族馆 领　　　　 领取每日收益\n"
-                "　/钓鱼 水族馆 扩建　　　 花金币扩容"
-            )
+            async for _r in self._say_msg(event, "aquarium.usage", event.plain_result(
+                    "📖 水族馆用法\n"
+                    "　/钓鱼 水族馆　　　　　　欣赏\n"
+                    "　/钓鱼 水族馆 放 1　　　 从背包放入\n"
+                    "　/钓鱼 水族馆 取 1　　　 取回（估值+加成）\n"
+                    "　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n"
+                    "　/钓鱼 用 <道具> 1　　　投喂提升三维\n"
+                    "　/钓鱼 水族馆 领　　　　 领取每日收益\n"
+                    "　/钓鱼 水族馆 扩建　　　 花金币扩容"
+                )):
+                yield _r
 
     def _resolve_tank_conflicts(
         self, aquarium: list[dict[str, Any]]
@@ -1525,7 +1603,8 @@ class CommandsMixin:
             player = await self._load_player(user_id)
 
             if not sub:
-                yield event.plain_result(self._shop_view(player))
+                async for _r in self._say_msg(event, "shop.list", event.plain_result(self._shop_view(player))):
+                    yield _r
                 return
 
             # 「商店 扩容」：转发到背包扩容（调用无锁版本，避免自死锁）
@@ -1536,11 +1615,12 @@ class CommandsMixin:
 
             if sub in ("买", "购买", "buy"):
                 if not spec:
-                    yield event.plain_result(
-                        "📖 /钓鱼 商店 买 <名字> [数量]\n"
-                        "　例：/钓鱼 商店 买 蚯蚓（1 个）　买 蚯蚓 20（20 个）\n"
-                        "　鱼饵和道具都按「个」买，数量不写就是 1"
-                    )
+                    async for _r in self._say_msg(event, "shop.usage", event.plain_result(
+                            "📖 /钓鱼 商店 买 <名字> [数量]\n"
+                            "　例：/钓鱼 商店 买 蚯蚓（1 个）　买 蚯蚓 20（20 个）\n"
+                            "　鱼饵和道具都按「个」买，数量不写就是 1"
+                        )):
+                        yield _r
                     return
                 name = spec[0]
                 times = _to_int(spec[1], 1) if len(spec) > 1 else 1
@@ -1557,10 +1637,11 @@ class CommandsMixin:
                 item_id = self._find_item(name)
 
                 if bait_id == "none":
-                    yield event.plain_result(
-                        "🪝 空钩是免费的，不需要购买\n"
-                        "　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿"
-                    )
+                    async for _r in self._say_msg(event, "shop.free_hook", event.plain_result(
+                            "🪝 空钩是免费的，不需要购买\n"
+                            "　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿"
+                        )):
+                        yield _r
                     return
                 if bait_id is None and item_id is None:
                     # 只报「已上架」的名字：没解锁的东西不剧透
@@ -1576,9 +1657,10 @@ class CommandsMixin:
                             if not self._unlock_shortage(player, i)
                         ]
                     )
-                    yield event.plain_result(
-                        f"🤔 商店里没有「{name}」\n　在售：{names}"
-                    )
+                    async for _r in self._say_msg(event, "shop.not_found", event.plain_result(
+                            f"🤔 商店里没有「{name}」\n　在售：{names}"
+                        )):
+                        yield _r
                     return
 
                 if bait_id is not None:
@@ -1586,19 +1668,21 @@ class CommandsMixin:
                     # 等级 / 需要鱼竿的购买门槛（只限制购买，已持有的不受影响）
                     refuse = self._unlock_refuse_text(player, bait)
                     if refuse:
-                        yield event.plain_result(
-                            f"{refuse}\n　升级靠多钓鱼；要鱼竿就去 /钓鱼 鱼竿 买"
-                        )
+                        async for _r in self._say_msg(event, "shop.locked", event.plain_result(
+                                f"{refuse}\n　升级靠多钓鱼；要鱼竿就去 /钓鱼 鱼竿 买"
+                            )):
+                            yield _r
                         return
                     unit = max(0, int(bait.get("price", 0)))   # 单价：按个卖
                     want = max(1, min(times, 9999))
                     price = unit * want
                     if _safe_int(player.get("gold"), 0, 0) < price:
-                        yield event.plain_result(
-                            f"💸 金币不足：买 {want} 个需要 {_fmt_gold(price)}，"
-                            f"你只有 {_fmt_gold(player.get('gold', 0))}"
-                            f"（{_fmt_gold(unit)}/个）"
-                        )
+                        async for _r in self._say_msg(event, "shop.no_gold_bait", event.plain_result(
+                                f"💸 金币不足：买 {want} 个需要 {_fmt_gold(price)}，"
+                                f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                                f"（{_fmt_gold(unit)}/个）"
+                            )):
+                            yield _r
                         return
                     amount = want
                     player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
@@ -1614,10 +1698,11 @@ class CommandsMixin:
                     item = self.items[item_id]
                     price = int(item.get("price", 0)) * times
                     if _safe_int(player.get("gold"), 0, 0) < price:
-                        yield event.plain_result(
-                            f"💸 金币不足：买 {times} 个需要 {_fmt_gold(price)}，"
-                            f"你只有 {_fmt_gold(player.get('gold', 0))}"
-                        )
+                        async for _r in self._say_msg(event, "shop.no_gold_item", event.plain_result(
+                                f"💸 金币不足：买 {times} 个需要 {_fmt_gold(price)}，"
+                                f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                            )):
+                            yield _r
                         return
                     player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
                     items = player.setdefault("items", {})
@@ -1643,14 +1728,16 @@ class CommandsMixin:
                     )
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "shop.bought", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
-            yield event.plain_result(
-                "📖 /钓鱼 商店　　　　　　看货架\n"
-                "　/钓鱼 商店 买 <名字> [数量]\n"
-                "　/钓鱼 商店 扩容　　　 背包扩容"
-            )
+            async for _r in self._say_msg(event, "shop.usage_short", event.plain_result(
+                    "📖 /钓鱼 商店　　　　　　看货架\n"
+                    "　/钓鱼 商店 买 <名字> [数量]\n"
+                    "　/钓鱼 商店 扩容　　　 背包扩容"
+                )):
+                yield _r
 
 
     async def _cmd_equip_bait(
@@ -1687,7 +1774,8 @@ class CommandsMixin:
                 if not any_bait:
                     lines.append("　（没有鱼饵，/钓鱼 商店 买 蚯蚓）")
                 lines.append("💡 /钓鱼 换饵 蚯蚓　或　/钓鱼 换饵 空钩（不消耗鱼饵）")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "bait.equipped", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             target = self._find_bait(name)
@@ -1700,27 +1788,31 @@ class CommandsMixin:
                     ]
                     + ["空钩"]
                 )
-                yield event.plain_result(
-                    f"🤔 没有「{name}」这种饵。可以换：{names}"
-                )
+                async for _r in self._say_msg(event, "bait.not_found", event.plain_result(
+                        f"🤔 没有「{name}」这种饵。可以换：{names}"
+                    )):
+                    yield _r
                 return
 
             if target != "none" and owned_of(target) <= 0:
                 refuse = self._unlock_refuse_text(player, self.baits[target])
                 if refuse:
-                    yield event.plain_result(f"{refuse}（买到之后就能换）")
+                    async for _r in self._say_msg(event, "bait.locked", event.plain_result(f"{refuse}（买到之后就能换）")):
+                        yield _r
                     return
-                yield event.plain_result(
-                    f"🎒 你还没有 {self._bait_label(target)}，"
-                    f"先去 /钓鱼 商店 买 {self.baits[target]['name']}"
-                )
+                async for _r in self._say_msg(event, "bait.not_owned", event.plain_result(
+                        f"🎒 你还没有 {self._bait_label(target)}，"
+                        f"先去 /钓鱼 商店 买 {self.baits[target]['name']}"
+                    )):
+                    yield _r
                 return
 
             if target == current:
-                yield event.plain_result(
-                    f"🎣 当前用的就是 {self._bait_label(target)}"
-                    + (f"（还剩 {owned_of(target)} 个）" if target != "none" else "")
-                )
+                async for _r in self._say_msg(event, "bait.same", event.plain_result(
+                        f"🎣 当前用的就是 {self._bait_label(target)}"
+                        + (f"（还剩 {owned_of(target)} 个）" if target != "none" else "")
+                    )):
+                    yield _r
                 return
 
             player["equipped_bait"] = target
@@ -1734,7 +1826,8 @@ class CommandsMixin:
                     f"　还剩 {owned_of(target)} 个"
                     f"　{self.baits[target].get('desc', '')}"
                 )
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "bait.empty", event.plain_result("\n".join(lines))):
+                yield _r
 
     async def _cmd_use_item(
         self, event: AstrMessageEvent, user_id: str, a2: str, a3: str
@@ -1764,19 +1857,22 @@ class CommandsMixin:
             if item_id is None:
                 owned = player.get("items") or {}
                 if not owned:
-                    yield event.plain_result("🎒 没有道具，去 /钓鱼 商店 买")
+                    async for _r in self._say_msg(event, "item.empty", event.plain_result("🎒 没有道具，去 /钓鱼 商店 买")):
+                        yield _r
                     return
                 names = "、".join(
                     self._item_label(i) for i, c in owned.items() if _safe_int(c, 0, 0) > 0
                 )
-                yield event.plain_result(f"📖 /钓鱼 用 <道具> <序列>　你有：{names or '无'}")
+                async for _r in self._say_msg(event, "item.usage", event.plain_result(f"📖 /钓鱼 用 <道具> <序列>　你有：{names or '无'}")):
+                    yield _r
                 return
 
             items = player.get("items") or {}
             if _safe_int(items.get(item_id), 0, 0) <= 0:
-                yield event.plain_result(
-                    f"🎒 没有 {self._item_label(item_id)}，去 /钓鱼 商店 买"
-                )
+                async for _r in self._say_msg(event, "item.missing", event.plain_result(
+                        f"🎒 没有 {self._item_label(item_id)}，去 /钓鱼 商店 买"
+                    )):
+                    yield _r
                 return
 
             item = self.items.get(item_id) or {}
@@ -1802,7 +1898,8 @@ class CommandsMixin:
                 ]
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # --- 水族馆装饰（珊瑚造景）：摆进鱼缸，耐久内持续加成挂机产出 ---
@@ -1813,54 +1910,83 @@ class CommandsMixin:
                 expired = _prune_decorations(player, now=now_ts)
                 current = list(player.get("decorations") or [])
                 if slots <= 0:
-                    yield event.plain_result(
-                        "🪸 本服没有开放装饰位（decoration_slots = 0）"
-                    )
+                    async for _r in self._say_msg(event, "item.deco_disabled", event.plain_result(
+                            "🪸 本服没有开放装饰位（decoration_slots = 0）"
+                        )):
+                        yield _r
                     return
                 if len(current) >= slots:
-                    yield event.plain_result(
-                        f"🪸 装饰位满了（{len(current)}/{slots}）\n"
-                        "　等旧的失效，或 /钓鱼 水族馆 看还剩多久"
-                    )
+                    async for _r in self._say_msg(event, "item.deco_full", event.plain_result(
+                            f"🪸 装饰位满了（{len(current)}/{slots}）\n"
+                            "　等旧的失效，或 /钓鱼 水族馆 看还剩多久"
+                        )):
+                        yield _r
                     return
-                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                # 数字参数 = 一次摆几个（装饰没有「全缸」语义，不写就是 1 个）。
+                # 数量取「想要 / 库存 / 空位」三者最小，并如实告诉玩家为什么没摆够。
+                want = _to_int((a3 or "").strip(), 0)
+                if want <= 0:
+                    want = 1
+                owned = _safe_int(items.get(item_id), 0, 0)
+                room = max(0, slots - len(current))
+                place = max(1, min(want, owned, room))
+                items[item_id] = owned - place
                 rate = _safe_number(effects.get("decorate"), 0.0)
-                player.setdefault("decorations", []).append(
-                    {
-                        "id": item_id,
-                        "rate": rate,
-                        "ts": now_ts,
-                        "expire_ts": now_ts + hours * 3600,
-                    }
-                )
+                # 逐个入列：每个装饰记自己的 ts / expire_ts，互相独立计时
+                for _ in range(place):
+                    player.setdefault("decorations", []).append(
+                        {
+                            "id": item_id,
+                            "rate": rate,
+                            "ts": now_ts,
+                            "expire_ts": now_ts + hours * 3600,
+                        }
+                    )
                 saved = await self._save_player(player)
-                lines = [
-                    f"🪸 摆好了 {self._item_label(item_id)}",
-                    f"　挂机产出 +{rate:.0%}　持续 {hours} 小时（离线时间也照算）",
-                    f"　装饰位 {len(player['decorations'])}/{slots}",
-                ]
+                head = f"🪸 摆好了 {self._item_label(item_id)}"
+                lines = [head if place == 1 else f"{head} ×{place}"]
+                if place < want:
+                    lack = (
+                        f"库存只有 {owned} 个" if owned < want
+                        else f"装饰位只剩 {room} 个"
+                    )
+                    lines.append(f"　{lack}，摆了 {place} 个")
+                lines.append(
+                    f"　挂机产出 +{rate * place:.0%}　持续 {hours} 小时（离线时间也照算）"
+                )
+                lines.append(f"　装饰位 {len(player['decorations'])}/{slots}")
+                lines.append(
+                    "　到期："
+                    + time.strftime(
+                        "%Y-%m-%d %H:%M", time.localtime(now_ts + hours * 3600)
+                    )
+                )
                 if expired:
                     lines.append(f"　（顺带清理了 {expired} 个已失效的装饰）")
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(lines))
+                async for _r in self._say_msg(event, "item.deco_used", event.plain_result("\n".join(lines))):
+                    yield _r
                 return
 
             # --- 育灵水（feed_bonus）：对水族馆里的一条鱼生效，提升它的投喂上限 ---
             if _safe_number(effects.get("feed_bonus"), 0.0) > 0:
                 tank: list[dict[str, Any]] = player.get("aquarium") or []
                 if not tank:
-                    yield event.plain_result("🐠 水族馆是空的，先把鱼放进去再培育")
+                    async for _r in self._say_msg(event, "item.breed_no_fish", event.plain_result("🐠 水族馆是空的，先把鱼放进去再培育")):
+                        yield _r
                     return
                 if not (a3 or "").strip():
-                    yield event.plain_result(
-                        f"📖 /钓鱼 用 {item.get('name', item_id)} <水族馆栏位>\n"
-                        "　写上要培育的那条鱼的栏位号（1 2 3 / 1-3 都行）"
-                    )
+                    async for _r in self._say_msg(event, "item.breed_usage", event.plain_result(
+                            f"📖 /钓鱼 用 {item.get('name', item_id)} <水族馆栏位>\n"
+                            "　写上要培育的那条鱼的栏位号（1 2 3 / 1-3 都行）"
+                        )):
+                        yield _r
                     return
                 picked = self._parse_indices(a3, tank)
                 if not picked:
-                    yield event.plain_result("🤔 栏位号不对，/钓鱼 水族馆 看看序号")
+                    async for _r in self._say_msg(event, "item.breed_bad_slot", event.plain_result("🤔 栏位号不对，/钓鱼 水族馆 看看序号")):
+                        yield _r
                     return
                 bonus = int(round(_safe_number(effects.get("feed_bonus"), 0.0)))
                 lines = []
@@ -1881,9 +2007,10 @@ class CommandsMixin:
                         f"　投喂上限 {_feed_cap(instance, self.cfg)} 次"
                     )
                 if used <= 0:
-                    yield event.plain_result(
-                        "🌱 没能用出去：\n" + "\n".join(lines or ["　（没有可用目标）"])
-                    )
+                    async for _r in self._say_msg(event, "item.breed_failed", event.plain_result(
+                            "🌱 没能用出去：\n" + "\n".join(lines or ["　（没有可用目标）"])
+                        )):
+                        yield _r
                     return
                 saved = await self._save_player(player)
                 head = [
@@ -1892,13 +2019,15 @@ class CommandsMixin:
                 ]
                 if not saved:
                     head.append("⚠️ 保存失败")
-                yield event.plain_result("\n".join(head + lines[:6]))
+                async for _r in self._say_msg(event, "item.breed_done", event.plain_result("\n".join(head + lines[:6]))):
+                    yield _r
                 return
 
             # --- 饲料类：需要水族馆目标（支持批量栏位）---
             aquarium: list[dict[str, Any]] = player.get("aquarium") or []
             if not aquarium:
-                yield event.plain_result("🐠 水族馆是空的，先把鱼放进去养")
+                async for _r in self._say_msg(event, "item.feed_no_fish", event.plain_result("🐠 水族馆是空的，先把鱼放进去养")):
+                    yield _r
                 return
             # 不带栏位 = 喂全缸（「喂养对所有鱼生效」）
             if not (a3 or "").strip():
@@ -1906,10 +2035,11 @@ class CommandsMixin:
             else:
                 slots = self._parse_indices(a3, aquarium)
             if not slots:
-                yield event.plain_result(
-                    f"📖 /钓鱼 用 {item.get('name', item_id)} [水族馆栏位]\n"
-                    f"　不写栏位就是喂全缸；也可以写 1 2 3 / 1-3"
-                )
+                async for _r in self._say_msg(event, "item.feed_usage", event.plain_result(
+                        f"📖 /钓鱼 用 {item.get('name', item_id)} [水族馆栏位]\n"
+                        f"　不写栏位就是喂全缸；也可以写 1 2 3 / 1-3"
+                    )):
+                    yield _r
                 return
 
             stock = _safe_int(items.get(item_id), 0, 0)
@@ -1937,12 +2067,14 @@ class CommandsMixin:
 
             if used <= 0:
                 if skipped_full:
-                    yield event.plain_result(
-                        f"🍖 栏位 {'、'.join(str(i) for i in skipped_full)} "
-                        f"都已经喂满 {max_uses} 次了"
-                    )
+                    async for _r in self._say_msg(event, "item.feed_full", event.plain_result(
+                            f"🍖 栏位 {'、'.join(str(i) for i in skipped_full)} "
+                            f"都已经喂满 {max_uses} 次了"
+                        )):
+                        yield _r
                 else:
-                    yield event.plain_result(f"🎒 没有 {self._item_label(item_id)} 了")
+                    async for _r in self._say_msg(event, "item.feed_missing", event.plain_result(f"🎒 没有 {self._item_label(item_id)} 了")):
+                        yield _r
                 return
 
             items[item_id] = stock
@@ -1964,7 +2096,8 @@ class CommandsMixin:
                 lines.append(
                     f"　（跳过已喂满的栏位 {len(skipped_full)} 条）"
                 )
-            yield event.plain_result("\n".join(lines))
+            async for _r in self._say_msg(event, "item.feed_done", event.plain_result("\n".join(lines))):
+                yield _r
 
     # =========================================================================
     # 档案 / 签到 / 管理员
@@ -1977,16 +2110,18 @@ class CommandsMixin:
         看一眼体力不会产生存档写入，也不会把「恢复零头」抹掉。
         """
         player = await self._load_player(user_id)
-        yield event.plain_result(self._stamina_text(player))
+        async for _r in self._say_msg(event, "stamina.view", event.plain_result(self._stamina_text(player))):
+            yield _r
 
     async def _cmd_gold_renamed(self, event: AstrMessageEvent, user_id: str):
         """旧指令 /钓鱼 金币 的迁移提示：它原本显示的是档案，名不符实。"""
         player = await self._load_player(user_id)
-        yield event.plain_result(
-            f"📇 这个指令改名了：/钓鱼 档案\n"
-            f"　金币只是档案里的一项（你现在 "
-            f"{_fmt_gold(player.get('gold', 0))} 金币）"
-        )
+        async for _r in self._say_msg(event, "profile.renamed", event.plain_result(
+                f"📇 这个指令改名了：/钓鱼 档案\n"
+                f"　金币只是档案里的一项（你现在 "
+                f"{_fmt_gold(player.get('gold', 0))} 金币）"
+            )):
+            yield _r
 
     async def _cmd_profile(self, event: AstrMessageEvent, user_id: str):
         player = await self._load_player(user_id)
@@ -2045,16 +2180,18 @@ class CommandsMixin:
         luck = _safe_number(player.get("luck_charges"), 0.0)
         if luck > 0:
             lines.append(f"🔮 手气储备 {_luck_stars(luck, 0.5)}")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "profile.view", event.plain_result("\n".join(lines))):
+            yield _r
 
     async def _cmd_sign(self, event: AstrMessageEvent, user_id: str):
         today = self._today_text()
         async with self._lock_for(user_id):
             player = await self._load_player(user_id)
             if player.get("last_sign_date") == today:
-                yield event.plain_result(
-                    f"📅 今天已签到　💰 {_fmt_gold(player.get('gold', 0))}"
-                )
+                async for _r in self._say_msg(event, "sign.done", event.plain_result(
+                        f"📅 今天已签到　💰 {_fmt_gold(player.get('gold', 0))}"
+                    )):
+                    yield _r
                 return
             reward = int(self.cfg["sign_reward"])
             player["last_sign_date"] = today
@@ -2066,7 +2203,8 @@ class CommandsMixin:
             lines.append("🎉 " + "；".join(new_ach))
         if not saved:
             lines.append("⚠️ 保存失败")
-        yield event.plain_result("\n".join(lines))
+        async for _r in self._say_msg(event, "sign.result", event.plain_result("\n".join(lines))):
+            yield _r
 
     # =========================================================================
     # 帮助
