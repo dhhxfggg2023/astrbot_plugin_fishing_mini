@@ -49,6 +49,21 @@ import re
 import time
 from typing import Any
 
+
+def _effects_module() -> Any:
+    """效果注册表模块（v1.13.0）；拿不到就返回 None，页面自动回退内置清单。"""
+    import sys
+
+    for name in ("astrbot_fishing_effects", "_effects"):
+        module = sys.modules.get(name)
+        if module is not None:
+            return module
+    try:
+        import _effects as module
+        return module
+    except Exception:
+        return None
+
 # ---------------------------------------------------------------------------
 # 通道常量（页面侧必须与这里保持一致）
 # ---------------------------------------------------------------------------
@@ -389,6 +404,13 @@ class EditorApiMixin:
             payload["editor_status"] = getattr(self, "_editor_status_text", "") or ""
         payload["status"] = "ok"
         payload["transport"] = "plugin-api"
+        # 效果键清单（v1.13.0）：道具页的效果下拉/校验都读这里，不再写死清单，
+        # 于是改 _effects.EFFECTS 或加一个扩展，页面会自动多出新键。
+        fx = _effects_module()
+        if fx is not None:
+            payload["effect_keys"] = fx.effect_table()
+            payload["effect_hint"] = fx.effect_hint()
+            payload["extensions"] = fx.report_lines()
         return payload
 
     async def editor_api_config(self):
@@ -477,6 +499,7 @@ class EditorApiMixin:
                 "desc": "（未登记分组的场景）",
                 "scenes": [self._editor_scene_entry(s) for s in scenes],
             })
+        fx = _effects_module()
         return {
             "status": "ok",
             "transport": "plugin-api",
@@ -487,6 +510,17 @@ class EditorApiMixin:
                 {"value": "default", "label": "默认（灰）"},
                 {"value": "primary", "label": "主要（蓝）"},
             ],
+            # 按钮样式全局设置（v1.13.0）：策略 + 统一样式
+            "button_style_modes": [
+                {"value": "按按钮表", "label": "按按钮表（每行各写各的）"},
+                {"value": "统一", "label": "全部统一（所有按钮一个样式）"},
+            ],
+            "button_style_mode": str(self.config.get("button_style_mode") or "按按钮表"),
+            "button_default_style": str(self.config.get("button_default_style") or "default"),
+            # 效果键清单：页面不再写死，改 _effects.EFFECTS 或加扩展都会自动出现
+            "effect_keys": (fx.effect_table() if fx else []),
+            "effect_hint": (fx.effect_hint() if fx else ""),
+            "extensions": (fx.report_lines() if fx else []),
             "text_overrides_hint": (
                 "一行一条：场景|模板；{原文} = 插件原本拼好的那段文字"
             ),
@@ -1018,27 +1052,54 @@ class EditorBridgeMixin(EditorApiMixin):
         return True, f"已写入内容表：{names}"
 
     # ------------------------------------------------------------ save_replies
-    async def _editor_save_replies(self, payload: dict[str, Any]) -> tuple[bool, str]:
-        """写回复相关的三项配置：``button_defs`` / ``text_overrides`` / ``button_layout``。
+    #: 回复页能写的文本表（一行一条）
+    REPLY_TEXT_KEYS: tuple[str, ...] = ("button_defs", "text_overrides", "button_layout")
+    #: 回复页能写的单选设置（按钮样式全局设置，v1.13.0）
+    REPLY_SCALAR_KEYS: tuple[str, ...] = ("button_style_mode", "button_default_style")
 
-        三份都是「一行一条」的文本，坏行由解析器跳过并告警（不会写坏配置），
-        所以这里只校验类型，然后把**实际生效**的数量回报给页面。
+    async def _editor_save_replies(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """写回复相关的配置：三份文本表 + 两个按钮样式全局设置。
+
+        * ``button_defs`` / ``text_overrides`` / ``button_layout``：一行一条的文本，
+          坏行由解析器跳过并告警（不会写坏配置），所以这里只校验类型
+        * ``button_style_mode`` / ``button_default_style``：两个单选取值
+          （样式策略与统一样式），先校验取值再写
+        写完把**实际生效**的数量回报给页面。
         """
         if not isinstance(payload, dict) or not payload:
             return False, (
-                "save_replies 需要至少一项：button_defs / text_overrides / button_layout"
+                "save_replies 需要至少一项：button_defs / text_overrides / "
+                "button_layout / button_style_mode / button_default_style"
             )
         changed: dict[str, str] = {}
-        for key in ("button_defs", "text_overrides", "button_layout"):
+        for key in self.REPLY_TEXT_KEYS:
             if key not in payload:
                 continue
             value = payload.get(key)
             if not isinstance(value, str):
                 return False, f"「{key}」需要多行文本（字符串）"
             changed[key] = value
+        for key in self.REPLY_SCALAR_KEYS:
+            if key not in payload:
+                continue
+            value = payload.get(key)
+            if not isinstance(value, str):
+                return False, f"「{key}」需要文本"
+            changed[key] = value.strip()
+        mode = changed.get("button_style_mode")
+        if mode is not None and CALC._parse_button_style_mode(mode) != "uniform" \
+                and mode not in ("按按钮表", "table", "逐条"):
+            return False, f"样式策略只认「按按钮表」或「统一」，收到「{mode}」"
+        if "button_default_style" in changed:
+            if CALC._parse_button_style(changed["button_default_style"]) is None:
+                return False, (
+                    f"样式只认 default / primary 或 0-255 的数字，"
+                    f"收到「{changed['button_default_style']}」"
+                )
         if not changed:
             return False, (
-                "save_replies 只认 button_defs / text_overrides / button_layout 三键"
+                "save_replies 只认 button_defs / text_overrides / button_layout / "
+                "button_style_mode / button_default_style"
             )
         try:
             self.config.update(changed)
@@ -1050,6 +1111,10 @@ class EditorBridgeMixin(EditorApiMixin):
             [
                 f"按钮 {sum(len(v) for v in BUTTONS.values())} 个（{len(BUTTONS)} 个场景）",
                 f"文案覆盖 {len(TEXT_OVERRIDES)} 条",
+                "样式策略 "
+                + ("全部统一" if CALC._parse_button_style_mode(
+                    self.config.get("button_style_mode")) == "uniform" else "按按钮表")
+                + f"（{self.config.get('button_default_style') or 'default'}）",
                 "排布 " + "、".join(
                     f"{k}×{v}" for k, v in sorted(BUTTONS_PER_ROW.items())
                 ),

@@ -692,6 +692,18 @@
     "default": "",
     "hint": "例：*|2 表示所有场景每行 2 个按钮；story|1 表示插曲每行 1 个"
   },
+  "button_style_mode": {
+    "type": "string",
+    "description": "按钮样式策略：按按钮表（每行各写各的）/ 统一（全部用下面那个样式）",
+    "default": "按按钮表",
+    "invisible": true
+  },
+  "button_default_style": {
+    "type": "string",
+    "description": "统一样式，也是按钮表里没写样式时的兜底：default（灰）/ primary（蓝）/ 数字",
+    "default": "default",
+    "invisible": true
+  },
   "command_aliases": {
     "invisible": true,
     "description": "命令别名：一行一个，格式「规范子命令|别名1,别名2」（全角逗号、顿号也认）。只能增加写法，内置写法永远有效、不会被覆盖。可用规范子命令：拉、帮助、下竿、去、背包、卖、图鉴、水族馆、扩建背包、锁定、解锁、今日、排行、商店、用、查、事件、换饵、体力、档案、金币、签到、订单、钓点、鱼竿、杂物。与内置写法撞名、目标子命令不存在、与鱼饵重名的行会被跳过（日志里有提示）。留空=只认内置写法。",

@@ -4653,10 +4653,11 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 101,
+        len(_schema) == 103,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
-        f" + v1.12.0 的 text_overrides/button_layout）",
+        f" + v1.12.0 的 text_overrides/button_layout"
+        f" + v1.13.0 的 button_style_mode/button_default_style）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -4664,7 +4665,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 98, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 100, f"其余 {len(_hidden)} 项全部 invisible")
     check(
         all(k in mod.DEFAULTS for k in _visible),
         "3 条救生索都在 DEFAULTS 里（不是凭空写的）",

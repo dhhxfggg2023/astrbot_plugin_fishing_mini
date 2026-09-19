@@ -202,18 +202,31 @@ function runAssertions() {
   });
   check(badRod.length === 0, "所有鱼饵的「需要鱼竿」都存在",
     badRod.length ? badRod.map(function (b) { return b.id; }).join(" ") : rodIds.join("/"));
-  /* 页面上的效果键白名单必须和插件 _calc.py 的 _parse_effects 完全一致（含旧写法 quality_up） */
+  /* 页面上的效果键白名单必须和插件一致。
+     v1.13.0：唯一来源是 _effects.BUILTIN_EFFECTS（启动时同步给 _calc.EFFECT_ALLOWED）；
+     页面里那份清单只是**离线兜底** —— 在线时页面用插件发来的 effect_keys 覆盖它。 */
   const calcSrc = fs.readFileSync(path.join(__dirname, "_calc.py"), "utf8");
-  const allowedBlock = calcSrc.match(/def _parse_effects[\s\S]*?allowed = \(([\s\S]*?)\)/);
+  const allowedBlock = calcSrc.match(/EFFECT_ALLOWED[^=]*=\s*\(([\s\S]*?)\)/);
   const pluginKeys = allowedBlock
     ? allowedBlock[1].split(",").map(s => s.trim().replace(/["']/g, "")).filter(Boolean)
     : [];
-  check(pluginKeys.length >= 8, "从 _calc.py 读到了 _parse_effects 的白名单",
+  check(pluginKeys.length >= 8, "从 _calc.py 读到 EFFECT_ALLOWED 白名单",
     pluginKeys.join("/") || "没读到");
+  const fxSrc = fs.readFileSync(path.join(__dirname, "_effects.py"), "utf8");
+  const registryKeys = [];
+  const specRe = /EffectSpec\(\s*"([A-Za-z_][A-Za-z0-9_]*)"/g;
+  let specHit;
+  while ((specHit = specRe.exec(fxSrc)) !== null) registryKeys.push(specHit[1]);
+  check(registryKeys.join(",") === pluginKeys.join(","),
+    "效果注册表顺序 == _calc 白名单（页面上也是这个顺序）",
+    "注册表=" + registryKeys.join("/") + " 白名单=" + pluginKeys.join("/"));
   const pageKeys = T.ITEM_EFFECT_KEY_NAMES.filter(k => k !== "quality_up");
   check(pageKeys.slice().sort().join(",") === pluginKeys.slice().sort().join(","),
-    "页面效果键白名单与插件一致",
+    "页面兜底清单与插件一致（在线时会被插件发来的清单覆盖）",
     "页面=" + pageKeys.join("/") + " 插件=" + pluginKeys.join("/"));
+  check(/function applyEffectKeys\(/.test(html) && /ITEM_EFFECT_KEYS = rows/.test(html) &&
+    /applyEffectKeys\(config\.effect_keys\)/.test(html),
+    "页面会用插件发来的 effect_keys 覆盖兜底清单（效果清单不再写死）", "");
 
   const ALLOWED_EFFECTS = T.ITEM_EFFECT_KEY_NAMES;
   const badEffects = [];

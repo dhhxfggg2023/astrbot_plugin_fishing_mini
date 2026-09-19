@@ -13,6 +13,56 @@
 
 from __future__ import annotations
 
+import sys
+from typing import Any
+
+
+def _effects_module() -> Any:
+    """拿效果注册表模块（v1.13.0）。
+
+    main.py 用 ``_load_sibling`` 把兄弟模块注册成 ``astrbot_fishing_*`` 名字，
+    所以这里按名字找；找不到就返回 None（插件照常跑，只是不处理扩展效果）。
+    """
+    for name in ("astrbot_fishing_effects", "_effects"):
+        module = sys.modules.get(name)
+        if module is not None:
+            return module
+    try:
+        import _effects as module       # 单测直接导入时走这里
+        return module
+    except Exception:
+        return None
+
+
+def _ext_effect_lines(plugin: Any, player: dict[str, Any], item_id: str,
+                      effects: dict[str, Any]) -> list[str]:
+    """跑一遍扩展效果（内置键由插件原有分支处理，这里不插手）。"""
+    module = _effects_module()
+    if module is None:
+        return []
+    try:
+        return module.apply_extension_effects(plugin, player, item_id, effects)
+    except Exception as e:                       # 扩展再坏也不能影响玩家
+        module.log_error(f"扩展效果处理失败：{type(e).__name__}: {e}")
+        return []
+
+
+def _has_ext_effect(effects: dict[str, Any]) -> tuple[bool, bool]:
+    """返回 ``(有扩展键, 有内置键)``。"""
+    module = _effects_module()
+    if module is None or not effects:
+        return False, False
+    ext = builtin = False
+    for key in effects:
+        spec = module.EFFECTS.get(key)
+        if spec is None:
+            continue
+        if spec.source == module.BUILTIN_SOURCE:
+            builtin = True
+        else:
+            ext = True
+    return ext, builtin
+
 
 class CommandsMixin:
     """子命令实现：背包 / 卖鱼 / 商店 / 图鉴 / 钓点 / 鱼竿 / 水族馆 / 订单 / 签到…（由 FishingPlugin 继承，见 main.py 的类定义）。"""
@@ -1877,6 +1927,24 @@ class CommandsMixin:
 
             item = self.items.get(item_id) or {}
             effects = item.get("effects") or {}
+
+            # --- 扩展效果（v1.13.0：extensions/*.py 注册的键）-----------------
+            # 只用扩展键的道具，插件默认不认识（下面每个分支都不会命中），
+            # 所以这里帮扩展把「消耗一件 + 保存 + 提示」做完；和内置效果混在
+            # 一起的道具仍由下面的分支负责消耗与提示，这里只跑扩展逻辑。
+            has_ext, has_builtin = _has_ext_effect(effects)
+            if has_ext and not has_builtin:
+                ext_lines = _ext_effect_lines(self, player, item_id, effects)
+                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                await self._save_player(player)
+                async for _r in self._say_msg(event, "item.used", event.plain_result(
+                        f"🧩 {self._item_label(item_id)}（扩展效果）\n" + "\n".join(ext_lines)
+                    )):
+                    yield _r
+                return
+            if has_ext:
+                if _ext_effect_lines(self, player, item_id, effects):
+                    await self._save_player(player)
 
             # --- 钓手手气 buff（锦鲤玉佩）：作用在人身上，持续 buff_cast_count 竿 ---
             if _safe_number(effects.get("buff_quality"), 0.0) > 0:

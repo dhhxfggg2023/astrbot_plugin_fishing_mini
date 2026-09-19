@@ -116,6 +116,8 @@ COMMANDS: Any = _load_sibling("_commands", "astrbot_fishing_commands")
 INTERACTIONS: Any = _load_sibling("_interactions", "astrbot_fishing_interactions")
 ENGINE: Any = _load_sibling("_engine", "astrbot_fishing_engine")
 EDITOR_BRIDGE: Any = _load_sibling("_editor_bridge", "astrbot_fishing_editor_bridge")
+#: 效果注册表 + 扩展加载器（v1.13.0）：效果键的**唯一**映射处，详见 _effects.py
+EFFECT_REG: Any = _load_sibling("_effects", "astrbot_fishing_effects")
 #: 文案表（text_overrides 的默认值与渲染规则）；加载失败时下面的兜底会顶上
 TEXT_LIB: Any = _load_sibling("_texts", "astrbot_fishing_texts")
 
@@ -243,6 +245,10 @@ DEFAULTS: dict[str, Any] = {
     "text_overrides": "",
     # 按钮排布：一行一条，场景|每行几个（* = 其余所有场景的默认值）
     "button_layout": "",
+    # 按钮样式策略：按按钮表（每行自己写，默认）/ 统一（所有按钮都用下面这个样式）
+    "button_style_mode": "按按钮表",
+    # 统一样式 / 按钮表里没写样式时的兜底（default=灰、primary=蓝，也可以写数字）
+    "button_default_style": "default",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
     # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
@@ -740,6 +746,13 @@ def _apply_content_tables(cfg: dict[str, Any]) -> None:
         target[:] = rows
 #: 按钮表：场景 -> [(文案, 指令, 样式), ...]（可被 button_defs 配置接管，原地更新）
 BUTTONS: dict[str, list[tuple[str, str, int]]] = {}
+#: 按钮样式全局设置（v1.13.0）：table = 每行各写各的（历史行为）/ uniform = 全部统一
+BUTTON_STYLE_MODE: str = "table"
+#: 「统一」时用的样式名；也是按钮表里没写样式时的兜底
+BUTTON_DEFAULT_STYLE: str = "default"
+#: 上一次扩展加载的摘要（用来避免每次应用配置都重复打日志）
+EXT_REPORT_ROWS: list[str] = []
+
 #: 内置快照：首次应用时从默认文本解析一次，之后回退一直用它
 _BUILTIN_BUTTONS: dict[str, list[tuple[str, str, int]]] = {}
 
@@ -752,14 +765,47 @@ def _builtin_buttons() -> dict[str, list[tuple[str, str, int]]]:
     return {scene: list(items) for scene, items in _BUILTIN_BUTTONS.items()}
 
 
+def _apply_extensions() -> None:
+    """扫描 ``extensions/*.py``（v1.13.0 扩展点）。
+
+    * 每次应用配置都重扫一遍：站长加/改扩展后保存一次配置就生效，不用重启
+    * 坏扩展只告警 + 记进报告（编辑器页面能看到），插件照常跑
+    * 加载完立刻把效果键同步给 ``_calc`` 的解析白名单，于是扩展声明的新效果
+      可以马上写进 item_defs，编辑器页面的效果清单也会自动出现它
+    """
+    global EXT_REPORT_ROWS
+    rows = EFFECT_REG.load_extensions(
+        os.path.dirname(os.path.abspath(__file__)),
+        warn=lambda msg: _tunable_warn("extensions", msg),
+    )
+    EFFECT_REG.sync_to_calc(CALC)
+    summary = [f"{r['file']}:{r['ok']}:{r['error']}" for r in rows]
+    if summary != EXT_REPORT_ROWS:
+        EXT_REPORT_ROWS = summary
+        for line in EFFECT_REG.report_lines():
+            EFFECT_REG.log_info(f"[钓鱼] 扩展 {line}")
+
+
 def _apply_button_defs(cfg: dict[str, Any]) -> None:
-    """用配置接管按钮表；留空或写坏则回退内置；某场景被过滤光也回退该场景。"""
+    """用配置接管按钮表；留空或写坏则回退内置；某场景被过滤光也回退该场景。
+
+    v1.13.0 多了两个**全局**样式设置（编辑器「💬 回复 → 🔘 按钮总览 → 全局设置」）：
+
+    * ``button_default_style``：按钮表里没写样式时用哪个（默认 ``default``）
+    * ``button_style_mode``：写 ``统一`` 时所有按钮都用这个样式；默认
+      ``按按钮表`` 即每行各写各的 —— 历史行为，升级后逐字不变
+    """
+    global BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE
+    BUTTON_STYLE_MODE = CALC._parse_button_style_mode(cfg.get("button_style_mode"))
+    BUTTON_DEFAULT_STYLE = _cfg_str(cfg, "button_default_style").strip() or "default"
     builtin = _builtin_buttons()
     rows: dict[str, list[tuple[str, str, int]]] = {}
     raw = _cfg_str(cfg, "button_defs").strip()
     if raw:
         rows = CALC._parse_button_defs(
-            raw, warn=lambda msg: _tunable_warn("button_defs", msg)
+            raw,
+            warn=lambda msg: _tunable_warn("button_defs", msg),
+            default_style=BUTTON_DEFAULT_STYLE,
         )
     if not rows:
         if raw:
@@ -770,6 +816,7 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
         for scene, items in builtin.items():
             if not rows.get(scene):
                 rows[scene] = list(items)
+    rows = CALC._apply_button_style_policy(rows, BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE)
     BUTTONS.clear()
     BUTTONS.update(rows)
 
@@ -1977,6 +2024,8 @@ def _tunable_warn(key: str, detail: str) -> None:
 
 def _apply_tunable_config(cfg: dict[str, Any]) -> None:
     """把「可调数值表」配置写回模块级常量，并重建依赖它们的派生表。"""
+    # 扩展点：先扫 extensions/（新效果键要赶在解析 item_defs 之前进白名单）
+    _apply_extensions()
     global ATTR_PAR, VALUE_VARIANCE, TIER_BASE_VALUE, HOSTILE_KEYWORDS
     global HOOK_RATE_FALLBACK, DEFAULT_ESCAPE_RATE, FISH_VALUE_MULT
     global FISH_VALUE_OVERRIDES, LOCATION_WEIGHTS

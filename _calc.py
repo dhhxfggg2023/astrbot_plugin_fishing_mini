@@ -185,6 +185,16 @@ def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
     baits["none"]["need_rod"] = ""
     return baits
 
+#: 合法的效果键（v1.13.0 起由 ``_effects.EFFECTS`` 注册表在启动时同步过来；
+#: 这里保留历史白名单做默认值，单独导入 _calc 时行为逐字不变）
+EFFECT_ALLOWED: tuple[str, ...] = (
+    "meat", "spirit", "sheen", "value_up",
+    "decorate", "feed_bonus", "buff_quality", "heal",
+)
+#: 旧写法 -> 正式键名（``quality_up`` 是 v1.9 之前的写法）
+EFFECT_ALIASES_EXT: dict[str, str] = {"quality_up": "buff_quality"}
+
+
 def _parse_effects(text: str) -> dict[str, float]:
     """解析道具效果串：``meat=2;spirit=1;value_up=600``。
 
@@ -196,18 +206,16 @@ def _parse_effects(text: str) -> dict[str, float]:
     ``quality_up`` 是旧版写法，按 ``buff_quality`` 处理（老配置照常可用）。
     """
     effects: dict[str, float] = {}
-    allowed = (
-        "meat", "spirit", "sheen", "value_up",
-        "decorate", "feed_bonus", "buff_quality", "heal",
-    )
+    allowed = EFFECT_ALLOWED
+    aliases = EFFECT_ALIASES_EXT
     for token in (text or "").split(";"):
         token = token.strip()
         if not token or "=" not in token:
             continue
         key, _, value = token.partition("=")
         key = key.strip()
-        if key == "quality_up":          # 旧写法兼容
-            key = "buff_quality"
+        if key in aliases:               # 旧写法兼容（quality_up -> buff_quality）
+            key = aliases[key]
         if key not in allowed:
             continue
         effects[key] = _safe_number(value.strip(), 0.0)
@@ -2108,6 +2116,42 @@ def _parse_button_style(value: Any) -> int | None:
     return number if 0 <= number <= 255 else None
 
 
+#: 按钮默认样式（配置没写时的兜底，= QQ 键盘的 render_data.style）
+BUTTON_STYLE_DEFAULT = 1
+#: 样式策略：``table`` = 按按钮表里每行自己写的（历史行为）/ ``uniform`` = 全部统一
+BUTTON_STYLE_MODES: tuple[str, ...] = ("按按钮表", "统一")
+BUTTON_STYLE_MODE_ALIASES: dict[str, str] = {
+    "按按钮表": "table", "逐条": "table", "按行": "table",
+    "table": "table", "per_button": "table", "row": "table",
+    "统一": "uniform", "全部统一": "uniform", "统一设置": "uniform",
+    "uniform": "uniform", "all": "uniform", "one": "uniform",
+}
+
+
+def _parse_button_style_mode(value: Any) -> str:
+    """解析 ``button_style_mode``；不认识的一律回退 ``table``（= 历史行为）。"""
+    raw = str(value or "").strip().lower()
+    return BUTTON_STYLE_MODE_ALIASES.get(raw, "table")
+
+
+def _apply_button_style_policy(
+    rows: dict[str, list[tuple[str, str, int]]], mode: Any, style: Any
+) -> dict[str, list[tuple[str, str, int]]]:
+    """按策略统一按钮样式：``统一`` 时把每一行都换成 ``style``（认不出就用默认样式）。
+
+    只看**样式**这一列，文案与指令原样保留，所以开「统一」再关掉不会丢东西。
+    """
+    if _parse_button_style_mode(mode) != "uniform":
+        return rows
+    uniform = _parse_button_style(style)
+    if uniform is None:
+        uniform = BUTTON_STYLE_DEFAULT
+    return {
+        scene: [(label, data, uniform) for label, data, _old in items]
+        for scene, items in rows.items()
+    }
+
+
 def _button_command_ok(data: str) -> bool:
     """这一行「点击后发送」是不是本插件认识的指令（防止出现点了没反应的死按钮）。"""
     text = str(data or "").strip()
@@ -2125,12 +2169,14 @@ def _button_command_ok(data: str) -> bool:
 
 
 def _parse_button_defs(
-    raw: Any, *, warn: Any = None
+    raw: Any, *, warn: Any = None, default_style: Any = None
 ) -> dict[str, list[tuple[str, str, int]]]:
     """解析 `button_defs`：``场景|按钮文案|点击后发送|样式``。
 
     返回 ``{场景: [(文案, 指令, 样式), ...]}``。坏行（字段不够、场景不认识、
     指令不认识）跳过并告警；``{label}``/``{n}`` 原样保留给 story 模板用。
+
+    ``default_style`` = 这一行**没写样式**时用哪个（不传就是历史行为：``default``）。
     """
     rows: dict[str, list[tuple[str, str, int]]] = {}
     bad = 0
@@ -2151,9 +2197,14 @@ def _parse_button_defs(
             bad += 1
             first_bad = first_bad or line
             continue
-        style = _parse_button_style(parts[3] if len(parts) > 3 else "default")
+        # 样式列：留空 / 写坏都算「没写」，用全局兜底样式（默认行为 = 1，历史一致）
+        fallback = _parse_button_style(default_style)
+        if fallback is None:
+            fallback = BUTTON_STYLE_DEFAULT
+        raw_style = parts[3].strip() if len(parts) > 3 else ""
+        style = _parse_button_style(raw_style) if raw_style else None
         if style is None:
-            style = 1
+            style = fallback
         rows.setdefault(scene, []).append((label, data, style))
     if bad and warn:
         warn(f"button_defs 有 {bad} 行不合法已跳过（首条：{first_bad[:40]}）")

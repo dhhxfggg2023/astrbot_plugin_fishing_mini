@@ -1153,6 +1153,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (!config || typeof config !== "object") {
       throw new Error("配置读取成功但内容为空（插件：" + ENV.pluginBase + "）");
     }
+    // v1.13.0：效果键清单由插件给（改注册表 / 加扩展后页面自动跟着变）
+    if (Array.isArray(config.effect_keys)) applyEffectKeys(config.effect_keys);
     return config;
   }
 
@@ -1210,6 +1212,41 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   var ITEM_EFFECT_HINT = ITEM_EFFECT_KEYS.map(function (kv) {
     return kv[0] + "　" + kv[1];
   }).join("\n");
+
+  /**
+   * 用插件给的清单替换内置清单（v1.13.0）。
+   *
+   * 插件在 config / scenes 接口里带了 effect_keys：
+   * [{key, label, scope_label, unit, source}]，于是「改 _effects.EFFECTS 或者加一个
+   * 扩展」页面会自动多出新键 —— 页面不再写死效果清单（写死过，害站长被标红过）。
+   * 拿不到清单（离线预览 / 老版本插件）就保持内置清单：
+   * 宁可不校验，也不能把本来对的行标红。
+   */
+  function applyEffectKeys(list) {
+    if (!Array.isArray(list) || !list.length) return false;
+    var rows = [];
+    list.forEach(function (item) {
+      var key = toText(item && item.key);
+      if (!key) return;
+      var label = toText(item && item.label) || key;
+      var unit = toText(item && item.unit);
+      var from = toText(item && item.source);
+      if (from && from !== "内置") label += "（来自 " + from + "）";
+      else if (unit) label += "（" + unit + "）";
+      rows.push([key, label]);
+    });
+    if (!rows.length) return false;
+    var oldHint = ITEM_EFFECT_HINT;
+    ITEM_EFFECT_KEYS = rows;
+    ITEM_EFFECT_KEY_NAMES = rows.map(function (kv) { return kv[0]; });
+    ITEM_EFFECT_HINT = rows.map(function (kv) { return kv[0] + "　" + kv[1]; }).join("\n");
+    // TABLE_DEFS 是启动时就建好的静态对象，title 已经把旧文本抄走一份 —— 同步回来
+    Object.keys(TABLE_DEFS).forEach(function (k) {
+      var def = TABLE_DEFS[k];
+      if (def && def.title === oldHint) def.title = ITEM_EFFECT_HINT;
+    });
+    return true;
+  }
 
   /** 每条内容表定义：配置键 + 线格式 + 两个方向的映射。 */
   var TABLE_DEFS = {
@@ -2482,7 +2519,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       perRowDefault: 3,         // 插件给的全局「每行几个」
       perRowMax: 5,             // 插件给的一行上限（buttons_per_row_max）
       buttonStyles: [],         // [{value,label}] 样式下拉的选项（全局属性）
-      defaultStyle: "default",  // 新加按钮用的默认样式（全局属性）
+      defaultStyle: "default",  // 新加按钮用的默认样式，也是插件端的兜底样式
+      styleModes: [],           // [{value,label}] 样式策略选项（按按钮表 / 统一）
+      styleMode: "按按钮表",    // 当前策略（全局属性，保存进配置）
+      styleCfgTouched: false,   // 全局样式设置改了还没保存
+      originalStyle: { mode: "按按钮表", style: "default" },  // 已保存的样式设置
       view: "cards",            // cards = 场景卡片 / overview = 按钮总览
       focus: "",                // 当前聚焦的场景（预览面板跟着它）
       previewOpen: true,        // 预览面板是否展开（常驻 + 可折叠）
@@ -3510,6 +3551,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
   /** 保存回复配置时用到的三个配置键（顺序即提交顺序） */
   var REPLY_KEYS = ["button_defs", "text_overrides", "button_layout"];
+  /**
+   * 回复页里的两个**单选设置**（v1.13.0，按钮样式全局设置）。
+   * 它们不是「一行一条」的文本表，所以单独走一条通道，不混进 REPLY_KEYS。
+   */
+  var REPLY_STYLE_KEYS = ["button_style_mode", "button_default_style"];
   /** button_layout 里的「全局默认」行：*|3 */
   var REPLY_LAYOUT_ALL = "*";
   /** QQ 官方按钮一行最多 5 个 */
@@ -3626,6 +3672,18 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (!styles.length) {
       styles = [{ value: "default", label: "默认（灰）" }, { value: "primary", label: "主要（蓝）" }];
     }
+    var modes = (Array.isArray(r.button_style_modes) ? r.button_style_modes : []).map(function (m) {
+      return {
+        value: toText(m && m.value),
+        label: toText(m && m.label) || toText(m && m.value)
+      };
+    }).filter(function (m) { return !!m.value; });
+    if (!modes.length) {
+      modes = [
+        { value: "按按钮表", label: "按按钮表（每行各写各的）" },
+        { value: "统一", label: "全部统一（所有按钮一个样式）" }
+      ];
+    }
     var scenes = [];
     groups.forEach(function (g) { g.scenes.forEach(function (s) { scenes.push(s); }); });
     return {
@@ -3633,6 +3691,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       perRowDefault: clampPerRow(r.buttons_per_row_default, 3) || 3,
       perRowMax: clampPerRow(r.buttons_per_row_max, REPLY_ROW_MAX) || REPLY_ROW_MAX,
       buttonStyles: styles,
+      // 按钮样式全局设置（v1.13.0）：策略 + 统一样式
+      buttonStyleModes: modes,
+      buttonStyleMode: toText(r.button_style_mode) || "按按钮表",
+      buttonDefaultStyle: toText(r.button_default_style) || "default",
+      // 效果键清单（插件给的；空 = 用内置清单）
+      effectKeys: Array.isArray(r.effect_keys) ? r.effect_keys : [],
       groups: groups,
       scenes: scenes
     };
@@ -4043,6 +4107,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       if (d.layoutTouched) n++;
     });
     if (state.replies.layoutAllTouched) n++;
+    if (state.replies.styleCfgTouched) n++;   // 全局样式设置（v1.13.0）
     return n;
   }
 
@@ -4153,6 +4218,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     REPLY_KEYS.forEach(function (k) {
       if (keys[k]) payload[k] = now.texts[k];
     });
+    // 全局样式设置：改过就一起提交（和场景无关，保存任何一张卡片都带上）
+    if (state.replies.styleCfgTouched && !state.replies.readonly) {
+      payload.button_style_mode = toText(state.replies.styleMode) || "按按钮表";
+      payload.button_default_style = toText(state.replies.defaultStyle) || "default";
+    }
     return payload;
   }
 
@@ -4192,6 +4262,16 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     });
     r.layoutAllTouched = false;
     r.layoutAllDraft = "";
+    // 两个样式设置保存成功后：清脏标记，并把这次写出去的值当成新基线
+    var wroteStyle = REPLY_STYLE_KEYS.some(function (k) {
+      return Object.prototype.hasOwnProperty.call(payload || {}, k);
+    });
+    if (wroteStyle) {
+      r.styleMode = toText(r.styleMode) || "按按钮表";
+      r.defaultStyle = toText(r.defaultStyle) || "default";
+      r.originalStyle = { mode: r.styleMode, style: r.defaultStyle };
+      r.styleCfgTouched = false;
+    }
     applyButtonsTextToTable(r.original.button_defs);
   }
 
@@ -4275,8 +4355,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     r.perRowDefault = payload.perRowDefault;
     r.perRowMax = payload.perRowMax;
     r.buttonStyles = payload.buttonStyles;
-    r.defaultStyle = payload.buttonStyles.length
-      ? (payload.buttonStyles[0].value || "default") : "default";
+    r.styleModes = payload.buttonStyleModes || [];
+    r.styleMode = payload.buttonStyleMode || "按按钮表";
+    r.defaultStyle = payload.buttonDefaultStyle || "default";
+    r.originalStyle = { mode: r.styleMode, style: r.defaultStyle };
+    r.styleCfgTouched = false;
+    applyEffectKeys(payload.effectKeys);   // 效果清单也从插件读（不再写死）
 
     /* 原始三份文本：保存时用来判断「哪几项真的变了」 */
     var original = { button_defs: "", text_overrides: "", button_layout: "" };
@@ -4383,6 +4467,22 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         esc(scene.id) + '" data-name="' + esc(n) + '" title="' + esc(title) + '">' +
         esc("{" + n + "}") + "</span>";
     }).join(" ");
+  }
+
+  /** 样式策略下拉（按按钮表 / 统一）；选项优先用插件给的。 */
+  function replyStyleModeOptions(current) {
+    var list = (state.replies.styleModes || []).slice();
+    if (!list.length) {
+      list = [
+        { value: "按按钮表", label: "按按钮表（每行各写各的）" },
+        { value: "统一", label: "全部统一（所有按钮一个样式）" }
+      ];
+    }
+    var cur = toText(current) || "按按钮表";
+    return list.map(function (m) {
+      return '<option value="' + esc(m.value) + '"' + (m.value === cur ? " selected" : "") +
+        ">" + esc(m.label) + "</option>";
+    }).join("");
   }
 
   function replyStyleOptions(current) {
@@ -4579,13 +4679,23 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       esc(r.layoutAllTouched ? r.layoutAllDraft : (r.originalLayout[REPLY_LAYOUT_ALL] || "")) +
       '" placeholder="' + esc(String(r.perRowDefault || 3)) + '"' + (r.readonly ? " disabled" : "") +
       " /></span></div>";
-    html += '<div class="form-row"><label>新加按钮的默认样式</label><span class="field">' +
+    html += '<div class="form-row"><label>按钮样式</label><span class="field">' +
+      '<select data-act="rp:styleMode"' + (r.readonly ? " disabled" : "") + ">" +
+      replyStyleModeOptions(r.styleMode) + "</select></span></div>";
+    html += '<div class="form-row"><label>默认 / 统一样式</label><span class="field">' +
       '<select data-act="rp:defaultStyle"' + (r.readonly ? " disabled" : "") + ">" +
       replyStyleOptions(r.defaultStyle) + "</select></span></div>";
     html += "</div>";
     html += '<div class="form-note" style="padding:0 10px 10px">写进配置的样子：' +
       '<span class="mono">*|3</span>（全局默认）、<span class="mono">story.prompt|1</span>（单个场景覆盖）。' +
       "卡片里的「每行 N 个」只写那个场景的覆盖行。</div>";
+    html += '<div class="form-note" style="padding:0 10px 10px">' +
+      "「默认 / 统一样式」既是新加按钮用的样式，也是按钮表里<b>没写样式</b>时的兜底。" +
+      (r.styleMode === "统一"
+        ? '　当前策略是<b style="color:var(--danger)">全部统一</b>：游戏里所有按钮都用它，' +
+          "下面表格的「样式」列会被忽略（文字照原样保存，随时切回来）。"
+        : "　当前策略是「按按钮表」：每个按钮用自己那一行写的样式。") +
+      (r.styleCfgTouched ? '　<b style="color:var(--danger)">有改动没保存</b>' : "") + "</div>";
     html += "</section>";
 
     html += '<section class="card">';
@@ -5777,7 +5887,16 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       return;
     }
     if (act === "rp:batchValue") { state.replies.batchValue = el.value; return; }
-    if (act === "rp:defaultStyle") { state.replies.defaultStyle = el.value; return; }
+    if (act === "rp:defaultStyle") {
+      state.replies.defaultStyle = toText(el.value) || "default";
+      state.replies.styleCfgTouched = true;
+      return;
+    }
+    if (act === "rp:styleMode") {
+      state.replies.styleMode = toText(el.value) || "按按钮表";
+      state.replies.styleCfgTouched = true;
+      return;
+    }
     if (act === "rp:query") {
       state.replies.query = el.value;
       refreshReplyMain();
@@ -5839,6 +5958,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     }
     else if (act === "rp:defaultStyle") {
       state.replies.defaultStyle = toText(el.value) || "default";
+      state.replies.styleCfgTouched = true;
+    }
+    else if (act === "rp:styleMode") {
+      state.replies.styleMode = toText(el.value) || "按按钮表";
+      state.replies.styleCfgTouched = true;
     }
     else if (act === "rp:batchValue") {
       state.replies.batchValue = el.value;

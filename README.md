@@ -1,6 +1,6 @@
 # 群钓鱼 · astrbot_plugin_qq_fishing
 
-**v1.12.1** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
+**v1.13.0** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
 （已在 AstrBot v4.28.1 + Python 3.12 上实测）。
 
 **232 种水族 · 16 个钓点 · 8 档鱼饵 · 6 档鱼竿 · 6 种养成道具 · 5 档鱼种品质 · 5 档个体品质 ·
@@ -816,6 +816,43 @@ docker run -d --name astrbot \
 
 ---
 
+## 🔌 自己写扩展（v1.13.0，不用改插件本体）
+
+想加一个**自己的道具效果 / 新玩法**，不用动 `main.py`：在插件目录下建一个
+`extensions/xxx.py`，写两个模块级变量就行。插件每次**启动 / 重载 / 保存配置**都会重扫一遍目录
+（`extensions/example_effect.py` 是可跑通的模板）。
+
+```python
+# extensions/my_effect.py
+def _on_lucky_token(*, plugin, player, item_id, key, value):
+    casts = int(plugin.cfg.get("buff_cast_count") or 10)
+    player["luck_charges"] = min(2.0, float(player.get("luck_charges") or 0) + value)
+    player["buff_casts_left"] = max(int(player.get("buff_casts_left") or 0), casts)
+    return f"　幸运符生效：接下来 {casts} 竿手气更好"
+
+EFFECTS = {
+    "lucky_token": {"label": "幸运符：手气 +N", "scope": "cast", "unit": "倍率"},
+    "aroma": "香气：只登记数值，插件不解释",
+}
+HANDLERS = {"lucky_token": _on_lucky_token}
+```
+
+* **`EFFECTS`**：新效果键 + 中文说明（可以只写一句，也可以写
+  `{"label","scope","unit"}` 字典）。注册成功后这个键就能写进 `item_defs` 的「效果」列，
+  编辑器页面的效果清单会**自动多出它** —— 页面清单是从插件接口读的，没有写死
+* **`HANDLERS`**：效果键 → 处理函数，签名固定
+  `(*, plugin, player, item_id, key, value)`；直接改 `player` 就行，返回值是给玩家看的一行文字。
+  不写处理函数的键也不会静默失效：数值会累加进 `player["ext_effects"][键]`，扩展之后自己读
+* **临时停用**：文件名前面加下划线（`_my_effect.py`）就不会被扫描
+* **失败隔离**：坏扩展只写进日志与页面的扩展报告（❌ 文件名 + 原因），
+  插件与其它扩展照常跑；处理函数抛异常只影响这一条效果，会给玩家提示「已跳过」
+* **红线**：扩展**不能覆盖内置键**（`meat` / `decorate` 这些），只能新增 ——
+  免得装个扩展就把喂鱼、装饰这些既有玩法改掉
+
+效果键的**唯一**映射处是 `_effects.py` 里的 `BUILTIN_EFFECTS`：页面展示、
+`item_defs` 的解析白名单、编辑器页面的校验，全都从这一张表来
+（v1.13.0 之前同一个键散落在 4 个地方，加一个键要改 4 处，漏一处就是「写了没反应」）。
+
 ## 📦 安装
 
 1. 把插件文件夹放到 AstrBot 插件目录：
@@ -877,11 +914,12 @@ docker run -d --name astrbot \
 > 每次回复应该**只有一条消息**。如果同一条内容出现两遍，说明分派器重复
 > `yield` 了（v1.0.0 修过一次，两个测试脚本都有回归断言）。
 
-### 开发者自测（6 个 Python 脚本 + 1 个前端脚本，可随时删除）
+### 开发者自测（7 个 Python 脚本 + 1 个前端脚本，可随时删除）
 
 ```bash
 cd data/plugins/astrbot_plugin_fishing_mini
 
+python test_effects_ext.py      # v1.13.0：按钮统一样式 / 效果注册表 / 扩展点与失败隔离
 python test_local.py            # 42 组 970+ 项断言：持久化/配置/钓点/鱼竿/背包/杂物/订单/天气/行情/变异/排行/鱼塘/清理/图鉴/水族馆/按钮与插曲/字段守卫/投喂与平衡/称号/存档快照/数据编辑器通道/回复场景全覆盖（v1.12.0）
 python test_backup_index.py     # 存档清单（index.json）重建：内容没变不写盘、原子替换、坏文件自愈（v1.12.0）
 python test_docker_deploy.py    # Docker 部署自检：compose 语法、.env 注入/不覆盖/备份、密钥不入库、entrypoint 清理列表不误删 pages/ 与 .astrbot-plugin/
@@ -1406,6 +1444,18 @@ big_fat_fish|大肥鱼|稀有|120|*:0.15|深海里最肥的一条
 - 成就与随机插曲仍在 `_game_data.py`（含达成条件逻辑，改文件即可，顶部有逐字段说明）
 
 ## 📝 更新日志
+
+### v1.13.0
+* 🔌 **扩展点**：`extensions/*.py` 里写 `EFFECTS` + `HANDLERS` 就能加自己的道具效果，
+  不用改插件本体；坏扩展只告警（页面能看到 ❌ 与原因），处理函数抛异常也只跳过这一条
+* 🎨 **按钮样式统一设置**：编辑器「💬 回复 → 🔘 按钮总览 → 全局设置」多了「按钮样式」
+  （按按钮表 / 全部统一）与「默认 / 统一样式」两项 —— 默认仍是「按按钮表」，
+  升级后每个按钮的样子逐字不变；切「全部统一」后所有按钮都用一个样式（文字照原样保存）
+* 🧩 **效果键注册表**：内置 8 个效果键的含义、顺序、中文说明集中到 `_effects.py`，
+  页面清单改成从接口读（改注册表或加扩展，页面自动跟着变）
+* 🧪 新增 `test_effects_ext.py`（76 项）：注册表与白名单一致性、扩展加载与失败隔离、
+  样式策略等价性、接口字段、真存档目录零写入自检
+
 
 ### v1.12.1（紧急修复：改命令别名保存不进去）
 
