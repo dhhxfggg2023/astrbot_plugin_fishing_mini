@@ -1668,52 +1668,83 @@ class CommandsMixin:
                 )):
                 yield _r
 
+    def _tank_conflict_line(
+        self, winner: dict[str, Any], loser: dict[str, Any], *, duel: bool
+    ) -> str:
+        """相处结果的一句话（只说现象，不说规则）。"""
+        win_fish = FISH_BY_ID.get(winner.get("fish_id", ""), {})
+        win_name = _fish_name(winner.get("fish_id", ""))
+        lose_name = _fish_name(loser.get("fish_id", ""))
+        if duel:
+            # 两个狠角色碰上：打一架
+            return (
+                f"　…缸里有点动静，{_fish_emoji(win_fish)}{win_name} 和 "
+                f"{lose_name} 打了一架，{lose_name} 没了"
+            )
+        return (
+            f"　…缸里有点动静，{_fish_emoji(win_fish)}{win_name} 把 "
+            f"{lose_name} 吃掉了"
+        )
+
     def _resolve_tank_conflicts(
         self, aquarium: list[dict[str, Any]]
     ) -> tuple[list[str], bool]:
-        """结算水族馆里的「相处结果」：狠角色同缸必有一方出事。
+        """结算水族馆里的「相处结果」：只有狠角色会下嘴，而且**咬得动才吃**。
 
         **刻意不做任何提示**：不告诉玩家哪种鱼凶、也不告诉判定规则，
         只给出结果（水浑了 / 少了一条），让玩家自己摸规律。
+
+        现实一点的规则（v1.15.0，之前是「谁综合实力低谁没」，才会出现
+        「藤壶把章鱼吃了」这种笑话）：
+
+        * 温和的鱼**永远不会**主动伤害别人 —— 藤壶 / 海星 / 水母 / 海龟
+          就算养得再肥，也只是被吃的命；
+        * 狠角色只有比对手强才下得了嘴：小章鱼挨着一条养肥的大鱼时，
+          既吃不动对方、也不会反过来被吃掉 —— 相安无事；
+        * 两个狠角色碰上，壮的吃弱的。
+
         返回 (要追加的文案, 是否改动了缸内内容)。
         """
         lines: list[str] = []
         changed = False
         try:
-            # 逐对结算：只要有一方是狠角色，弱者就会被淘汰
+            # 每轮最多淘汰一条（去掉一条就重新找下一个狠角色）
             for _ in range(len(aquarium)):
-                hostile = [
-                    (i, x) for i, x in enumerate(aquarium) if _is_hostile(x.get("fish_id", ""))
-                ]
-                if not hostile:
-                    break
-                # 狠角色之间、以及狠角色与邻居之间都可能出事
-                i_h, h = hostile[0]
-                rival_idx = None
-                for j, other in enumerate(aquarium):
-                    if j == i_h:
+                acted = False
+                for i_h, hunter in enumerate(list(aquarium)):
+                    if not _is_hostile(hunter.get("fish_id", "")):
                         continue
-                    if _is_hostile(other.get("fish_id", "")) or j in (
-                        i_h - 1,
-                        i_h + 1,
-                    ):
-                        rival_idx = j
-                        break
-                if rival_idx is None:
+                    # 它的对手：另一个狠角色，或者紧挨着的邻居
+                    rival_idx = None
+                    for j, other in enumerate(aquarium):
+                        if j == i_h:
+                            continue
+                        if _is_hostile(other.get("fish_id", "")) or j in (
+                            i_h - 1,
+                            i_h + 1,
+                        ):
+                            rival_idx = j
+                            break
+                    if rival_idx is None:
+                        continue
+                    rival = aquarium[rival_idx]
+                    duel = _is_hostile(rival.get("fish_id", ""))
+                    hunter_power = _fish_power(hunter)
+                    rival_power = _fish_power(rival)
+                    # 温和的鱼不会被冤枉：狠角色咬不动比自己壮的温和鱼时，谁也不少
+                    if not duel and hunter_power < rival_power:
+                        continue
+                    if hunter_power >= rival_power:
+                        loser, winner = rival, hunter
+                    else:
+                        loser, winner = hunter, rival  # 两条狠角色，壮的吃弱的
+                    aquarium.remove(loser)
+                    changed = True
+                    acted = True
+                    lines.append(self._tank_conflict_line(winner, loser, duel=duel))
                     break
-                rival = aquarium[rival_idx]
-                if _fish_power(h) >= _fish_power(rival):
-                    loser, winner = rival, h
-                else:
-                    loser, winner = h, rival
-                aquarium.remove(loser)
-                changed = True
-                loser_name = _fish_name(loser.get("fish_id", ""))
-                lines.append(
-                    f"　…缸里有点动静，{_fish_emoji(FISH_BY_ID.get(winner.get('fish_id',''), {}))}"
-                    f"{_fish_name(winner.get('fish_id', ''))} 把 "
-                    f"{loser_name} 逼到了角落，{loser_name} 没了"
-                )
+                if not acted:
+                    break
         except Exception as e:  # pragma: no cover
             logger.debug(f"水族馆相处结算失败：{e}")
         return lines, changed

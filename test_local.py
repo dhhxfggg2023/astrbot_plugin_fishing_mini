@@ -3090,7 +3090,7 @@ async def main():
     fed = [mod._safe_int(f.get("feed_uses"), 0, 0) for f in p["aquarium"]]
     check(all(x >= 1 for x in fed), f"道具够时全缸都吃到 -> {fed}")
 
-    # --- 相处机制：狠角色同缸必有一方出事（机制本身不提示）---
+    # --- 相处机制：只有狠角色会下嘴，而且咬得动才吃（机制本身不提示）---
     hostile = next(f for f in mod.FISH_POOL if mod._is_hostile(f["id"]))
     normal = next(
         f
@@ -3102,7 +3102,32 @@ async def main():
         f"内部能分辨狠角色（{hostile['name']} vs {normal['name']}）",
     )
 
-    # 强的一方活下来：普通鱼三维拉满 + 高个体品质 → 狠角色反而没了
+    # ⚠️ v1.15.0 起：温和的鱼永远不会主动伤人。
+    # 旧版是「谁综合实力低谁没」，所以养肥的普通鱼能把狠角色吃了 ——
+    # 站长报的「藤壶怎么把章鱼吃了」就是这条规则闹的。
+    barnacle = next((f for f in mod.FISH_POOL if "藤壶" in f["name"]), None)
+    if barnacle is not None:
+        fat_barnacle = mk(barnacle["id"], 100, 100, 100, qm=2.2)
+        weak_octopus = mk(hostile["id"], 20, 20, 20, qm=0.8)
+        check(
+            mod._fish_power(fat_barnacle) > mod._fish_power(weak_octopus),
+            f"养肥的藤壶实力确实超过小章鱼（{mod._fish_power(fat_barnacle)} > "
+            f"{mod._fish_power(weak_octopus)}）",
+        )
+        p["aquarium"] = [fat_barnacle]
+        p["inventory"] = [weak_octopus]
+        p["items"] = {}
+        await plugin._save_player(p)
+        out = await cmd(plugin, ev, "水族馆", "放", "1")
+        p = await plugin._load_player("89010")
+        names = sorted(mod._fish_name(f["fish_id"]) for f in p["aquarium"])
+        check(
+            len(p["aquarium"]) == 2 and names == sorted([barnacle["name"], hostile["name"]]),
+            f"藤壶吃不了章鱼（温和鱼再肥也不下嘴、章鱼也咬不动它）-> 缸里 {names}",
+        )
+        check("没了" not in text_of(out), "没出事就不会冒出「没了」")
+
+    # 温和的大鱼 + 小狠角色：谁都吃不动谁，相安无事（旧版会把小的那条冤死）
     strong = mk(normal["id"], 100, 100, 100, qm=2.2)
     weak_hostile = mk(hostile["id"], 20, 20, 20, qm=0.8)
     check(
@@ -3115,30 +3140,42 @@ async def main():
     await plugin._save_player(p)
     out = await cmd(plugin, ev, "水族馆", "放", "1")
     p = await plugin._load_player("89010")
-    names = [mod._fish_name(f["fish_id"]) for f in p["aquarium"]]
+    names = sorted(mod._fish_name(f["fish_id"]) for f in p["aquarium"])
     check(
-        len(p["aquarium"]) == 1 and names == [normal["name"]],
-        f"弱者被淘汰，强者留下 -> 缸里剩 {names}",
-    )
-    body = text_of(out)
-    check("没了" in body, "只给现象（少了一条），不说规则")
-    check(
-        "敌对" not in body and "实力" not in body and "概率" not in body,
-        "不给玩家任何机制提示",
+        len(p["aquarium"]) == 2 and names == sorted([normal["name"], hostile["name"]]),
+        f"狠角色咬不动比自己壮的温和鱼 -> 两条都在 {names}",
     )
 
-    # 反向：狠角色更强 → 普通鱼没了
+    # 反向：狠角色更强 → 吃掉了温和的
     norm2 = mk(normal["id"], 30, 30, 30, qm=0.8)
     big_hostile = mk(hostile["id"], 100, 100, 100, qm=2.0)
     p["aquarium"] = [norm2]
     p["inventory"] = [big_hostile]
     await plugin._save_player(p)
-    await cmd(plugin, ev, "水族馆", "放", "1")
+    out = await cmd(plugin, ev, "水族馆", "放", "1")
     p = await plugin._load_player("89010")
     names = [mod._fish_name(f["fish_id"]) for f in p["aquarium"]]
     check(
         len(p["aquarium"]) == 1 and names == [hostile["name"]],
         f"狠角色更强时活下来的是它 -> 缸里剩 {names}",
+    )
+    body = text_of(out)
+    check("吃掉了" in body, "只给现象（少了一条），不说规则：狠角色把温和鱼吃掉了")
+    check(
+        "敌对" not in body and "实力" not in body and "概率" not in body,
+        "不给玩家任何机制提示",
+    )
+
+    # 两个狠角色同缸：壮的吃弱的（不是随机）
+    strong_hunter = mk(hostile["id"], 100, 100, 100, qm=2.0)
+    weak_hunter = mk(hostile["id"], 10, 10, 10, qm=0.5)
+    lines, changed = plugin._resolve_tank_conflicts([strong_hunter, weak_hunter])
+    check(
+        changed
+        and len(lines) == 1
+        and mod._fish_power(strong_hunter) >= mod._fish_power(weak_hunter)
+        and "打了一架" in lines[0],
+        f"两条狠角色碰上 -> {lines}",
     )
 
     # 两条普通鱼同缸不会出事

@@ -1481,7 +1481,12 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     ["order_follow_location", "订单跟随当前钓点", "开关", "1 = 开（默认）：只点当前钓点钓得到的鱼，换钓点会跟着换一批；0 = 关：老行为，从全部鱼种里点"],
     ["order_move_rerolls", "换钓点最多换几批", "批", "每个刷新周期内，换钓点最多能换几批订单；0 = 换钓点也不换单（防来回换图刷单）"],
     ["order_include_hidden", "订单可点隐藏生物", "开关", "1 = 开（默认）：大肥鱼这种隐藏生物也可能被点单；0 = 关：订单不点它"],
-    ["backpack_base", "初始鱼篓容量", "条", "背包一开始能装多少"]
+    ["backpack_base", "初始鱼篓容量", "条", "背包一开始能装多少"],
+    // 第 5 位 = 这一行是文本（逗号分隔的名单），不是数字
+    ["hostile_keywords", "狠角色关键词", "逗号分隔",
+      "名字里带这些字的鱼会在缸里捕食更弱的同伴（温和鱼再肥也不下嘴）。留空 = 用内置默认名单。" +
+      "现实里的捕食者但现在没算进去的：黑鱼、鲶、鳜、鲈、带鱼、鲅、石斑鱼、巨型石斑 —— 想要就自己加进来",
+      true]
   ];
 
   /** lastLoadError：本轮载入失败的原因（给页面显示，不白屏）。 */
@@ -1606,8 +1611,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       // 插件给的白名单才是权威：不在里面说明这个键不让页面改
       if (allowed && allowed.indexOf(key) < 0) return;
       if (!(key in raw)) return;
+      var asText = !!item[4];
       out.numbers.push({
-        key: key, label: item[1], value: toNum(raw[key]), unit: item[2], desc: item[3]
+        key: key, label: item[1],
+        value: asText ? toText(raw[key]) : toNum(raw[key]),
+        unit: item[2], desc: item[3], text: asText
       });
     });
 
@@ -2029,6 +2037,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         { key: "order_follow_location", label: "订单跟随当前钓点", value: 1, unit: "开关", desc: "1 = 开：只点当前钓点钓得到的鱼，换钓点跟着换一批" },
         { key: "order_move_rerolls",    label: "换钓点最多换几批", value: 1, unit: "批",  desc: "每个刷新周期内换钓点最多换几批订单；0 = 换图也不换单" },
         { key: "order_include_hidden",  label: "订单可点隐藏生物", value: 1, unit: "开关", desc: "1 = 开：隐藏生物也可能被点单" },
+        { key: "hostile_keywords",      label: "狠角色关键词", value: "鳄,鲨,蛇,鳗,鳝,乌贼,章鱼,食人,水虎,龙鱼,巨齿,利维坦,归墟,古龙,鲸,鮟鱇,电鳗,鳄雀", unit: "逗号分隔", desc: "名字里带这些字的鱼会捕食同缸更弱的鱼", text: true },
         { key: "hook_rate_fallback",    label: "上钩率兜底",   value: 0.30, unit: "概率", desc: "鱼饵配置写错时的兜底咬钩率" }
       ],
       aliases: [
@@ -2689,7 +2698,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     (tab.columns || []).forEach(function (col) {
       var v = row[col.key];
 
-      if (col.type === "number") {
+      if (col.type === "number" && !row.text) {
         if (v === "" || v === null || v === undefined || !isFinite(Number(v))) {
           errs[col.key] = "需要是数字";
         }
@@ -3061,9 +3070,11 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     var titleAttr = errs[col.key] ? ' title="' + esc(errs[col.key]) + '"' : "";
 
     if (editing && col.type !== "readonly") {
-      var inputType = col.type === "number" ? "number" : "text";
+      // row.text = 这一行的值是**文本**（例如狠角色关键词表），别当数字处理
+      var cellType = row && row.text ? "text" : col.type;
+      var inputType = cellType === "number" ? "number" : "text";
       var step = col.step !== undefined ? ' step="' + col.step + '"' : "";
-      var cls = "cell-input" + (col.mono || col.type === "number" || col.type === "dist" ? " mono" : "") + (bad ? " is-bad" : "");
+      var cls = "cell-input" + (col.mono || cellType === "number" || col.type === "dist" ? " mono" : "") + (bad ? " is-bad" : "");
       return '<input class="' + cls + '" data-act="cell" data-index="' + index + '" data-key="' + col.key + '" type="' + inputType + '"' + step +
         ' value="' + esc(v === undefined || v === null ? "" : v) + '" />';
     }
@@ -3094,7 +3105,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       return '<div class="dist' + (bad ? " cell-bad" : "") + '" data-act="edit" data-index="' + index + '" data-key="' + col.key + '"' + titleAttr + ">" + inner + "</div>";
     }
 
-    var text = col.type === "number" ? fmtNum(v) : (v === undefined || v === null || v === "" ? "—" : String(v));
+    var isTextRow = !!(row && row.text);
+    var text = (col.type === "number" && !isTextRow)
+      ? fmtNum(v)
+      : (v === undefined || v === null || v === "" ? "—" : String(v));
     var extra = col.pct && isFinite(Number(v)) ? ' <span class="faint">(' + (Number(v) * 100).toFixed(0) + "%)</span>" : "";
     return '<span data-act="edit" data-index="' + index + '" data-key="' + col.key + '" class="' +
       (col.mono ? "mono " : "") + (col.key === "desc" || col.key === "flavor" ? "cut " : "") + (bad ? "cell-bad" : "") + '"' + titleAttr + ">" +
@@ -3123,7 +3137,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
       var tds = tab.columns.map(function (col) {
         var cls = [];
-        if (col.num || col.type === "number") cls.push("num");
+        if ((col.num || col.type === "number") && !row.text) cls.push("num");
         if (col.key === "id" || col.key === "key") cls.push("id-cell");
         if (col.w) return '<td class="' + cls.join(" ") + '" style="width:' + col.w + '">' + cellHtml(tab, col, row, index) + "</td>";
         return '<td class="' + cls.join(" ") + '">' + cellHtml(tab, col, row, index) + "</td>";
@@ -5079,7 +5093,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (!row) return;
     var col = (tab.columns || []).filter(function (c) { return c.key === key; })[0] || {};
     var v = el.value;
-    row[key] = col.type === "number" ? (v === "" ? "" : Number(v)) : v;
+    row[key] = (col.type === "number" && !row.text) ? (v === "" ? "" : Number(v)) : v;
 
     // 即时校验：只更新本行样式与状态栏，避免输入时整表重绘导致失焦
     var errs = validateRow(tab, row);

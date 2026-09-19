@@ -647,6 +647,21 @@ async function channelHelpers() {
     "拿不到白名单时不擅自过滤（退回全发，由插件侧最终把关）");
   T.state.data.numbers = before;
 
+  // 文本行（狠角色关键词表）：不能当数字处理，也不能被判「需要是数字」
+  const kwRow = { key: "hostile_keywords", label: "狠角色关键词", value: "", unit: "逗号分隔", text: true };
+  T.state.data.numbers = [kwRow];
+  const kwPayload = T.numberValuesFromPage({ numbers_editable: ["hostile_keywords"] });
+  check(Object.keys(kwPayload).length === 0,
+    "文本行留空 = 不提交（插件侧「留空」等于用内置默认名单）", JSON.stringify(kwPayload));
+  kwRow.value = "鳄,鲨,章鱼";
+  check(T.numberValuesFromPage({ numbers_editable: ["hostile_keywords"] }).hostile_keywords === "鳄,鲨,章鱼",
+    "文本行提交的是字符串，不是 NaN/0");
+  check(Object.keys(T.validateRow(T.TAB_BY_ID.numbers, kwRow)).length === 0,
+    "文本行不会被判「需要是数字」", JSON.stringify(T.validateRow(T.TAB_BY_ID.numbers, kwRow)));
+  check(Object.keys(T.validateRow(T.TAB_BY_ID.numbers, { key: "stamina_max", value: "乱写" })).length === 1,
+    "同一张表的数字行照样会拦（文本行没把校验放松）");
+  T.state.data.numbers = before;
+
   // editor_status 解析
   check(T.parseEditorStatus({ editor_status: { ok: true } }).ok === true, "editor_status 已是对象时直接用");
   check(T.parseEditorStatus({ editor_status: '{"ok":false,"snapshots":[]}' }).ok === false,
