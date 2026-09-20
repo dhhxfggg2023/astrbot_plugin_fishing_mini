@@ -116,7 +116,7 @@ def normalize_player_value(value: Any, uid: str) -> Any:
 def normalize_uid(uid: str) -> str:
     """清掉「@某人」形态的用户 id。
 
-    真库里就有 ``player_<@A1B2C3D4...>`` 这种键（某次把消息里的 at 段当成了 uid）：
+    真库里就有 ``player_<@A1B2C3D4...>`` 这种键（某次把消息里的 at 段当成了 uid，id 是编的）：
     直接搬进来只会多一条永远读不到的废数据，所以取里面的干净 id。
     """
     text = str(uid or "").strip()
