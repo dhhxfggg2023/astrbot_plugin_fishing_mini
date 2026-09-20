@@ -530,6 +530,33 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 .nowrap { white-space: nowrap; }
 .cut { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 逗号分隔的长列表（各钓点系数、品质权重、狠角色关键词…）：
+   显示成可换行的小方块，别一行拉到底把整张表撑出去 */
+.kv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 360px;
+  cursor: text;
+}
+.kv-chips .tag { font-size: 11.5px; padding: 0 6px; }
+.kv-chips .tag.is-more { color: var(--faint); border-style: dashed; }
+.kv-chips.cell-bad { border-bottom: 1px dashed var(--danger); }
+
+/* 多行输入框（长列表编辑用：一行一条） */
+.cell-input.is-multiline {
+  display: block;
+  width: 100%;
+  min-width: 190px;
+  max-width: 460px;
+  min-height: 62px;
+  padding: 5px 7px;
+  line-height: 1.6;
+  resize: vertical;
+  white-space: pre;
+  overflow: auto;
+}
+
 /* 行内确认条 */
 .confirm-strip {
   display: inline-flex;
@@ -2604,7 +2631,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       columns: [
         { key: "label", label: "数值项",    type: "readonly", w: "150px" },
         { key: "key",   label: "配置键",    type: "readonly", w: "170px", mono: true },
-        { key: "value", label: "当前值",    type: "number",   w: "104px", num: true, step: "any", valueKey: true },
+        { key: "value", label: "当前值",    type: "number",   w: "150px", num: true, step: "any", valueKey: true },
         { key: "unit",  label: "单位",      type: "readonly", w: "56px" },
         { key: "desc",  label: "说明",      type: "readonly" }
       ],
@@ -3250,20 +3277,40 @@ table.grid td.actions .btn { vertical-align: middle; }
     return html;
   }
 
+  /** 把「逗号分隔的长文本」拆成条目（空值/坏值都安全）。 */
+  function splitListItems(text) {
+    return String(text === undefined || text === null ? "" : text)
+      .replace(/，/g, ",")
+      .split(",")
+      .map(function (x) { return x.trim(); })
+      .filter(function (x) { return x !== ""; });
+  }
+
   function cellHtml(tab, col, row, index) {
     var v = row[col.key];
     var editing = state.editing && state.editing.index === index && state.editing.key === col.key;
     var errs = validateRow(tab, row);
     var bad = !!errs[col.key];
     var titleAttr = errs[col.key] ? ' title="' + esc(errs[col.key]) + '"' : "";
+    // 文本行（例如「各钓点咬钩系数」16 个钓点、狠角色关键词）：值很长，
+    // 一行摆不下就会把整张表撑出去，所以显示成可换行的小方块、编辑时用多行输入框
+    var isTextRow = !!(row && row.text);
+    var items = isTextRow ? splitListItems(v) : [];
+    var longText = isTextRow && (items.length > 3 || String(v || "").length > 24);
 
     if (editing && col.type !== "readonly") {
       // row.text = 这一行的值是**文本**（例如狠角色关键词表），别当数字处理
-      var cellType = row && row.text ? "text" : col.type;
-      var inputType = cellType === "number" ? "number" : "text";
-      var step = col.step !== undefined ? ' step="' + col.step + '"' : "";
+      var cellType = isTextRow ? "text" : col.type;
       var cls = "cell-input" + (col.mono || cellType === "number" || col.type === "dist" ? " mono" : "") + (bad ? " is-bad" : "");
-      return '<input class="' + cls + '" data-act="cell" data-index="' + index + '" data-key="' + col.key + '" type="' + inputType + '"' + step +
+      var common = ' data-act="cell" data-index="' + index + '" data-key="' + col.key + '"' + titleAttr;
+      if (longText) {
+        // 一行一条（插件侧逗号和换行都当分隔符），别让人在一行里数 16 个逗号
+        var lines = items.length ? items.join("\n") : String(v === undefined || v === null ? "" : v);
+        return '<textarea class="' + cls + ' is-multiline" rows="' + Math.min(10, Math.max(3, items.length || 3)) +
+          '" spellcheck="false"' + common + ">" + esc(lines) + "</textarea>";
+      }
+      return '<input class="' + cls + '"' + common + ' type="' + (cellType === "number" ? "number" : "text") + '"' +
+        (col.step !== undefined ? ' step="' + col.step + '"' : "") +
         ' value="' + esc(v === undefined || v === null ? "" : v) + '" />';
     }
 
@@ -3293,7 +3340,19 @@ table.grid td.actions .btn { vertical-align: middle; }
       return '<div class="dist' + (bad ? " cell-bad" : "") + '" data-act="edit" data-index="' + index + '" data-key="' + col.key + '"' + titleAttr + ">" + inner + "</div>";
     }
 
-    var isTextRow = !!(row && row.text);
+    if (longText) {
+      // 长列表：换行铺开的小方块（点一下进编辑），不再是一行拉到底
+      var shown = items.slice(0, 24);
+      var chips = shown.map(function (x) {
+        return '<span class="tag">' + esc(x) + "</span>";
+      }).join("");
+      if (items.length > shown.length) {
+        chips += '<span class="tag is-more">…还有 ' + (items.length - shown.length) + " 项</span>";
+      }
+      return '<div class="kv-chips' + (bad ? " cell-bad" : "") + '" data-act="edit" data-index="' + index +
+        '" data-key="' + col.key + '"' + titleAttr + ">" + chips + "</div>";
+    }
+
     var text = (col.type === "number" && !isTextRow)
       ? fmtNum(v)
       : (v === undefined || v === null || v === "" ? "—" : String(v));
@@ -3374,7 +3433,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     html += '<div class="card-head"><h2>' + esc(tab.label) + " " + esc(tab.title) + "</h2>" +
       '<span class="hint">' + esc(tab.hint || "") + "</span>" +
       '<span class="spacer"></span>' +
-      '<span class="hint">点单元格即可编辑 · Tab 跳到下一格</span></div>';
+      '<span class="hint">点单元格即可编辑 · Tab 跳到下一格 · 长列表（各钓点系数、品质权重这类）显示成小方块，点开是<b>一行一条</b>，回车换行、Ctrl+回车提交</span></div>';
 
     if (tab.notice) {
       html += '<div class="notice"><span class="notice-icon">💡</span><div>' + esc(tab.notice) + "</div></div>";
@@ -6468,6 +6527,10 @@ table.grid td.actions .btn { vertical-align: middle; }
       return;
     }
     if (el && el.classList && el.classList.contains("cell-input")) {
+      // 多行输入框（长列表）：回车是**换行**，要提交按 Ctrl/⌘+回车
+      if (el.tagName === "TEXTAREA" && ev.key === "Enter" && !(ev.ctrlKey || ev.metaKey)) {
+        return;
+      }
       if (ev.key === "Enter") { ev.preventDefault(); commitEdit(); return; }
       if (ev.key === "Escape") { ev.preventDefault(); cancelEdit(); return; }
       if (ev.key === "Tab" && state.editing && state.editing.scope === "cell") {

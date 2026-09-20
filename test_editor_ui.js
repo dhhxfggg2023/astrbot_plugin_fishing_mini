@@ -694,6 +694,39 @@ async function channelHelpers() {
     "文本行不会被判「需要是数字」", JSON.stringify(T.validateRow(T.TAB_BY_ID.numbers, kwRow)));
   check(Object.keys(T.validateRow(T.TAB_BY_ID.numbers, { key: "stamina_max", value: "乱写" })).length === 1,
     "同一张表的数字行照样会拦（文本行没把校验放松）");
+
+  /* ---- 长列表不再一行拉到底（站长报的「各钓点咬钩系数把表格拉长了」）---- */
+  const longRow = {
+    key: "location_hook_factors", label: "各钓点咬钩系数", unit: "钓点:倍", text: true,
+    desc: "乘在鱼饵咬钩率上",
+    value: "novice:1.0,pond:1.05,lake:1.1,river:1.15,bay:1.2,reef:1.3,deep:1.4,abyss:1.5"
+  };
+  T.state.data.numbers = [longRow];
+  T.state.editing = null;
+  const chipHtml = T.renderTableTab(T.TAB_BY_ID.numbers);
+  check(chipHtml.indexOf('class="kv-chips"') > 0,
+    "长列表显示成小方块容器（可换行）");
+  check((chipHtml.match(/<span class="tag">/g) || []).length === 8,
+    "8 个条目拆成 8 个小方块（不是一行 8 个逗号）",
+    (chipHtml.match(/<span class="tag">/g) || []).length);
+  check(chipHtml.indexOf("novice:1.0") > 0 && chipHtml.indexOf("abyss:1.5") > 0,
+    "每一条都看得见");
+  check(/\.kv-chips \{[\s\S]{0,200}?max-width: 360px/.test(html),
+    "小方块有 max-width（表格不会被它撑出去）");
+  T.state.data.numbers = [kwRow];
+  check(T.renderTableTab(T.TAB_BY_ID.numbers).indexOf('class="kv-chips"') < 0,
+    "只有 3 个短条目的文本行还是老样子（不乱加方块）");
+
+  // 点开编辑：多行输入框，一行一条
+  T.state.data.numbers = [longRow];
+  T.state.tab = "numbers";
+  T.startEdit(0, "value");
+  const editHtml = T.renderTableTab(T.TAB_BY_ID.numbers);
+  check(editHtml.indexOf("is-multiline") > 0 && editHtml.indexOf("<textarea") > 0,
+    "编辑长列表用的是多行输入框（textarea）");
+  check(editHtml.indexOf("novice:1.0\npond:1.05") > 0,
+    "一行一条（换行也是插件认的分隔符）-> " + /novice:1\.0\s*\n/.test(editHtml));
+  T.cancelEdit();
   T.state.data.numbers = before;
 
   // editor_status 解析
