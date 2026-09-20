@@ -366,7 +366,7 @@ class ViewsMixin:
 
         total = 0
         best = None
-        # 收益按「每条鱼各自在缸里的时间」算（v1.17.0）：标一下还没开始产出的鱼
+        # 收益按「每条鱼各自在缸里的时间」算（v1.18.0）：标一下还没开始产出的鱼
         pending = 0
         for idx, instance in enumerate(aquarium, start=1):
             value = _instance_value(instance)

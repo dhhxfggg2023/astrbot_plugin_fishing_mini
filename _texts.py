@@ -131,7 +131,7 @@ TEXTS: dict[str, str] = {
     "item.breed_done": "{原文}",  # 动态文本
     "item.feed_no_fish": "🐠 水族馆是空的，先把鱼放进去养",
     "item.feed_usage": "{原文}",  # 动态文本
-    # 洗髓丹（v1.17.0 新增效果）：固定文案的两条可以直接整段改，动态的两条保留 {原文}
+    # 洗髓丹（v1.18.0 新增效果）：固定文案的两条可以直接整段改，动态的两条保留 {原文}
     "item.reroll_no_fish": "🐠 水族馆是空的，先把要洗的鱼放进去",
     "item.reroll_usage": "{原文}",  # 动态文本
     "item.reroll_bad_slot": "🤔 栏位号不对，/钓鱼 水族馆 看看序号",

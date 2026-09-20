@@ -203,9 +203,12 @@ def text_of(replies) -> str:
 
 async def main():
     failures = []
+    checks_run = 0   # 实际执行到的断言条数（结尾打出来，README 里的数字才对得上）
 
     def check(cond, label, extra=None):
         """断言；extra 只在失败时打出来（成功时标签本身已经写清了细节）。"""
+        nonlocal checks_run
+        checks_run += 1
         line = label if extra is None else f"{label}　{extra}"
         if cond:
             print(f"  ✅ {label}")
@@ -2102,7 +2105,7 @@ async def main():
     check("新手村" in body and "/" in body, "主视图的进度（x/y）保留")
 
 
-    # --- 水族馆：×1.2 展出加成已去掉，收益按「每条鱼在缸里的时间」算（v1.17.0）---
+    # --- 水族馆：×1.2 展出加成已去掉，收益按「每条鱼在缸里的时间」算（v1.18.0）---
     plugin4 = make_plugin()
     ev4 = FakeEvent("89004")
     p = mod._default_player("89004")
@@ -3108,7 +3111,7 @@ async def main():
     # 整段写坏 -> 全表回退内置
     make_plugin({**dict(_CFG), "button_defs": "这不是按钮表\n随便写点什么"})
     check(_buttons_snapshot() == expect_buttons, "button_defs 整段写坏时全表回退内置")
-    # 只配一个场景 -> 配置里只有它；其余场景**在渲染时**回退内置（v1.17.0 起不再写进 BUTTONS）
+    # 只配一个场景 -> 配置里只有它；其余场景**在渲染时**回退内置（v1.18.0 起不再写进 BUTTONS）
     only_bag = make_plugin({**dict(_CFG), "button_defs": "bag|清空|/钓鱼 卖光光|灰"})
     check(
         _buttons_snapshot() == {"bag": [("清空", "/钓鱼 卖光光", 0)]},
@@ -4127,6 +4130,297 @@ async def main():
         "bridge_file" not in status_now and status_now.get("transport") == "plugin-api",
         f"状态里的通道标记已更新 -> transport={status_now.get('transport')}",
     )
+    check(
+        "legacy" in status_now,
+        "状态里带 legacy 字段（页面据此画「找回旧数据」面板；没扫过是 null）",
+    )
+
+    # --- 旧作用域数据找回（作者名改过 -> plugin_id 变了 -> 老存档落在旧 scope）---
+    # 造一个假的「AstrBot 主库」放在沙箱里：只读打开它，绝不可能碰到站长的真库。
+    print("\n[10q2] 找回旧作用域数据：只读老 scope + 只补缺的玩家")
+    legacy_mod = getattr(mod, "LEGACY", None)
+    check(legacy_mod is not None, "main 加载了 _legacy 模块（找回功能可用）")
+
+    if legacy_mod is not None:
+        import sqlite3 as _sqlite3
+
+        fake_db = os.path.join(_SANDBOX_ROOT, "fake_astrbot_data_v4.db")
+        if os.path.exists(fake_db):
+            os.remove(fake_db)
+        con = _sqlite3.connect(fake_db)
+        con.execute(
+            "create table preferences (created_at text, updated_at text, id integer,"
+            " scope text, scope_id text, key text, value text)"
+        )
+        old_scope = "dhhxfggg2023/astrbot_plugin_qq_fishing"   # 作者名改过 -> 老 scope
+
+        def _kv(player: dict) -> str:
+            # **照抄真库的样子**：{"val": "<JSON 字符串>"}，字符串里是裸玩家 dict
+            #（旧作用域里就是这种；当前作用域是同样形状但字符串里带信封）
+            return json.dumps(
+                {"val": json.dumps(player, ensure_ascii=False)}, ensure_ascii=False
+            )
+
+        def _kv_enveloped(player: dict) -> str:
+            # 当前作用域那种：字符串里是信封
+            return json.dumps(
+                {"val": json.dumps(
+                    mod.BACKUP_MODULE.wrap_player(
+                        str(player["user_id"]), player, mod.DATA_VERSION
+                    ),
+                    ensure_ascii=False,
+                )},
+                ensure_ascii=False,
+            )
+
+        def _blank(uid: str, gold: int, caught: int) -> dict:
+            # 老作用域里存的就是「玩家 dict，字段可能比现在少」：
+            # 读档时 _repair_player 会补齐，这里要验的正是「补进来还能不能读」
+            return {
+                "user_id": uid, "gold": gold, "total_caught": caught,
+                "total_sold": 0, "inventory": [], "aquarium": [],
+                "locations": ["novice"], "achievements": [],
+            }
+
+        old_gone = _blank("L70001", 4321, 88)
+        old_dup = _blank("L70002", 999, 7)
+        old_mention = _blank("L70003", 777, 12)
+        rows = [
+            (old_scope, "player_L70001", _kv(old_gone)),
+            (old_scope, "player_L70002", _kv(old_dup)),
+            # 真库里真有一条这种键：uid 被打成了「@某人」的样子
+            (old_scope, "player_<@L70003>", _kv(old_mention)),
+            (old_scope, "leaderboard", json.dumps({"val": json.dumps({"L70001": 3})})),
+            ("someoneelse/other_plugin", "player_70003", _kv(old_gone)),
+            # 当前作用域的名字也塞一行：必须被「scope_id != 当前」这条规则挡掉
+            ("dhhxfggg/astrbot_plugin_qq_fishing", "player_70004", _kv(old_gone)),
+        ]
+        con.executemany(
+            "insert into preferences (scope, scope_id, key, value) values ('plugin', ?, ?, ?)",
+            rows,
+        )
+        con.commit()
+        con.close()
+
+        # 当前作用域里已经有 L70002：导入时必须跳过它（当前数据优先）
+        await plugin_d.put_kv_data(
+            "player_L70002",
+            mod.BACKUP_MODULE.wrap_player("L70002", _blank("L70002", 555, 7), mod.DATA_VERSION),
+        )
+        # 索引也要预置一条：导入合并时不能把已有的人挤掉（插件把索引存成 JSON 字符串）
+        await plugin_d.put_kv_data("player_index", json.dumps(["L70002"]))
+
+        found = legacy_mod.read_legacy_rows(fake_db, plugin_d.plugin_id)
+        keys = sorted(r["key"] for r in found)
+        check(
+            set(keys) == {"leaderboard", "player_L70001", "player_L70002", "player_<@L70003>"},
+            f"只读到「同名插件、别的 scope」的行（别的插件/当前 scope 都不算）-> {keys}",
+        )
+        check(
+            legacy_mod.plugin_name_of(plugin_d.plugin_id) == "astrbot_plugin_qq_fishing"
+            and legacy_mod.unwrap_kv({"val": 5}) == 5
+            and legacy_mod.unwrap_kv(5) == 5,
+            "插件名与 KV 解包：带 {val:...} 信封的拆开，裸值原样返回",
+        )
+        summary = legacy_mod.player_summary(
+            {r["key"]: r for r in found}["player_L70001"]
+        )
+        check(
+            summary["user_id"] == "L70001" and summary["gold"] == 4321
+            and summary["caught"] == 88,
+            f"玩家摘要读得出金币/钓获 -> {summary}",
+        )
+        check(
+            legacy_mod.read_legacy_rows(fake_db, "someone/not_this_plugin") == []
+            and legacy_mod.LAST_ERROR == "",
+            "插件名对不上时返回空表、且不算出错（本来就没有这个插件的数据）",
+        )
+        check(
+            legacy_mod.read_legacy_rows(
+                os.path.join(_SANDBOX_ROOT, "没有这个库.db"), plugin_d.plugin_id
+            ) == [],
+            "库文件不存在时返回空表（不抛异常）",
+        )
+        check(
+            "数据库文件不存在" in legacy_mod.LAST_ERROR
+            and "没有这个库.db" in legacy_mod.LAST_ERROR,
+            f"读不到库时记下原因（不静默失败）-> {legacy_mod.LAST_ERROR}",
+        )
+        check(
+            legacy_mod.as_id_list('["1","2"]') == ["1", "2"]
+            and legacy_mod.as_id_list(["3"]) == ["3"]
+            and legacy_mod.as_id_list("{坏 json") == [],
+            "player_index 的两种写法（JSON 字符串 / 数组）都认得，坏值当空",
+        )
+        check(
+            legacy_mod.parse_player_value(json.dumps({"gold": 7})) == {"gold": 7}
+            and legacy_mod.parse_player_value(
+                json.dumps({"__fishing_player__": 1, "data": {"gold": 9}})
+            ) == {"gold": 9}
+            and legacy_mod.parse_player_value("{坏 json") == {}
+            and legacy_mod.parse_player_value(None) == {},
+            "值形态照真库来：{val: <JSON 字符串>}，字符串里可能是裸数据也可能是信封",
+        )
+        check(
+            legacy_mod.normalize_uid("<@A1B2C3D4E5F6>") == "A1B2C3D4E5F6"
+            and legacy_mod.normalize_uid("<@!A1B2C3D4E5F6>") == "A1B2C3D4E5F6"
+            and legacy_mod.normalize_uid(" 3664916346 ") == "3664916346"
+            and legacy_mod.normalize_uid("") == "",
+            "uid 清洗：@某人 形态取里面的干净 id（真库里有这种脏键）",
+        )
+        _wrapped = legacy_mod.normalize_player_value(json.dumps({"gold": 5}), "u1")
+        check(
+            isinstance(_wrapped, dict) and _wrapped.get("__fishing_player__")
+            and (_wrapped.get("data") or {}).get("gold") == 5,
+            f"裸数据搬运前会包成信封（写进去立刻能被存档/页面看见）-> {sorted(_wrapped)[:4]}",
+        )
+
+        real_db_path = legacy_mod.astrbot_db_path
+        legacy_mod.astrbot_db_path = lambda: fake_db
+        try:
+            # 老数据特别多时：不逐个核对（否则一次点击上万次读库），只报数量
+            real_cap = legacy_mod.PRESENCE_CHECK_MAX
+            legacy_mod.PRESENCE_CHECK_MAX = 1
+            big = await plugin_d.legacy_scan()
+            legacy_mod.PRESENCE_CHECK_MAX = real_cap
+            check(
+                big["presence_checked"] is False
+                and all(p["present"] is None for p in big["players"])
+                and big["players_found"] == 3,
+                "超过上限就不逐个核对「缺谁」（present 全给 None，交给导入判断）",
+            )
+
+            res = await plugin_d.editor_api_config_save(
+                {"action": "legacy_scan", "payload": {}}
+            )
+            data = api_dict(res)
+            check(
+                data.get("ok") is True and "扫描到旧数据" in str(data.get("message")),
+                f"legacy_scan 走 config 通道可用 -> {data.get('message')}",
+            )
+            scan = json.loads(plugin_d.config["editor_status"]).get("legacy") or {}
+            check(
+                [s["scope_id"] for s in scan.get("scopes") or []] == [old_scope]
+                and scan.get("players_found") == 3,
+                f"扫描只列出同名插件的旧作用域 -> {[s.get('scope_id') for s in scan.get('scopes') or []]}",
+            )
+            by_uid = {p["user_id"]: p for p in scan.get("players") or []}
+            check(
+                by_uid["L70001"]["present"] is False and by_uid["L70002"]["present"] is True
+                and by_uid["L70003"]["present"] is False,
+                "扫描标出「当前库缺谁」：L70001/L70003 缺、L70002 已在",
+            )
+            check(
+                by_uid["L70001"]["gold"] == 4321 and by_uid["L70003"]["caught"] == 12,
+                "值在库里是 JSON 字符串时也读得出内容（金币/钓获不是 0）",
+            )
+            check(
+                by_uid["L70003"]["uid_fixed"] is True
+                and by_uid["L70003"]["key"] == "player_<@L70003>",
+                "`player_<@xxx>` 这种脏键被认出来（导入时取干净 ID）",
+            )
+            check(
+                scan.get("players_missing") == 2,
+                f"缺的人数正确 -> {scan.get('players_missing')}",
+            )
+            check(
+                (scan.get("scopes") or [{}])[0].get("missing") == 2,
+                "每个作用域也各自标了缺几名（页面按作用域显示）",
+            )
+
+            res = await plugin_d.editor_api_config_save(
+                {"action": "legacy_import", "payload": {}}
+            )
+            data = api_dict(res)
+            check(
+                data.get("ok") is True and "导入 2" in str(data.get("message")),
+                f"legacy_import 走 config 通道可用 -> {data.get('message')}",
+            )
+            loaded = await plugin_d._load_player("L70001")
+            check(
+                int(loaded.get("gold") or 0) == 4321
+                and int(loaded.get("total_caught") or 0) == 88,
+                f"补进来的玩家当前版本能直接读（不是坏数据）-> 金币 {loaded.get('gold')}",
+            )
+            fixed = await plugin_d._load_player("L70003")
+            check(
+                int(fixed.get("gold") or 0) == 777
+                and await plugin_d.get_kv_data("player_<@L70003>", None) is None,
+                "脏键按干净 ID 落地（不会留一条读不到的废数据）",
+            )
+            kept = await plugin_d._load_player("L70002")
+            check(
+                int(kept.get("gold") or 0) == 555,
+                "当前作用域已有的玩家一个字段都没被覆盖（当前数据优先）",
+            )
+            idx_raw = await plugin_d.get_kv_data("player_index", None)
+            ids_now = await plugin_d._player_ids()
+            check(
+                {"L70001", "L70002", "L70003"} <= set(ids_now) and isinstance(idx_raw, str),
+                f"索引合并：新导入的进得来、原有的没被挤掉（{ids_now}，写法 {type(idx_raw).__name__}）",
+            )
+            notes = [
+                str(x.get("note") or "")
+                for x in plugin_d.backup_store.list_snapshots()
+            ]
+            check(
+                "导入前已存档" in str(data.get("message") or "")
+                and any("找回旧作用域数据前的存档" in n for n in notes),
+                "导入前先存了一份档，备注写明用途（旧数据留底）"
+                f" -> {[n for n in notes if '找回旧作用域' in n]}",
+            )
+
+            # 老作用域一行都不许动
+            con = _sqlite3.connect("file:{}?mode=ro".format(fake_db.replace("\\", "/")), uri=True)
+            left_rows = con.execute(
+                "select count(*) from preferences where scope_id = ?", (old_scope,)
+            ).fetchone()[0]
+            con.close()
+            check(left_rows == 4, f"老作用域的数据一行都没删没改（还剩 {left_rows} 行）")
+
+            # 再扫一遍：现在都「已在当前库」了（不会重复导入）
+            scan2 = await plugin_d.legacy_scan()
+            check(
+                scan2["players_missing"] == 0,
+                f"导入后重扫：没有缺的玩家了 -> {scan2['players_missing']}",
+            )
+            again = await plugin_d.legacy_import()
+            check(
+                not again["imported"] and len(again["skipped"]) == 3,
+                f"重复导入不会写第二遍 -> imported={again['imported']} skipped={len(again['skipped'])}",
+            )
+        finally:
+            legacy_mod.astrbot_db_path = real_db_path
+
+        # 库读不到 / 没有旧数据时：只回一句人话，不炸（真库全程不碰）
+        legacy_mod.astrbot_db_path = lambda: os.path.join(_SANDBOX_ROOT, "空的库.db")
+        try:
+            res = await plugin_d.editor_api_config_save(
+                {"action": "legacy_scan", "payload": {}}
+            )
+            data = api_dict(res)
+            check(
+                data.get("ok") is True
+                and "读不到旧数据" in str(data.get("message"))
+                and "数据库文件不存在" in str(data.get("message")),
+                f"读不到库时说清原因（不装「没有旧数据」）-> {data.get('message')}",
+            )
+            scan0 = json.loads(plugin_d.config["editor_status"]).get("legacy") or {}
+            check(
+                scan0.get("scopes") == [] and "数据库文件不存在" in str(scan0.get("error")),
+                "原因也带进页面状态（页面照实显示）",
+            )
+
+            res = await plugin_d.editor_api_config_save(
+                {"action": "legacy_import", "payload": {}}
+            )
+            data = api_dict(res)
+            check(
+                data.get("ok") is True and "没有需要导入的玩家" in str(data.get("message")),
+                f"没得导入时也回一句人话 -> {data.get('message')}",
+            )
+        finally:
+            legacy_mod.astrbot_db_path = real_db_path
 
     # =====================================================================
     print("\n[11a] 可调数值表：配置改了要真的生效")
@@ -4997,7 +5291,7 @@ async def main():
         f" + v1.12.0 的 text_overrides/button_layout"
         f" + v1.13.0 的 button_style_mode/button_default_style"
         f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden"
-        f" + v1.17.0 的 button_empty_scenes；aquarium_bonus* 两项已在 v1.17.0 删掉）",
+        f" + v1.18.0 的 button_empty_scenes；aquarium_bonus* 两项已在 v1.18.0 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -5663,7 +5957,7 @@ async def main():
         ("_interactions.py", "_say"),
         ("_interactions.py", "_say_msg"),
         ("_interactions.py", "_push"),
-        # v1.17.0 删掉了从来没被调用的 `_reply`：它在这里等于给「绕过场景体系」开后门
+        # v1.18.0 删掉了从来没被调用的 `_reply`：它在这里等于给「绕过场景体系」开后门
     }
     _bare_exits: list[str] = []
     _used_scenes: set[str] = set()
@@ -5962,11 +6256,11 @@ async def main():
     # =====================================================================
     print("\n" + "=" * 62)
     if failures:
-        print(f"❌ {len(failures)} 项未通过：")
+        print(f"❌ {len(failures)}/{checks_run} 项未通过：")
         for f in failures:
             print(f"   - {f}")
         return 1
-    print("🎉 全部自测通过！")
+    print(f"🎉 全部自测通过！（{checks_run} 项断言）")
     return 0
 
 

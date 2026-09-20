@@ -1493,7 +1493,7 @@ td.actions .btn + .btn { margin-left: 4px; }
    * 「数值」标签页的配置键：`[键, 名称, 单位, 说明, 是否文本行, 分组]`。
    *
    * ⚠️ 插件面板里的配置项**全部**隐藏了，所以凡是「只能手改配置文件」的键，
-   * 都必须在这里出现一次 —— 漏一个站长就永远改不了（v1.17.0 补齐了 40 个）。
+   * 都必须在这里出现一次 —— 漏一个站长就永远改不了（v1.18.0 补齐了 40 个）。
    * 第 5 位 `true` = 文本行（逗号/冒号分隔的名单，例如 `常见:14,少见:4.6`）。
    */
   var NUMBER_KEYS = [
@@ -1923,6 +1923,8 @@ td.actions .btn + .btn { margin-left: 4px; }
     if (status.players !== undefined) state.players = num(status.players, 0);
     if (status.next_auto_backup !== undefined) state.nextAutoBackup = text(status.next_auto_backup);
     if (status.autobackup) state.autoBackup = autobackupFromStatus(status);
+    // 旧作用域扫描结果：插件缓存着上一次扫描（没扫过是 null，那就保持页面现状）
+    if (status.legacy && typeof status.legacy === "object") state.legacy = status.legacy;
     if (status.last_result) {
       state.lastResult = { ok: status.ok !== false, text: text(status.last_result),
                            time: text(status.updated_text) };
@@ -2629,6 +2631,10 @@ td.actions .btn + .btn { margin-left: 4px; }
     snapshotPlayersError: "",
     goldEdit: null,             // { user_id, value } 正在改的金币
     goldConfirm: null,          // { user_id, value, mode } 二次确认中
+    legacy: null,               // 「找回旧数据」的扫描结果（插件回写，没扫过是 null）
+    legacyMsg: "",              // 上一次扫描/导入的结果说明
+    legacyBusy: false,          // 正在扫或正在导入（按钮转圈，防连点）
+    legacyConfirm: false,       // 导入前的页面内二次确认
     /* ---- 💬 回复页（场景卡片 / 按钮总览 / 预览）---- */
     replies: {
       loaded: false,            // 场景列表是否已经拿到（拿到之前显示骨架/错误）
@@ -3559,6 +3565,35 @@ td.actions .btn + .btn { margin-left: 4px; }
     return state.playersMode === "snapshot" ? (state.snapshotPlayers || []) : (state.playersList || []);
   }
 
+  /**
+   * 「找回旧数据」：`legacy_scan` 只读扫一遍主库，`legacy_import` 把当前作用域缺的
+   * 玩家补进来（插件会先自动存一份档）。两条都走 config 通道。
+   */
+  async function runLegacyAction(action) {
+    if (state.legacyBusy) return { ok: false, message: "正在处理，稍等" };
+    if (!ENV.online) return { ok: false, message: "离线预览：不会去读主库" };
+    var importing = action === "legacy_import";
+    state.legacyBusy = true;
+    state.legacyConfirm = false;
+    state.legacyMsg = importing ? "正在导入（先自动存一份档）…" : "正在扫描主库里的旧作用域…";
+    render();
+    var res = await sendCommand(action, {});
+    var status = null;
+    if (res.accepted) {
+      status = await waitForStatus();
+      if (status) applyStatus(status);
+    }
+    state.legacyBusy = false;
+    state.legacyMsg = text((status && status.last_result) || res.message);
+    if (res.accepted && importing) {
+      // 导入后玩家列表变了：刷新一下实时列表（存档列表也跟着多了一份快照）
+      await fetchPlayers(false);
+      if (status) applyStatus(status);
+    }
+    render();
+    return { ok: res.accepted, message: state.legacyMsg };
+  }
+
   function renderPlayersTab(tab) {
     var html = "";
     var live = state.playersMode !== "snapshot";
@@ -3571,7 +3606,8 @@ td.actions .btn + .btn { margin-left: 4px; }
     html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
       "这里只改<b>金币</b>，其它数据一律只读。改<b>实时玩家</b>前插件会自动存一份档（auto/，按「按时存档保留份数」轮转）；" +
       "改<b>存档里</b>的玩家不会动在线数据，要等「恢复」那份存档之后才生效。金币范围 0 ~ " +
-      esc(fmtNum(state.playersGoldMax)) + "。" +
+      esc(fmtNum(state.playersGoldMax)) + "。<br />右上角「🔍 找回旧数据」是唯一的例外：" +
+      "它只把<b>旧作用域里当前库没有的玩家</b>补进来（导入前自动存档，已有的玩家不动，旧数据不删）。" +
       "</div></div>";
 
     html += '<div class="toolbar">';
@@ -3595,8 +3631,68 @@ td.actions .btn + .btn { margin-left: 4px; }
       html += '<span class="stat-chip">共 <b>' + rows.length + "</b> 名玩家</span>";
     }
     html += '<span class="spacer" style="margin-left:auto"></span>';
+    html += '<button class="btn btn-sm" data-act="p:legacyScan" title="扫一遍同名插件、别的作用域里的老存档">🔍 找回旧数据</button>';
     html += '<button class="btn btn-sm" data-act="p:reload">↻ 刷新</button>';
     html += "</div>";
+
+    if (state.legacy && (state.legacy.scopes || []).length) {
+      var missAll = num(state.legacy.players_missing, 0);
+      html += '<div class="notice"><span class="notice-icon">🗂️</span><div>' +
+        "发现 <b>" + state.legacy.scopes.length + "</b> 个旧作用域里有这个插件的老数据" +
+        "（作者名改过时插件 id 会变，老存档就留在了旧作用域里）：" +
+        state.legacy.scopes.map(function (s) {
+          var miss = num(s.missing, 0);
+          var others = (s.other_keys || []).filter(function (k) { return k !== "player_index"; });
+          return '<br />· <span class="mono">' + esc(s.scope_id) + "</span>　" +
+            s.players.length + " 名玩家　" + s.rows + " 行" +
+            (miss ? "　<b>缺 " + miss + " 名</b>" : "　<span class=\"faint\">（都已在当前库）</span>") +
+            (others.length
+              ? '　<span class="faint">另有：' + esc(others.join("、")) + "（不导入）</span>"
+              : "");
+        }).join("") +
+        '<div class="hint faint" style="margin-top:4px">库文件：<span class="mono">' +
+        esc(text(state.legacy.db_path)) + "</span>　当前作用域：<span class=\"mono\">" +
+        esc(text(state.legacy.current_scope)) + "</span>" +
+        (state.legacy.presence_checked === false
+          ? "　<b>旧数据较多，这里没逐个核对「缺谁」，点导入时插件会自己判断</b>"
+          : "") + "</div>" +
+        '<div style="margin-top:6px">' +
+        (state.legacyConfirm
+          ? '<button class="btn btn-sm btn-danger" data-act="p:legacyImportYes"' +
+            (state.legacyBusy ? " disabled" : "") + ">" +
+            (state.legacyBusy ? "⏳ 正在导入…" : "✔ 确定导入" + (missAll ? "（" + missAll + " 名）" : "")) +
+            "</button>" +
+            '<button class="btn btn-sm" data-act="p:legacyImportNo"' +
+            (state.legacyBusy ? " disabled" : "") + ">✖ 取消</button>" +
+            '<span class="hint" style="color:var(--warn)">　会写入玩家数据（先自动存档，已有的不动）</span>'
+          : '<button class="btn btn-sm btn-primary" data-act="p:legacyImport">' +
+            "⬇️ 把缺的玩家并进来" + (missAll ? "（" + missAll + " 名）" : "") + "</button>" +
+            '<span class="hint faint">　只补当前作用域没有的玩家；导入前自动存一份档，旧作用域的数据一行都不动</span>') +
+        "</div></div></div>";
+    }
+    if (state.legacyMsg) {
+      html += '<div class="notice"><span class="notice-icon">📋</span><div>' + esc(state.legacyMsg) + "</div></div>";
+    }
+    if (state.legacy && state.legacy.error) {
+      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' +
+        "读库没成功：" + esc(text(state.legacy.error)) +
+        '<div class="hint faint">这一步是<b>只读</b>的，失败不影响游戏；' +
+        "多半是路径或权限问题（也可能是数据库正被占用，稍后再试）。</div></div></div>";
+    }
+    if (state.legacy && (state.legacy.players || []).length) {
+      html += '<div class="table-wrap" style="max-height:260px"><table class="grid wrap-cells" style="min-width:640px">' +
+        "<thead><tr><th>旧作用域里发现的玩家</th><th>状态</th><th>金币</th><th>累计竿数</th><th>钓点</th></tr></thead><tbody>" +
+        state.legacy.players.slice(0, 60).map(function (p) {
+          var have = p.present === true;
+          var mark = have ? '<span class="stat-chip">已在当前库</span>' : '<span class="stat-chip is-dirty">缺</span>';
+          var note = p.uid_fixed
+            ? ' <span class="hint faint" title="旧键名是 ' + esc(text(p.key)) + '">（导入时取干净 ID）</span>'
+            : "";
+          return "<tr><td class=\"mono\">" + esc(p.user_id) + note + "</td><td>" + mark + "</td><td class=\"num\">" +
+            esc(fmtNum(p.gold)) + "</td><td class=\"num\">" + esc(fmtNum(p.caught)) +
+            "</td><td class=\"num\">" + p.locations + "</td></tr>";
+        }).join("") + "</tbody></table></div>";
+    }
 
     if (state.playersError) {
       html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(state.playersError) + "</div></div>";
@@ -5709,6 +5805,29 @@ td.actions .btn + .btn { margin-left: 4px; }
       case "p:reload":
         if (state.playersMode === "snapshot") fetchSnapshotPlayers(state.snapshotPick, true).then(function () { render(); });
         else fetchPlayers(true).then(function () { render(); });
+        break;
+      case "p:legacyScan": {
+        runLegacyAction("legacy_scan").then(function (r) {
+          if (r && !r.ok) toast("warn", "扫描没成功", r.message || "");
+          else if (r) toast("ok", "扫描完成", r.message || "");
+        });
+        break;
+      }
+      case "p:legacyImport":
+        // 写玩家数据，先让站长确认一下（页面内确认，不用浏览器弹窗）
+        state.legacyConfirm = true;
+        render();
+        break;
+      case "p:legacyImportNo":
+        state.legacyConfirm = false;
+        render();
+        break;
+      case "p:legacyImportYes":
+        state.legacyConfirm = false;
+        runLegacyAction("legacy_import").then(function (r) {
+          if (r && r.ok) toast("ok", "导入完成", r.message || "");
+          else toast("err", "导入没成功", (r && r.message) || "");
+        });
         break;
       case "p:gold": {
         var row = playerRowsNow().filter(function (r) { return r.user_id === el.getAttribute("data-uid"); })[0];

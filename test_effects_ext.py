@@ -87,7 +87,7 @@ check(
 )
 check(
     _LIVE == _LEGACY + ("quality_reroll",),
-    f"v1.17.0 只多了一个内置键 quality_reroll：{_LIVE}",
+    f"v1.18.0 只多了一个内置键 quality_reroll：{_LIVE}",
 )
 check(
     [s.key for s in FX.BUILTIN_EFFECTS] == list(_LIVE),

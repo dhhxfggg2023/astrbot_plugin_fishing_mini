@@ -106,7 +106,7 @@ class CommandsMixin:
             lines = [f"　{choice['text']}"]
 
             # 结算：奖励都很轻，不影响经济。
-            # v1.17.0 起奖励支持**随机区间**（`"gold": [20, 60]`），并且两个选项都该有
+            # v1.18.0 起奖励支持**随机区间**（`"gold": [20, 60]`），并且两个选项都该有
             # 自己的收益 —— 旧数据写死单个数字（`"gold": 40`）也照旧能用。
             good_chance = _clamp(
                 _safe_number(choice.get("good_chance"), 0.65), 0.0, 1.0

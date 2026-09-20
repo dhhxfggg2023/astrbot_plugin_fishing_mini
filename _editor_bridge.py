@@ -1043,6 +1043,9 @@ class EditorBridgeMixin(EditorApiMixin):
             # 玩家页：改实时玩家金币 / 改某份存档里的玩家金币
             "set_gold": self._editor_set_player_gold,
             "snapshot_gold": self._editor_set_snapshot_gold,
+            # 旧作用域找回（作者名改过之后老存档会落在别的 scope 里）
+            "legacy_scan": self._editor_legacy_scan,
+            "legacy_import": self._editor_legacy_import,
         }
         handler = handlers.get(str(action or "").strip())
         if handler is None:
@@ -1308,6 +1311,69 @@ class EditorBridgeMixin(EditorApiMixin):
         return True, f"已把「{name}」的备注改成「{note or '（空）'}」"
 
     # =====================================================================
+    # 旧作用域数据找回（v1.18.1）
+    # =====================================================================
+    async def _editor_legacy_scan(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """扫一遍「同名插件、别的 scope」，只读不改。"""
+        scan = getattr(self, "legacy_scan", None)
+        if not callable(scan):
+            return False, "找回模块不可用（_legacy.py 缺失？）"
+        try:
+            info = await scan()
+        except Exception as e:
+            return False, f"扫描失败：{e}"
+        # 缓存一份给页面（状态回写时会带上，页面据此画「哪个 scope 有几个玩家」）
+        self._editor_legacy_cache = info
+        scopes = info.get("scopes") or []
+        if not scopes:
+            why = str(info.get("error") or "")
+            return True, (
+                (f"读不到旧数据：{why}。" if why else "没找到别的作用域里的老数据")
+                + f"（当前作用域 {info.get('current_scope')}；库 {info.get('db_path')}）"
+            )
+        parts = []
+        for s in scopes[:4]:
+            parts.append(
+                f"{s['scope_id']}：{len(s['players'])} 名玩家 / {s['rows']} 行"
+            )
+        return True, "扫描到旧数据 —— " + "；".join(parts) + "（点「导入」把缺的补进来）"
+
+    async def _editor_legacy_import(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """把老作用域里缺的玩家补进来（导入前先存一份手动快照）。"""
+        do_import = getattr(self, "legacy_import", None)
+        if not callable(do_import):
+            return False, "找回模块不可用（_legacy.py 缺失？）"
+        scopes = payload.get("scopes") if isinstance(payload, dict) else None
+        want = [str(x) for x in scopes] if isinstance(scopes, list) and scopes else None
+        try:
+            res = await do_import(want)
+        except Exception as e:
+            return False, f"导入失败：{e}"
+        imported = res.get("imported") or []
+        skipped = res.get("skipped") or []
+        failed = res.get("failed") or []
+        # 导完重新扫一遍：页面上的「缺谁」列表立刻变准（老数据仍在，只是都标成「已有」）
+        scan = getattr(self, "legacy_scan", None)
+        if callable(scan):
+            try:
+                self._editor_legacy_cache = await scan()
+            except Exception as e:  # pragma: no cover - 重扫失败不影响导入结果
+                _log_debug(f"导入后重扫旧作用域失败：{e}")
+        if not imported and not failed:
+            return True, (
+                f"没有需要导入的玩家（当前作用域里都有：{len(skipped)} 名）"
+            )
+        detail = (
+            f"导入 {len(imported)} 名玩家"
+            + (f"、跳过 {len(skipped)} 名（当前数据优先）" if skipped else "")
+            + (f"、失败 {len(failed)} 名" if failed else "")
+        )
+        return True, (
+            f"{detail}；导入前已存档：{res.get('snapshot') or '（无）'}"
+            f"{res.get('index_note') or ''}"
+        )
+
+    # =====================================================================
     # 状态回写（插件 -> 页面：editor_status 配置项）
     # =====================================================================
     async def _editor_write_status(self, *, action: str, ok: bool, message: str) -> None:
@@ -1373,6 +1439,8 @@ class EditorBridgeMixin(EditorApiMixin):
             "subcommands": list(globals().get("SUBCOMMAND_KEYWORDS") or ()),
             "custom_actions": _custom_actions(),
             "gold_max": PLAYER_GOLD_MAX,
+            # 玩家页要用：上一次「找回旧数据」的扫描结果（没扫过就是 null）
+            "legacy": getattr(self, "_editor_legacy_cache", None),
             "transport": "plugin-api",
         }
         try:

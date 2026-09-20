@@ -126,7 +126,7 @@ const hookNames = [
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
-  "renderPlayerRow",
+  "renderPlayerRow", "runLegacyAction",
   // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色；v1.15.1 加旧写法映射）
   "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES", "ITEM_EFFECT_HINT", "ITEM_EFFECT_ALIASES",
   "applyEffectKeys",
@@ -500,7 +500,8 @@ function runAssertions() {
     check(["dark", "light"].indexOf(documentStub.documentElement.getAttribute("data-theme")) >= 0,
       "data-theme 被规范成 dark/light", documentStub.documentElement.getAttribute("data-theme"));
     check(T.ENV.isDark === true, "离线默认深色");
-  }).then(channelHelpers).then(repliesPure).then(channelRoundTrip).then(repliesOnline).then(saveScope).then(finish);
+  }).then(channelHelpers).then(repliesPure).then(channelRoundTrip).then(repliesOnline)
+    .then(saveScope).then(legacyRecovery).then(finish);
 }
 
 /* =============================================================================
@@ -1187,6 +1188,22 @@ function makeFakeSdk() {
         }));
       }
       let message = "已执行 " + payload.action;
+      // 「找回旧数据」（v1.18.1）：扫描/导入各自回一份带 legacy 的状态
+      if (payload.action === "legacy_scan" || payload.action === "legacy_import") {
+        const imported = payload.action === "legacy_import";
+        captured.legacyImported = imported;
+        const legacy = FAKE_LEGACY(imported);
+        const st = Object.assign({}, fresh, {
+          legacy: legacy, last_action: payload.action,
+          last_result: imported
+            ? "导入 1 名玩家、跳过 1 名（当前数据优先）；导入前已存档：manual/2026-09-20_1010.json"
+            : "扫描到旧数据 —— dhhxfggg2023/astrbot_plugin_qq_fishing：2 名玩家 / 3 行（点「导入」把缺的补进来）"
+        });
+        return Promise.resolve({
+          status: "ok", ok: true, message: st.last_result,
+          editor_status: JSON.stringify(st)
+        });
+      }
       if (payload.action === "rename") {
         message = "已把「" + payload.name + "」的备注改成「" + payload.note + "」";
       } else if (payload.action) {
@@ -1237,6 +1254,29 @@ const FAKE_PLAYERS = [
   { user_id: "10002", name: "小钓手", gold: 3200, level: 3, caught: 88, sold: 70,
     fish: 5, aquarium: 1, saved_text: "2026-09-18 17:02:40" }
 ];
+
+/** 「找回旧数据」的扫描结果（v1.18.1）：导入前后就差在 present / missing。 */
+function FAKE_LEGACY(imported) {
+  const scope = "dhhxfggg2023/astrbot_plugin_qq_fishing";
+  const players = [
+    { key: "player_70001", user_id: "70001", gold: 4321, caught: 88, locations: 1,
+      inventory: 0, aquarium: 0, scope_id: scope, present: !!imported },
+    { key: "player_70002", user_id: "70002", gold: 999, caught: 7, locations: 1,
+      inventory: 0, aquarium: 0, scope_id: scope, present: true },
+    // 真库里真有一条这种脏键：导入时会取干净 ID
+    { key: "player_<@70003>", user_id: "70003", uid_fixed: true, gold: 5, caught: 1,
+      locations: 0, inventory: 0, aquarium: 0, scope_id: scope, present: !!imported }
+  ];
+  return {
+    db_path: "C:/Users/x/.astrbot/data/data_v4.db",
+    current_scope: "dhhxfggg/astrbot_plugin_qq_fishing",
+    scopes: [{ scope_id: scope, rows: 3, players: players, other_keys: ["leaderboard"],
+               missing: imported ? 0 : 1 }],
+    players: players,
+    players_found: 2,
+    players_missing: imported ? 0 : 1
+  };
+}
 
 const FAKE_CONFIG = {
   fish_defs: "carp|鲤鱼|常见|120|novice:1.0|村口常客\ncrucian|鲫鱼|常见|90|novice:1.2|巴掌大",
@@ -1720,6 +1760,96 @@ function makeSaveScopeSdk(config) {
 function newToasts(F, from) {
   const box = documentStub.getElementById("toasts");
   return (box.children || []).slice(from).map(function (el) { return String(el.innerHTML || ""); });
+}
+
+/* =============================================================================
+   [16b] 玩家页「找回旧数据」（v1.18.1）：扫描 -> 确认 -> 导入
+   ============================================================================= */
+async function legacyRecovery() {
+  console.log("\n[16b] 找回旧数据：扫描只读 / 导入要确认 / 结果写进面板");
+  const F = loadPageFromSource(makeFakeSdk()).T;
+  for (let i = 0; i < 40 && (F.state.loading || F.ENV.pluginBase === "astrbot_plugin_qq_fishing"); i++) {
+    await new Promise(function (r) { setTimeout(r, 25); });
+  }
+  check(F.ENV.online === true, "假 SDK 下进入在线模式");
+  F.state.tab = "players";
+  F.render();
+
+  // 1) 还没扫过：只有「找回旧数据」按钮，没有导入面板
+  let html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf('data-act="p:legacyScan"') > 0, "玩家页有「🔍 找回旧数据」按钮");
+  check(html.indexOf('data-act="p:legacyImport"') < 0 && F.state.legacy === null,
+    "没扫过时不显示导入面板（不凭空吓人）");
+
+  // 2) 扫描：只发一条 legacy_scan，结果进 state.legacy
+  captured.calls = [];
+  captured.legacyImported = null;
+  const scanRes = await F.runLegacyAction("legacy_scan");
+  const scanPost = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const scanEnv = JSON.parse(scanPost.body);
+  check(scanPost.endpoint === "config" && scanEnv.action === "legacy_scan",
+    "扫描走 config 通道的 legacy_scan 动作", scanPost.endpoint + " " + scanEnv.action);
+  check(scanRes.ok === true && captured.legacyImported === false,
+    "扫描不会触发导入", String(captured.legacyImported));
+  check(F.state.legacy && F.state.legacy.scopes.length === 1 &&
+    F.state.legacy.players_missing === 1,
+    "扫描结果进了页面状态（旧作用域数 / 缺几名）",
+    JSON.stringify(F.state.legacy && F.state.legacy.players_missing));
+  check(F.state.legacyBusy === false, "扫描结束后按钮不再是「处理中」");
+
+  // 3) 面板：作用域、库路径、缺谁、点导入要不要确认
+  html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf("dhhxfggg2023/astrbot_plugin_qq_fishing") > 0 &&
+    html.indexOf("data_v4.db") > 0,
+    "面板写出旧作用域与库文件路径（站长知道在动哪儿）");
+  check(html.indexOf("缺 1 名") > 0 && html.indexOf("已在当前库") > 0,
+    "每名玩家标了「缺 / 已在当前库」");
+  check(html.indexOf("导入时取干净 ID") > 0,
+    "脏键（player_<@xxx>）标了「导入时取干净 ID」");
+  check(html.indexOf('data-act="p:legacyImport"') > 0 &&
+    html.indexOf('data-act="p:legacyImportYes"') < 0,
+    "先给「把缺的玩家并进来」，还没到确认那一步");
+
+  // 4) 二次确认是页面内的（不用浏览器弹窗），取消不会发请求
+  F.state.legacyConfirm = true;
+  F.render();
+  html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf('data-act="p:legacyImportYes"') > 0 &&
+    html.indexOf('data-act="p:legacyImportNo"') > 0,
+    "确认态给出「✔ 确定导入 / ✖ 取消」");
+  captured.calls = [];
+  F.state.legacyConfirm = false;
+  check(captured.calls.length === 0, "取消不产生任何请求");
+
+  // 5) 确认导入：一条 legacy_import，结果面板刷新成 0 缺
+  F.state.legacyConfirm = true;
+  captured.calls = [];
+  const impRes = await F.runLegacyAction("legacy_import");
+  const impEnv = JSON.parse(captured.calls.filter(function (c) { return c.kind === "post"; })[0].body);
+  check(impEnv.action === "legacy_import" && captured.legacyImported === true,
+    "确认后发的是 legacy_import", impEnv.action);
+  check(impRes.ok === true && /导入 1 名玩家/.test(impRes.message),
+    "导入结果显示插件回的真实说明", impRes.message);
+  check(F.state.legacyConfirm === false && F.state.legacy.players_missing === 0,
+    "导入后页面状态刷新（不再显示缺人）", String(F.state.legacy.players_missing));
+  html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf("（都已在当前库）") > 0, "面板改成「都已在当前库」");
+  check(F.state.legacyMsg.indexOf("导入前已存档") > 0,
+    "提示里说明导入前存了档（站长能看到旧数据留底）", F.state.legacyMsg.slice(0, 60));
+
+  // 6) 读库失败时照实说（不装「没有旧数据」）
+  F.state.legacy = Object.assign({}, F.state.legacy, {
+    scopes: [], players: [], players_missing: 0,
+    error: "数据库文件不存在：C:/nope/data_v4.db"
+  });
+  F.state.legacyMsg = "";
+  html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf("读库没成功") > 0 && html.indexOf("data_v4.db") > 0,
+    "读库失败时面板写出原因（不静默失败）");
+  check(html.indexOf("这一步是<b>只读</b>的") > 0, "并说明这一步是只读的、失败不影响游戏");
+
+  if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
+  return Promise.resolve();
 }
 
 async function saveScope() {

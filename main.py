@@ -120,6 +120,8 @@ EDITOR_BRIDGE: Any = _load_sibling("_editor_bridge", "astrbot_fishing_editor_bri
 EFFECT_REG: Any = _load_sibling("_effects", "astrbot_fishing_effects")
 #: 文案表（text_overrides 的默认值与渲染规则）；加载失败时下面的兜底会顶上
 TEXT_LIB: Any = _load_sibling("_texts", "astrbot_fishing_texts")
+#: 旧作用域数据找回（作者名改过 -> plugin_id 变过 -> 老存档留在别的 scope 里）
+LEGACY: Any = _load_sibling("_legacy", "astrbot_fishing_legacy")
 
 
 class _MissingMixin:
@@ -249,7 +251,7 @@ DEFAULTS: dict[str, Any] = {
     "button_style_mode": "按按钮表",
     # 统一样式 / 按钮表里没写样式时的兜底（default=灰、primary=蓝，也可以写数字）
     "button_default_style": "default",
-    # 明确「就是不要按钮」的场景（逗号分隔场景名）：连「继承父场景」也断掉（v1.17.0）
+    # 明确「就是不要按钮」的场景（逗号分隔场景名）：连「继承父场景」也断掉（v1.18.0）
     "button_empty_scenes": "",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
@@ -338,7 +340,7 @@ DEFAULTS: dict[str, Any] = {
     "backup_keep_manual": 0,
     "backup_dir": "",
     "codex_bonus_per_rarity": [0.03, 0.05, 0.08, 0.12, 0.2],
-    # 挂机收益（水族馆的核心玩法）：每条鱼按**各自在缸里的时间**产出（v1.17.0）。
+    # 挂机收益（水族馆的核心玩法）：每条鱼按**各自在缸里的时间**产出（v1.18.0）。
     # 原来的「取出/卖出 ×1.2 展出加成」已经去掉，补偿就是把这几个数值提高：
     #   每小时 1.5% -> 2%、单次封顶 3000 -> 5000 金币
     "pond_income_per_hour": 0.02,
@@ -830,7 +832,7 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
             _tunable_warn("button_defs", "没有解析出有效按钮，已回退内置")
         rows = {scene: list(items) for scene, items in builtin.items()}
     # ⚠️ 这里**故意不做**「某个场景空了就回退内置」：站长要能把某个场景的按钮全删掉
-    #（v1.17.0 起）。整表解析失败时上面已经整体回退，所以不会出现「配置写坏 -> 全没按钮」。
+    #（v1.18.0 起）。整表解析失败时上面已经整体回退，所以不会出现「配置写坏 -> 全没按钮」。
     # 想连「继承父场景」也断掉，就把场景名写进 button_empty_scenes。
     rows = CALC._apply_button_style_policy(rows, BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE)
     BUTTONS.clear()
@@ -2290,6 +2292,7 @@ class FishingPlugin(
     getattr(INTERACTIONS, "InteractionsMixin", _MissingMixin),
     getattr(ENGINE, "EngineMixin", _MissingMixin),
     getattr(EDITOR_BRIDGE, "EditorBridgeMixin", _MissingMixin),
+    getattr(LEGACY, "LegacyDataMixin", _MissingMixin),
 ):
     """QQ 群钓鱼小游戏插件。"""
 
@@ -4094,7 +4097,7 @@ class FishingPlugin(
 
         `content_auto_merge` 只补**缺的**行，改过的默认行永远到不了老配置
         （洗髓丹就是活例子：它的效果写的是旧别名 ``quality_up``，和锦鲤玉佩重复，
-        v1.17.0 给它换了新效果，但站长配置里那一行不会自己变）。
+        v1.18.0 给它换了新效果，但站长配置里那一行不会自己变）。
         所以官方改一行时，在 ``_game_data.CONTENT_ROW_FIXES`` 里登记
         「旧整行 -> 新整行」：只有配置里那一行**逐字等于旧默认**才替换 ——
         站长自己动过的行一律不碰。
@@ -4275,6 +4278,8 @@ SIBLING_MODULES: tuple[Any, ...] = tuple(
         # 存档模块也接进注入链：它内部的告警/调试日志要靠注入进来的 logger
         # 才能进 AstrBot 日志（拿不到就静默降级，不影响存档功能）
         BACKUP_MODULE,
+        # 旧作用域找回：要用注入进来的 logger 报「打不开库」这类情况
+        LEGACY,
     )
     if module is not None
 )

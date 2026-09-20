@@ -728,7 +728,7 @@ story|{label}|/钓鱼 事件 {n}|default"""
 #
 # 格式：(配置键, 旧整行, 新整行)
 CONTENT_ROW_FIXES: list[tuple[str, str, str]] = [
-    # v1.17.0：洗髓丹原来写的是旧别名 quality_up（= 锦鲤玉佩的手气 buff），
+    # v1.18.0：洗髓丹原来写的是旧别名 quality_up（= 锦鲤玉佩的手气 buff），
     # 等于花钱买了个重复道具。现在改成它自己的效果：重掷个体品质。
     (
         "item_defs",
