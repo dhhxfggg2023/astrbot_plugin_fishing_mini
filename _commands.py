@@ -2228,38 +2228,68 @@ class CommandsMixin:
                     return
                 rolls = max(1, min(50, int(round(_safe_number(effects.get("quality_reroll"), 1.0)))))
                 weights = list(self.cfg.get("quality_weights") or [])
+                # 神话：只能在洗髓时靠这个概率命中（自然上钩的权重是 0）
+                myth_chance = _clamp(
+                    _safe_number(self.cfg.get("quality_myth_chance"), 0.0025), 0.0, 1.0
+                )
+                myth_name, myth_low, myth_high = (
+                    QUALITY_TIERS[-1][0], QUALITY_TIERS[-1][1], QUALITY_TIERS[-1][2]
+                )
+                today = self._today_text()
+                cap = _reroll_daily_cap(self.cfg)
                 lines = []
                 used = 0
                 best_gain = 0
+                averse: list[int] = []
                 for idx in picked:
                     if _safe_int(items.get(item_id), 0, 0) <= 0:
                         break
                     instance = reroll_tank[idx - 1]
+                    # 今天吃腻了（达到每日上限）：跳过，并告诉玩家明天再来
+                    if _reroll_averse(instance, self.cfg, today):
+                        averse.append(idx)
+                        continue
                     before_mult = _safe_number(instance.get("quality_mult"), 1.0)
                     before_label = str(instance.get("quality") or "")
                     before_value = _instance_value(instance)
                     best = before_mult
+                    hit_myth = False
                     for _ in range(rolls):
+                        if myth_chance > 0 and random.random() < myth_chance:
+                            best = max(best, random.uniform(myth_low, myth_high))
+                            hit_myth = True
+                            break          # 出了神话就不用再掷了
                         best = max(best, _roll_quality_mult(weights))
                     items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                     used += 1
+                    eaten = _reroll_used(instance, today) + 1
+                    _reroll_mark(instance, today, eaten)
+                    tail = f"　今天 {eaten}/{cap}" if cap > 0 else f"　今天 {eaten}"
                     if best > before_mult + 1e-9:
                         new_label, new_value = _apply_quality(instance, best)
                         best_gain = max(best_gain, new_value - before_value)
                         lines.append(
                             f"　{idx}. {_fish_name(instance.get('fish_id', ''))} "
                             f"{before_label} → {new_label}"
-                            f"（估值 {_fmt_gold(before_value)} → {_fmt_gold(new_value)}）"
+                            f"（估值 {_fmt_gold(before_value)} → {_fmt_gold(new_value)}）{tail}"
                         )
+                        if hit_myth and new_label == myth_name:
+                            lines.append(f"　　🌟 洗出{myth_name}了！这条鱼脱胎换骨")
                     else:
                         lines.append(
                             f"　{idx}. {_fish_name(instance.get('fish_id', ''))} "
-                            f"这颗丹没洗出更好的（保持 {before_label}）"
+                            f"这颗丹没洗出更好的（保持 {before_label}）{tail}"
                         )
                 if used <= 0:
-                    async for _r in self._say_msg(event, "item.reroll_failed", event.plain_result(
-                            "🔮 没能用出去\n" + "\n".join(lines or ["　（没有可用目标）"])
-                        )):
+                    if averse:
+                        text = (
+                            f"🤢 栏位 {'、'.join(str(i) for i in averse)} "
+                            f"今天已经吃满 {cap} 颗洗髓丹了，闻着就烦（厌恶）\n"
+                            "　明天再洗吧；上限可在编辑器「⚙️ 数值」页改（reroll_daily_limit）"
+                        )
+                    else:
+                        text = "🔮 没能用出去\n" + "\n".join(lines or ["　（没有可用目标）"])
+                    async for _r in self._say_msg(event, "item.reroll_failed", event.plain_result(text)):
                         yield _r
                     return
                 saved = await self._save_player(player)
@@ -2267,6 +2297,11 @@ class CommandsMixin:
                     f"🔮 {self._item_label(item_id)} ×{used}",
                     f"　剩余道具 {_safe_int(items.get(item_id), 0, 0)}",
                 ]
+                if averse:
+                    head.append(
+                        f"　（跳过今天已吃满的栏位 {len(averse)} 条，"
+                        f"它们现在对洗髓丹「厌恶」）"
+                    )
                 if not saved:
                     head.append("⚠️ 保存失败")
                 async for _r in self._say_msg(event, "item.reroll_done", event.plain_result("\n".join(head + lines[:6]))):

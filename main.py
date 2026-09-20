@@ -23,10 +23,13 @@
    钓到的那一刻就定了，任何道具都改不了，决定基础价值区间与稀有度。
 
 2. **个体品质（可提升）**
-   ⚪普通 🟢优良 🔵稀有 🟣极品 🌟传说，共 5 档，
+   ⚪普通 🟢优良 🔵稀有 🟣极品 🌟传说 🔱神话，共 6 档，
    由「品质加成倍率 quality_mult」决定，影响售价倍率。
    投喂饲料不会改变它（饲料只加个体数值），
    但「锦鲤玉佩」可以提高掷出好个体的概率——所以个体是可以养出来的。
+   **神话**是例外：自然上钩永远掷不到（quality_weights 里权重 0），
+   只能靠洗髓丹洗出来（概率 quality_myth_chance，默认每次重掷 0.25%）；
+   同一条鱼每天最多吃 reroll_daily_limit 颗（默认 3），吃满当天会「厌恶」。
 
 【个体三维数值】
    肉质 meat / 灵性 spirit / 光泽 sheen，0~100，钓上来时按鱼种品质随机生成。
@@ -273,7 +276,12 @@ DEFAULTS: dict[str, Any] = {
     "edge_escape_factor": 1.6,
     "rarity_escape_chance": "传说:0.30,神话:0.42",
     "feed_max_uses": 10,
-    "quality_weights": [44, 28, 16, 9, 3],
+    "quality_weights": [44, 28, 16, 9, 3, 0],
+    # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复；0 = 不限）
+    "reroll_daily_limit": 3,
+    # 洗髓丹洗出「神话」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
+    # 所以只能靠洗髓丹拿到，自然上钩永远不出（quality_weights 最后一位是 0）
+    "quality_myth_chance": 0.0025,
     "rarity_display_names": ["常见", "少见", "稀有", "传说", "神话"],
     "item_drop_chance": 0.14,
     "bottle_note_chance": 0.30,
@@ -374,7 +382,7 @@ DEFAULTS: dict[str, Any] = {
         "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
         "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
         "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
-        "pill_quality|洗髓丹|🔮|500|重掷这条鱼的个体品质，取更好的那次（不影响三维）|quality_reroll=3",
+        "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神话」|quality_reroll=3",
         "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
         "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
     ],
@@ -393,7 +401,7 @@ DEFAULTS: dict[str, Any] = {
     "attr_labels": "meat:肉质,spirit:灵性,sheen:光泽",
     "attr_par": 60.0,
     # 个体品质档位（名称:下限-上限:emoji，从低到高）
-    "quality_tiers": "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑",
+    "quality_tiers": "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑,神话:4.0-6.0:🔱",
     # 上钩率解析失败时的兜底值、未列出品质的默认逃脱率
     "hook_rate_fallback": 0.30,
     "default_escape_rate": 0.25,
@@ -1839,7 +1847,9 @@ EVENT_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in RANDOM_EVENTS}
 
 
 # =============================================================================
-# 四、个体品质（5 档，可提升）
+# 四、个体品质（6 档，可提升）
+#    普通 → 优良 → 稀有 → 极品 → 传说 → **神话**
+#    神话只能靠洗髓丹洗出来（自然上钩的权重是 0），概率见 quality_myth_chance
 # =============================================================================
 #
 # 名称, 加成下限, 加成上限, emoji
@@ -1850,6 +1860,8 @@ QUALITY_TIERS: list[tuple[str, float, float, str]] = [
     ("稀有", 1.35, 1.80, "🔵"),
     ("极品", 1.80, 2.50, "🟣"),
     ("传说", 2.50, 4.00, "🌟"),
+    # 神话：自然上钩永远不出（quality_weights 最后一位 0），只能靠洗髓丹洗出来
+    ("神话", 4.00, 6.00, "🔱"),
 ]
 QUALITY_ORDER = [name for name, _, _, _ in QUALITY_TIERS]
 QUALITY_RANK = {name: idx for idx, name in enumerate(QUALITY_ORDER)}
@@ -2213,15 +2225,25 @@ def _roll_quality_mult(
     """掷个体品质倍率。幸运值把分布往高品质推。
 
     weights 支持通过插件配置调整（quality_weights）。
+
+    ⚠️ **权重为 0 的档位永远掷不到** —— v1.18.7 起「神话」就是靠这条做到
+    「只能洗髓丹洗出来」：它在 quality_weights 里排最后、权重 0，
+    而运气再高也只会推到**最后一个有权重的档**（不能把 0 权重档当成默认档）。
     """
     if not weights or sum(weights) <= 0:
         weights = list(DEFAULTS["quality_weights"])
     total = sum(weights)
     luck = _clamp(float(bait_luck) + float(extra_luck), 0.0, 1.0)
     point = random.random() * total + luck * total * 0.9
-    idx = len(weights) - 1
+    # 默认落在「最后一个有权重的档」——不是最后一个档（否则会出现 0 权重档）
+    idx = max(
+        (i for i, weight in enumerate(weights) if weight > 0),
+        default=0,
+    )
     cumulative = 0.0
     for i, weight in enumerate(weights):
+        if weight <= 0:
+            continue                     # 0 权重 = 自然上钩永远不出这一档
         cumulative += weight
         if point < cumulative:
             idx = i

@@ -378,6 +378,9 @@ class ViewsMixin:
         best = None
         # 收益按「每条鱼各自在缸里的时间」算（v1.18.0）：标一下还没开始产出的鱼
         pending = 0
+        # 洗髓丹：今天吃了几颗 / 是不是已经厌恶（只标有记录的，没洗过的不占版面）
+        reroll_cap = _reroll_daily_cap(self.cfg)
+        today = self._today_text()
         for idx, instance in enumerate(aquarium, start=1):
             value = _instance_value(instance)
             total += value
@@ -385,6 +388,12 @@ class ViewsMixin:
                 best = instance
             feed = _safe_int(instance.get("feed_uses"), 0, 0)
             extra = f" 喂{feed}" if feed else ""
+            rolled = _reroll_used(instance, today)
+            if rolled:
+                if reroll_cap > 0 and rolled >= reroll_cap:
+                    extra += f"　🔮{rolled}/{reroll_cap} 🤢厌恶"
+                else:
+                    extra += f"　🔮{rolled}" + (f"/{reroll_cap}" if reroll_cap > 0 else "")
             shown = _tank_display_seconds(instance, now_ts)
             if shown < 60:
                 pending += 1
@@ -559,7 +568,7 @@ class ViewsMixin:
                     "　/钓鱼 取 1　　　　 取回来",
                     "　/钓鱼 领　　　　　 领挂机收益（鱼在缸里待得越久越多）",
                     "　/钓鱼 喂 高级饲料 1　投喂：涨三维、直接涨价",
-                    "　/钓鱼 洗 2　　　　 用洗髓丹重掷第 2 条的个体品质",
+                    "　/钓鱼 洗 2　　　　 洗髓丹：重掷第 2 条的个体品质（极小概率洗出神话）",
                     "　/钓鱼 用 珊瑚造景　 摆装饰：72 小时内挂机产出 +20%",
                     "　/钓鱼 水族馆 扩建　 花金币扩容鱼缸",
                 ],
@@ -604,7 +613,7 @@ class ViewsMixin:
                     item_lines
                     + [
                         "　/钓鱼 喂 <饲料> 1　投喂（三维永久上涨）",
-                        "　/钓鱼 洗 1　　　　 洗髓丹：重掷个体品质",
+                        "　/钓鱼 洗 1　　　　 洗髓丹：重掷个体品质，极小概率出「神话」",
                         "　/钓鱼 用 珊瑚造景　摆装饰：挂机产出 +20%",
                         f"　图鉴 {len(FISH_POOL)} 种　成就 {len(ACHIEVEMENTS)} 个",
                     ],

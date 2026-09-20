@@ -176,15 +176,28 @@
   },
   "quality_weights": {
     "invisible": true,
-    "description": "五档个体品质的出现权重（普通,优良,稀有,极品,传说）",
+    "description": "六档个体品质的出现权重（普通,优良,稀有,极品,传说,神话）。最后一位是「神话」——留 0 就是自然上钩永远不出，只能靠洗髓丹洗出来",
     "type": "list",
     "default": [
       44,
       28,
       16,
       9,
-      3
+      3,
+      0
     ]
+  },
+  "reroll_daily_limit": {
+    "invisible": true,
+    "description": "洗髓丹：同一条鱼每天最多吃几颗。吃满当天它就对洗髓丹「厌恶」，拒绝再吃，第二天自动恢复（0 = 不限）。推荐 3，和「洗髓出神话的概率」一起决定神话的产出速度",
+    "type": "int",
+    "default": 3
+  },
+  "quality_myth_chance": {
+    "invisible": true,
+    "description": "洗髓丹洗出「神话」的概率 —— 每次重掷独立判定（一颗丹默认重掷 3 次）。推荐 0.0025（= 0.25%/次，一颗丹约 0.75%）；填 0 = 永远洗不出神话。自然上钩出不了神话，只能靠洗髓丹",
+    "type": "float",
+    "default": 0.0025
   },
   "rarity_display_names": {
     "invisible": true,
@@ -390,7 +403,7 @@
       "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
       "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
       "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
-      "pill_quality|洗髓丹|🔮|500|重掷这条鱼的个体品质，取更好的那次（不影响三维）|quality_reroll=3",
+      "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神话」|quality_reroll=3",
       "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
       "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20"
     ]
@@ -620,9 +633,9 @@
   },
   "quality_tiers": {
     "invisible": true,
-    "description": "个体品质档位（格式：名称:下限-上限:emoji，逗号分隔，从低到高）",
+    "description": "个体品质档位（格式：名称:下限-上限:emoji，逗号分隔，从低到高）。最后一档是「神话」，它只能靠洗髓丹洗出来（权重为 0）",
     "type": "string",
-    "default": "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑"
+    "default": "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑,神话:4.0-6.0:🔱"
   },
   "hook_rate_fallback": {
     "invisible": true,

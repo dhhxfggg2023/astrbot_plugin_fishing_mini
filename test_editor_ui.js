@@ -794,6 +794,35 @@ async function channelHelpers() {
   T.cancelEdit();
   T.state.data.numbers = before;
 
+  /* ---- 神话：洗髓丹那组数值也要「算给你看」 ---- */
+  console.log("  ── 🔱 数值页：洗髓丹 / 神话概率 ──");
+  const numKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
+  check(numKeys.indexOf("reroll_daily_limit") >= 0 && numKeys.indexOf("quality_myth_chance") >= 0,
+    "「洗髓丹每日上限」「洗髓出神话的概率」都在数值页里");
+  check(String(T.NUMBER_KEYS.filter(function (x) { return x[0] === "quality_weights"; })[0][2])
+    .indexOf("6") === 0,
+    "个体品质权重那行标成「6 个数」");
+  const beforeMyth = T.state.data.numbers;
+  T.state.data.numbers = [
+    { key: "quality_myth_chance", label: "洗髓出神话的概率", value: 0.0025, unit: "每次重掷", text: false },
+    { key: "reroll_daily_limit", label: "洗髓丹每日上限", value: 3, unit: "颗/鱼", text: false }
+  ];
+  const mythHint = T.numberLiveHint({ key: "quality_myth_chance" });
+  check(mythHint.indexOf("num-hint") > 0 && mythHint.indexOf("0.25%") > 0
+    && mythHint.indexOf("0.75%") > 0,
+    "提示算出了「一次重掷 0.25% / 一颗丹 0.75%」", mythHint.slice(0, 70));
+  check(/大约 <b>[\d,]+<\/b> 颗丹/.test(mythHint) && mythHint.indexOf("一半概率") > 0,
+    "还给出「大概多少颗丹 / 多少天能有一半概率出神话」");
+  check(T.numberLiveHint({ key: "reroll_daily_limit" }).indexOf("num-hint") > 0,
+    "每日上限那一行也显示同一份计算结果");
+  T.state.data.numbers = [
+    { key: "quality_myth_chance", label: "洗髓出神话的概率", value: 0, unit: "每次重掷", text: false },
+    { key: "reroll_daily_limit", label: "洗髓丹每日上限", value: 3, unit: "颗/鱼", text: false }
+  ];
+  check(T.numberLiveHint({ key: "quality_myth_chance" }).indexOf("永远洗不出神话") > 0,
+    "概率填 0 时提示「永远洗不出神话」");
+  T.state.data.numbers = beforeMyth;
+
   // editor_status 解析
   check(T.parseEditorStatus({ editor_status: { ok: true } }).ok === true, "editor_status 已是对象时直接用");
   check(T.parseEditorStatus({ editor_status: '{"ok":false,"snapshots":[]}' }).ok === false,

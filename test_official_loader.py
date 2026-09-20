@@ -130,8 +130,8 @@ try:
     check(len(plugin.aquarium_slots) == 3, f"扩建栏位解析 {len(plugin.aquarium_slots)} 个")
     check(plugin.escape_map.get("神话", 0) > 0, f"逃脱率表解析 -> {plugin.escape_map}")
     check(
-        plugin.cfg["quality_weights"] == [44, 28, 16, 9, 3],
-        f"品质权重 -> {plugin.cfg['quality_weights']}",
+        plugin.cfg["quality_weights"] == [44, 28, 16, 9, 3, 0],
+        f"品质权重（6 档，最后一位 0 = 神话只能洗出来）-> {plugin.cfg['quality_weights']}",
     )
     check(
         isinstance(plugin.cfg["initial_gold"], int)

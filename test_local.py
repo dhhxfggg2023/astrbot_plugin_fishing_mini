@@ -4514,7 +4514,7 @@ async def main():
     p_num.config["value_variance"] = mod.DEFAULTS["value_variance"]
     p_num._refresh_config()
     check(
-        mod.QUALITY_ORDER == ["普通", "优良", "稀有", "极品", "传说"],
+        mod.QUALITY_ORDER == ["普通", "优良", "稀有", "极品", "传说", "神话"],
         f"恢复默认后档位复原 -> {mod.QUALITY_ORDER}",
     )
 
@@ -5304,13 +5304,14 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 106,
+        len(_schema) == 108,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
         f" + v1.13.0 的 button_style_mode/button_default_style"
         f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden"
-        f" + v1.18.0 的 button_empty_scenes；aquarium_bonus* 两项已在 v1.18.0 删掉）",
+        f" + v1.18.0 的 button_empty_scenes"
+        f" + v1.18.7 的 reroll_daily_limit/quality_myth_chance；aquarium_bonus* 两项已在 v1.18.0 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -5318,7 +5319,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 103, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 105, f"其余 {len(_hidden)} 项全部 invisible")
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
@@ -5695,6 +5696,168 @@ async def main():
     check(
         abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("buff_quality"), 0) - 0.30) < 1e-9,
         "锦鲤玉佩 buff_quality=0.30（对钓手生效）",
+    )
+
+    # --- 个体品质新增「神话」：只能洗髓丹洗出来（v1.18.7）---
+    print("\n[10r] 神话个体品质：自然洗不出、只能洗髓丹洗、每条鱼每天 3 颗")
+    check(
+        mod.QUALITY_ORDER[-1] == "神话" and len(mod.QUALITY_TIERS) == 6,
+        f"个体品质 6 档，最高是神话 -> {mod.QUALITY_ORDER}",
+    )
+    check(
+        mod.QUALITY_TIERS[-1][1] >= 4.0 and mod.QUALITY_EMOJI.get("神话") == "🔱",
+        f"神话档区间与 emoji -> {mod.QUALITY_TIERS[-1]}",
+    )
+    check(
+        len(cfg_r["quality_weights"]) == 6 and cfg_r["quality_weights"][-1] == 0,
+        f"神话的自然权重是 0 -> {cfg_r['quality_weights']}",
+    )
+    # 自然上钩：运气拉满也掷不到神话（旧写法会把「运气爆棚」落到最后一个档）
+    seen = set()
+    for _ in range(4000):
+        seen.add(mod._quality_label(mod._roll_quality_mult(cfg_r["quality_weights"], extra_luck=1.0))[0])
+    check(
+        "神话" not in seen,
+        f"4000 次「运气拉满」的自然掷品质里没有神话 -> {sorted(seen)}",
+    )
+    check(
+        mod._quality_ceil() >= 6.0,
+        f"倍率钳制上限跟着最高档走（神话 6.0 不会被削）-> {mod._quality_ceil()}",
+    )
+    myth_inst = mod._new_instance("carp", 1.0)
+    mod._apply_quality(myth_inst, 5.5)
+    check(
+        myth_inst["quality"] == "神话" and abs(myth_inst["quality_mult"] - 5.5) < 1e-9,
+        f"5.5 倍率落在神话档且不被截断 -> {myth_inst['quality']} {myth_inst['quality_mult']}",
+    )
+
+    # 洗髓丹：概率拉到 1 = 必出神话（验证「洗得出来」这条链路）
+    cfg_myth = dict(cfg_r, quality_myth_chance=1.0, easter_egg_chance=0.0)
+    plugin_m = make_plugin(cfg_myth)
+    p_m = await plugin_m._load_player("96006")
+    p_m["items"]["pill_quality"] = 5
+    p_m["aquarium"] = [mod._new_instance("carp", 1.0, value_override=100)]
+    await plugin_m._save_player(p_m)
+    out = text_of(await cmd(plugin_m, FakeEvent("96006"), "洗", "1"))
+    p_m = await plugin_m._load_player("96006")
+    got = p_m["aquarium"][0]
+    check(
+        got["quality"] == "神话",
+        f"quality_myth_chance=1 时洗出神话 -> {got['quality']}（{got['quality_mult']}）",
+    )
+    check("神话" in out and "脱胎换骨" in out, f"洗出神话有专门提示 -> {out.strip()[:60]}")
+    check("今天 1/3" in out, f"提示里带上「今天几颗」-> {[l for l in out.splitlines() if '今天' in l][:1]}")
+    check(
+        mod._reroll_used(got, plugin_m._today_text()) == 1,
+        f"这条鱼今天记了 1 颗 -> {got.get('reroll_today')}",
+    )
+
+    # 每天上限：默认 3 颗，第 4 颗被拒且「厌恶」
+    for i in range(2, 4):
+        await cmd(plugin_m, FakeEvent("96006"), "洗", "1")
+    p_m = await plugin_m._load_player("96006")
+    check(
+        mod._reroll_used(p_m["aquarium"][0], plugin_m._today_text()) == 3,
+        f"连洗 3 颗都记上了 -> {p_m['aquarium'][0].get('reroll_today')}",
+    )
+    check(
+        mod._reroll_averse(p_m["aquarium"][0], cfg_myth, plugin_m._today_text()),
+        "第 3 颗之后进入「厌恶」",
+    )
+    before_pills = mod._safe_int(p_m["items"].get("pill_quality"), 0, 0)
+    out = text_of(await cmd(plugin_m, FakeEvent("96006"), "洗", "1"))
+    p_m = await plugin_m._load_player("96006")
+    check(
+        "厌恶" in out and "明天" in out,
+        f"第 4 颗被拒并说明「厌恶、明天再来」-> {out.strip()[:70]}",
+    )
+    check(
+        mod._safe_int(p_m["items"].get("pill_quality"), 0, 0) == before_pills,
+        "被拒时**不扣**洗髓丹",
+    )
+    # 水族馆列表上标出来
+    tank_view = plugin_m._aquarium_view(p_m)
+    check("🤢厌恶" in tank_view and "🔮3/3" in tank_view,
+        f"水族馆里标了「今天 3/3 + 厌恶」-> {[l for l in tank_view.splitlines() if '🔮' in l][:1]}")
+    # 跨天自动恢复
+    p_m["aquarium"][0]["reroll_day"] = "2000-01-01"
+    await plugin_m._save_player(p_m)
+    out = text_of(await cmd(plugin_m, FakeEvent("96006"), "洗", "1"))
+    p_m = await plugin_m._load_player("96006")
+    check(
+        mod._reroll_used(p_m["aquarium"][0], plugin_m._today_text()) == 1
+        and "厌恶" not in out,
+        f"换一天就能接着吃（次数自动归零）-> {p_m['aquarium'][0].get('reroll_today')}",
+    )
+
+    # 上限可配：改成 1 → 第二颗就被拒；0 = 不限
+    plugin_cap = make_plugin(dict(cfg_myth, reroll_daily_limit=1))
+    p_c = await plugin_cap._load_player("96007")
+    p_c["items"]["pill_quality"] = 5
+    p_c["aquarium"] = [mod._new_instance("carp", 1.1, value_override=100)]
+    await plugin_cap._save_player(p_c)
+    await cmd(plugin_cap, FakeEvent("96007"), "洗", "1")
+    out = text_of(await cmd(plugin_cap, FakeEvent("96007"), "洗", "1"))
+    p_c = await plugin_cap._load_player("96007")
+    check("厌恶" in out, f"reroll_daily_limit=1 时第二颗就被拒 -> {out.strip()[:50]}")
+    check(
+        mod._safe_int(p_c["items"].get("pill_quality"), 0, 0) == 4,
+        f"只扣了 1 颗 -> {p_c['items'].get('pill_quality')}",
+    )
+    plugin_free = make_plugin(dict(cfg_myth, reroll_daily_limit=0))
+    p_f = await plugin_free._load_player("96008")
+    p_f["items"]["pill_quality"] = 5
+    p_f["aquarium"] = [mod._new_instance("carp", 1.1, value_override=100)]
+    await plugin_free._save_player(p_f)
+    for _ in range(4):
+        await cmd(plugin_free, FakeEvent("96008"), "洗", "1")
+    p_f = await plugin_free._load_player("96008")
+    check(
+        mod._safe_int(p_f["aquarium"][0].get("reroll_today"), 0, 0) == 4
+        and mod._safe_int(p_f["items"].get("pill_quality"), 0, 0) == 1,
+        "reroll_daily_limit=0 = 不限：连吃 4 颗都让吃",
+    )
+    # 概率可配：填 0 = 永远洗不出神话
+    plugin_nomyth = make_plugin(dict(cfg_r, quality_myth_chance=0.0, easter_egg_chance=0.0))
+    p_n = await plugin_nomyth._load_player("96009")
+    p_n["items"]["pill_quality"] = 3
+    p_n["aquarium"] = [mod._new_instance("carp", 1.0, value_override=100)]
+    await plugin_nomyth._save_player(p_n)
+    for _ in range(3):
+        await cmd(plugin_nomyth, FakeEvent("96009"), "洗", "1")
+    p_n = await plugin_nomyth._load_player("96009")
+    check(
+        p_n["aquarium"][0]["quality"] != "神话",
+        f"quality_myth_chance=0 时洗不出神话 -> {p_n['aquarium'][0]['quality']}",
+    )
+    # 老存档：鱼实例没有 reroll_* 字段也不炸，且默认「不厌恶」
+    legacy_inst, _ = mod._repair_player(
+        {"gold": 1, "aquarium": [{"fish_id": "carp", "quality_mult": 1.2, "value": 100}]},
+        "96110",
+    )
+    lf = legacy_inst["aquarium"][0]
+    check(
+        lf.get("reroll_day") == "" and mod._safe_int(lf.get("reroll_today"), -1, 0) == 0,
+        f"老鱼补出 reroll_day/reroll_today 默认值 -> {lf.get('reroll_day')!r}/{lf.get('reroll_today')}",
+    )
+    check(
+        not mod._reroll_averse(lf, cfg_r, plugin_r._today_text()),
+        "老鱼默认不是「厌恶」状态",
+    )
+    # 洗髓丹价格 + 官方行迁移
+    check(
+        mod._safe_int(plugin_r.items["pill_quality"].get("price"), 0, 0) == 1200,
+        f"洗髓丹价格 500 → 1200 -> {plugin_r.items['pill_quality'].get('price')}",
+    )
+    fix_cfg = dict(cfg_r)
+    fix_cfg["item_defs"] = [
+        "pill_quality|洗髓丹|🔮|500|重掷这条鱼的个体品质，取更好的那次（不影响三维）|quality_reroll=3"
+    ]
+    plugin_fix = make_plugin(fix_cfg)
+    check(
+        "|1200|" in str(plugin_fix.cfg["item_defs"][0])
+        and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 1200,
+        "老配置里那行没被改过 → 自动升级成新价（CONTENT_ROW_FIXES）",
     )
 
     # --- 效果键解析 ---

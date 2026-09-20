@@ -1059,7 +1059,7 @@ def _new_instance(
     if fish is None:
         return None
 
-    quality_mult = _clamp(float(quality_mult), 0.5, 5.0)
+    quality_mult = _clamp(float(quality_mult), 0.5, _quality_ceil())
     quality, _ = _quality_label(quality_mult)
 
     # 三维属性
@@ -1280,7 +1280,7 @@ def _apply_quality(instance: dict[str, Any], quality_mult: float) -> tuple[str, 
     所以洗髓只会让鱼更值钱，不会把别的加成洗掉。
     """
     gear = _ensure_gear_mult(instance)
-    quality_mult = _clamp(float(quality_mult), 0.5, 5.0)
+    quality_mult = _clamp(float(quality_mult), 0.5, _quality_ceil())
     instance["quality_mult"] = round(quality_mult, 4)
     label, _emoji = _quality_label(quality_mult)
     instance["quality"] = label
@@ -1361,6 +1361,46 @@ def _quality_label(multiplier: float) -> tuple[str, str]:
     bottom = QUALITY_TIERS[0]
     return bottom[0], bottom[3]
 
+
+def _quality_ceil() -> float:
+    """个体品质倍率的钳制上限 = **最高档的上限**（至少 5.0）。
+
+    站长可以往 ``quality_tiers`` 里加更高的档（例如「神话:4.0-6.0」），
+    钳制值必须跟着走，否则洗出来的倍率会在读档时被削回 5.0。
+    """
+    try:
+        return max(5.0, float(QUALITY_TIERS[-1][2]))
+    except Exception:  # pragma: no cover - 档位表被写坏时退回老上限
+        return 5.0
+
+
+# ---------------------------------------------------------------------------
+# 洗髓丹：每条鱼每天能吃几颗（吃满了当天就「厌恶」，第二天恢复）
+# ---------------------------------------------------------------------------
+
+def _reroll_daily_cap(cfg: dict[str, Any]) -> int:
+    """每条鱼每天最多吃几颗洗髓丹（``reroll_daily_limit``，0 = 不限）。"""
+    return max(0, _safe_int((cfg or {}).get("reroll_daily_limit"), 3, 0))
+
+
+def _reroll_used(instance: dict[str, Any], today: str) -> int:
+    """这条鱼**今天**已经吃了几颗洗髓丹（跨天自动归零，惰性结算）。"""
+    if str(instance.get("reroll_day") or "") != str(today or ""):
+        return 0
+    return max(0, _safe_int(instance.get("reroll_today"), 0, 0))
+
+
+def _reroll_mark(instance: dict[str, Any], today: str, used: int) -> None:
+    """记下「今天吃到第几颗」（跨天会自然作废，不用定时任务）。"""
+    instance["reroll_day"] = str(today or "")
+    instance["reroll_today"] = max(0, int(used))
+
+
+def _reroll_averse(instance: dict[str, Any], cfg: dict[str, Any], today: str) -> bool:
+    """今天是不是已经吃腻了（达到上限 -> 拒绝再喂，当天「厌恶」）。"""
+    cap = _reroll_daily_cap(cfg)
+    return cap > 0 and _reroll_used(instance, today) >= cap
+
 def _repair_instance(raw: Any) -> dict[str, Any] | None:
     """修复一条鱼实例；无法修复返回 None。"""
     if not isinstance(raw, dict):
@@ -1373,7 +1413,7 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
     if not isinstance(instance_id, str) or not instance_id:
         instance_id = uuid.uuid4().hex[:10]
 
-    quality_mult = _clamp(_safe_number(raw.get("quality_mult"), 1.0), 0.5, 5.0)
+    quality_mult = _clamp(_safe_number(raw.get("quality_mult"), 1.0), 0.5, _quality_ceil())
     quality, _ = _quality_label(quality_mult)
 
     # 三维：老数据没有，就按品质区间中值补一个（保证价格合理）
@@ -1422,6 +1462,10 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "attrs": attrs,
         "feed_uses": _safe_int(raw.get("feed_uses"), 0, 0),
         "feed_bonus": int(_clamp(_safe_int(raw.get("feed_bonus"), 0, 0), 0, 20)),
+        # 洗髓丹的「今天吃了几颗」：跨天自动作废（只记日期 + 次数，不需要定时任务）
+        # ⚠️ 同样必须列在白名单里，否则每次读档都把当天次数清零，限制就失效了
+        "reroll_day": str(raw.get("reroll_day") or ""),
+        "reroll_today": max(0, _safe_int(raw.get("reroll_today"), 0, 0)),
         "live_bonus": live_bonus,
         "locked": bool(raw.get("locked")),
         # ⚠️ 必须列出来：_repair_instance 是白名单式重建，漏掉就等于每次读档把

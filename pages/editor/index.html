@@ -1641,8 +1641,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["rarity_display_names", "品质显示名", "5 个名字", "图鉴/背包上显示的名字（顺序 = 常见到神话；改了记得同步「数值」里其它按品质写的表）", true, "稀有度"],
     ["tier_base_values", "各钓点基准价", "16 个数", "从第一个钓点到最后一个钓点的基准价倍数", true, "稀有度"],
     ["value_variance", "个体差异范围", "低-高", "同一条鱼每条之间的价格浮动", true, "稀有度"],
-    ["quality_weights", "个体品质权重", "5 个数", "普通/优良/稀有/极品/传说的出现权重", true, "稀有度"],
-    ["quality_tiers", "个体品质档位", "档位表", "名字:倍率下限-上限:表情，例如 普通:0.8-1.0:⚪", true, "稀有度"],
+    ["quality_weights", "个体品质权重", "6 个数", "普通/优良/稀有/极品/传说/神话 的出现权重。最后一位留 0 = 自然上钩永远不出神话（只能靠洗髓丹洗出来）", true, "稀有度"],
+    ["quality_tiers", "个体品质档位", "档位表", "名字:倍率下限-上限:表情，例如 普通:0.8-1.0:⚪；最后一档「神话」只能靠洗髓丹洗出来", true, "稀有度"],
+    ["reroll_daily_limit", "洗髓丹每日上限", "颗/鱼", "同一条鱼每天最多吃几颗洗髓丹；吃满当天它就对洗髓丹「厌恶」，第二天自动恢复（0 = 不限）", false, "稀有度"],
+    ["quality_myth_chance", "洗髓出神话的概率", "每次重掷", "每次重掷独立判定（一颗丹默认重掷 3 次）；0.0025 = 0.25%/次，填 0 = 永远洗不出", false, "稀有度"],
     ["attr_weights", "三维权重", "键:权重", "计算鱼价时肉质/灵性/光泽各占多少", true, "稀有度"],
     ["attr_labels", "三维显示名", "键:名字", "背包/图鉴里显示的名字（meat:肉质 这种）", true, "稀有度"],
     ["attr_par", "三维及格线", "分", "低于它按它算，避免小鱼卖成负数", false, "稀有度"],
@@ -3351,7 +3353,37 @@ table.grid td.actions .btn { vertical-align: middle; }
     if (row.key === "level_xp_base" || row.key === "level_xp_ratio" || row.key === "level_xp_growth") {
       return levelCurveHint(row);
     }
+    if (row.key === "quality_myth_chance" || row.key === "reroll_daily_limit") {
+      return mythChanceHint(row);
+    }
     return "";
+  }
+
+  /**
+   * 洗髓丹那一组数值「算给你看」：一次重掷的概率 → 一颗丹 → 每天每条鱼 →
+   * 攒到「大概率出一条神话」需要多少颗 / 多少天（站长最想知道的就是这个）。
+   */
+  function mythChanceHint(row) {
+    var chance = numberRowValue("quality_myth_chance");
+    var cap = numberRowValue("reroll_daily_limit");
+    if (!(chance >= 0) || !(cap >= 0)) return "";
+    var rolls = 3;                       // 一颗丹默认重掷 3 次（道具表里可改）
+    var perPill = 1 - Math.pow(1 - chance, rolls);
+    var perDay = cap > 0 ? 1 - Math.pow(1 - perPill, cap) : NaN;
+    function pct(x) { return (x * 100).toFixed(x * 100 >= 10 ? 0 : 2) + "%"; }
+    var out = '<div class="num-hint">🎲 一次重掷 <b>' + pct(chance) + "</b>　·　" +
+      "一颗丹（重掷 " + rolls + " 次）<b>" + pct(perPill) + "</b>";
+    if (cap > 0) {
+      out += "　·　一条鱼一天吃满 " + cap + " 颗 <b>" + pct(perDay) + "</b>";
+      var days = perDay > 0 ? Math.ceil(Math.log(0.5) / Math.log(1 - perDay)) : Infinity;
+      var pills = perPill > 0 ? Math.ceil(Math.log(0.5) / Math.log(1 - perPill)) : Infinity;
+      out += '<div class="num-hint">📅 期望值：大约 <b>' + fmtNum(pills) + "</b> 颗丹 / <b>" +
+        (isFinite(days) ? fmtNum(days) : "∞") + "</b> 天（同一条鱼每天喂满）能有一半概率洗出一条神话" +
+        (chance === 0 ? "　—— 现在是 0，永远洗不出神话" : "") + "</div>";
+    } else {
+      out += '<div class="num-hint">📅 现在「每日上限」是 0 = 不限；填个 3 就能看到「一天最多几颗、大概多久出一条神话」</div>';
+    }
+    return out;
   }
 
   function cellHtml(tab, col, row, index) {
