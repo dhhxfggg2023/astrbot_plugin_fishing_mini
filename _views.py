@@ -276,15 +276,25 @@ class ViewsMixin:
     def _buff_status_line(self, player: dict[str, Any]) -> str:
         """钓手手气的当前状态（一行；没有就返回空串）。
 
-        锦鲤玉佩是「持续 N 竿」的 buff，玩家最想知道的是**还剩几竿** ——
-        v1.18.0 起档案和每一条上鱼结果里都会明确写出来。
+        * 锦鲤玉佩（持续 N 竿）：玩家最想知道**还剩几竿** —— v1.18.0 起明确写出来
+        * 一次性手气（插曲/彩蛋）：写着「一次性」，下一竿用完就消失
+        * 两者**不叠加**：同时有时取较高的那个（v1.18.5 修的，写清楚免得玩家算不明白）
         """
         left = _safe_int(player.get("buff_casts_left"), 0, 0)
-        luck = _safe_number(player.get("luck_charges"), 0.0)
+        once = _safe_number(player.get("luck_charges"), 0.0)
+        buff = _safe_number(player.get("buff_quality"), 0.0) if left > 0 else 0.0
+        if left > 0 and buff > 0:
+            line = f"🎐 锦鲤玉佩：手气 +{buff:.0%}　还剩 {left} 竿"
+            if once > buff:
+                line += f"　🔮 另有一次性 +{once:.0%}（下一竿取较高的）"
+            elif once > 0:
+                line += f"　🔮 一次性 +{once:.0%} 更低，不叠加"
+            return line
         if left > 0:
-            return f"🎐 锦鲤玉佩：手气 +{luck:.0%}　还剩 {left} 竿"
-        if luck > 0:
-            return f"🔮 下一竿手气 +{luck:.0%}（一次性）"
+            # 只有竿数没有数值（异常存档）：别显示成「+0%」，直接不提手气
+            return f"🎐 锦鲤玉佩：还剩 {left} 竿"
+        if once > 0:
+            return f"🔮 下一竿手气 +{once:.0%}（一次性）"
         return ""
 
     def _format_result(

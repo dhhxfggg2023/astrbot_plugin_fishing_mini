@@ -179,7 +179,10 @@ class _Stub:
 _player = {"luck_charges": 0.2, "items": {"x": 1}}
 _lines = FX.apply_extension_effects(_Stub(), _player, "x", {"lucky_token": 0.3, "meat": 5})
 check(len(_lines) == 1 and "幸运符" in _lines[0], f"有处理函数的扩展键被调用：{_lines}")
-check(abs(_player["luck_charges"] - 0.5) < 1e-9, f"处理函数能改玩家数据：{_player['luck_charges']}")
+check(abs(_player["buff_quality"] - 0.3) < 1e-9,
+    f"持续型手气写进 buff_quality（不是一次性的 luck_charges）：{_player['buff_quality']}")
+check(_player["luck_charges"] == 0.2,
+    "扩展的持续型效果不动一次性储备（两套字段各管各的）")
 check(_player["buff_casts_left"] == 12, "处理函数能复用插件已有字段（buff_casts_left）")
 check(
     FX.apply_extension_effects(_Stub(), _player, "x", {"meat": 5}) == [],

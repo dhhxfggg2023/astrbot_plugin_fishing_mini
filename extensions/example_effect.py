@@ -42,14 +42,25 @@ LUCK_CAP = 2.0
 def _on_lucky_token(
     *, plugin: Any, player: dict[str, Any], item_id: str, key: str, value: float
 ) -> str:
-    """幸运符：复用插件已有的手气 buff 字段（luck_charges / buff_casts_left）。
+    """幸运符：复用插件已有的「持续 N 竿手气」字段（buff_quality / buff_casts_left）。
 
-    这两个字段就是锦鲤玉佩用的那两个（见 ``_commands._cmd_use_item``），
-    所以扩展做出来的效果和内置道具**完全同一条链路**：抛竿时会被读到。
+    这两个字段就是锦鲤玉佩用的那两个（见 ``_commands._cmd_use_item`` 的 buff_quality
+    分支），所以扩展做出来的效果和内置道具**完全同一条链路**：抛竿时会被读到。
+
+    ⚠️ v1.18.5 起手气分成两套，别写错字段：
+
+    * ``buff_quality`` + ``buff_casts_left`` = **持续型**（每次抛竿都加，竿数用光就没了）
+    * ``luck_charges`` = **一次性**（下一竿生效，用完即清，插曲/彩蛋走这条）
+
+    只写 ``buff_casts_left`` 不写 ``buff_quality`` 等于「竿数在、加成是 0」，
+    玩家会看到「还剩 N 竿」却没效果。
     """
     casts = int(plugin.cfg.get("buff_cast_count") or 10)
-    current = float(player.get("luck_charges") or 0.0)
-    player["luck_charges"] = round(min(LUCK_CAP, current + float(value)), 6)
+    gain = min(LUCK_CAP, max(0.0, float(value)))
+    if int(player.get("buff_casts_left") or 0) > 0:
+        # 不叠加：还在生效时只刷新竿数，数值保持原样（和内置道具一致）
+        gain = max(gain, float(player.get("buff_quality") or 0.0))
+    player["buff_quality"] = round(gain, 6)
     player["buff_casts_left"] = max(int(player.get("buff_casts_left") or 0), casts)
     return f"　幸运符生效：接下来 {casts} 竿手气更好"
 

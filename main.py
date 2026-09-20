@@ -3143,10 +3143,18 @@ class FishingPlugin(
                 player["luck_charges"] = _clamp(
                     _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
                 )
-                lines.append(
-                    f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}"
-                    f"（累计 {player['luck_charges']:.0%}）"
-                )
+                once = _safe_number(player["luck_charges"], 0.0)
+                lines.append(f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}（累计 {once:.0%}）")
+                # 玉佩在手时别让玩家以为会叠上去：说清下一竿按哪个算
+                if _safe_int(player.get("buff_casts_left"), 0, 0) > 0:
+                    pendant = _safe_number(player.get("buff_quality"), 0.0)
+                    if pendant > 0:
+                        if once > pendant:
+                            lines.append(
+                                f"　（一次性，比玉佩的 {pendant:.0%} 高，下一竿按 {once:.0%} 算）"
+                            )
+                        else:
+                            lines.append(f"　（一次性；玉佩的 {pendant:.0%} 更高，不叠加）")
             if egg.get("heal_bait") and bait_id != "none":
                 baits = player.setdefault("baits", {})
                 baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + 1

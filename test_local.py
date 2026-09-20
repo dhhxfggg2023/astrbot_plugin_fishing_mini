@@ -5873,7 +5873,7 @@ async def main():
         f"到基础上限后还能喂 -> {p3['aquarium'][0].get('feed_uses')}",
     )
 
-    # --- 锦鲤玉佩：持续 20 竿 ---
+    # --- 锦鲤玉佩：持续 20 竿（写 buff_quality，不碰一次性储备 luck_charges）---
     # 关掉彩蛋：彩蛋里的「吉利的鱼鳞」会给 luck_charges，随机命中会让下面
     # 「手气一竿即清」的断言偶发变红（这是测试的确定性要求，不是玩法改动）
     plugin_j = make_plugin(dict(_CFG, easter_egg_chance=0.0))
@@ -5885,28 +5885,106 @@ async def main():
     out = text_of(await cmd(plugin_j, ev_j, "用", "锦鲤玉佩", ""))
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 20, f"玉佩 → 20 竿 -> {p4.get('buff_casts_left')}")
-    check(mod._safe_number(p4.get("luck_charges"), 0) > 0, "手气储备已加上")
+    check(
+        abs(mod._safe_number(p4.get("buff_quality"), 0) - 0.30) < 1e-9,
+        f"玉佩的加成写在 buff_quality（持续型）-> {p4.get('buff_quality')}",
+    )
+    check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "玉佩不往一次性储备里塞东西")
     check("作用在你自己身上" in out, "文案说明是给钓手的、不是喂鱼")
 
     await cmd(plugin_j, ev_j, "蚯蚓", "", "")
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 19, f"抛一竿后剩 19 -> {p4.get('buff_casts_left')}")
-    check(mod._safe_number(p4.get("luck_charges"), 0) > 0, "第 2 竿仍然吃到手气（buff 未清）")
+    check(
+        abs(mod._safe_number(p4.get("buff_quality"), 0) - 0.30) < 1e-9,
+        "第 2 竿仍然吃到玉佩的手气（加成留着，竿数在减）",
+    )
 
     p4["buff_casts_left"] = 1
     await plugin_j._save_player(p4)
     await cmd(plugin_j, ev_j, "蚯蚓", "", "")
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 0, "最后一竿用完归零")
-    check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "用完后手气储备清零（buff 失效）")
+    check(mod._safe_number(p4.get("buff_quality"), 0) == 0, "用完把加成一起清掉（不留空 buff）")
 
-    # 彩蛋捡到的手气仍然一竿即清（老行为不变）
+    # 一次性手气（彩蛋/插曲）：一竿即清
     p4["luck_charges"] = 0.1
     p4["buff_casts_left"] = 0
     await plugin_j._save_player(p4)
     await cmd(plugin_j, ev_j, "蚯蚓", "", "")
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "非 buff 来源的手气仍是一竿即清")
+
+    # --- 站长报的 bug：插曲给的手气在玉佩生效期间不消失、还和玉佩叠加 ---
+    # 场景：先开玉佩（20 竿），再拿一次插曲手气；旧代码把两者都塞进 luck_charges，
+    # 玉佩没结束时那次「一竿即清」被跳过 → 手气挂了一整轮 buff 还叠着算。
+    p5 = await plugin_j._load_player("96005")
+    p5["items"]["lucky_jade"] = 1
+    p5["baits"]["worm"] = 50
+    await plugin_j._save_player(p5)
+    await cmd(plugin_j, FakeEvent("96005"), "用", "锦鲤玉佩", "")
+    p5 = await plugin_j._load_player("96005")
+    plugin_j._grant_event_reward(p5, {"luck": [0.5, 0.5]})
+    await plugin_j._save_player(p5)
+    check(
+        abs(mod._safe_number(p5.get("luck_charges"), 0) - 0.5) < 1e-9
+        and abs(mod._safe_number(p5.get("buff_quality"), 0) - 0.30) < 1e-9,
+        "插曲手气记在一次性储备里，玉佩的加成另算（两个字段分开）",
+    )
+    check(
+        abs(mod._effective_luck(p5) - 0.5) < 1e-9,
+        f"同时有时**取较高的那个**、不叠加 -> {mod._effective_luck(p5)}",
+    )
+
+    before_casts = mod._safe_int(p5.get("buff_casts_left"), 0, 0)
+    await cmd(plugin_j, FakeEvent("96005"), "蚯蚓", "", "")
+    p5 = await plugin_j._load_player("96005")
+    check(mod._safe_number(p5.get("luck_charges"), 0) == 0, "抛一竿后插曲手气就消失了（一竿即清）")
+    check(
+        mod._safe_int(p5.get("buff_casts_left"), 0, 0) == before_casts - 1,
+        f"玉佩额度照常减 1（{before_casts} -> {p5.get('buff_casts_left')}）",
+    )
+    check(
+        abs(mod._safe_number(p5.get("buff_quality"), 0) - 0.30) < 1e-9,
+        "玉佩的加成还在（没被一次性储备的清零连坐）",
+    )
+    await cmd(plugin_j, FakeEvent("96005"), "蚯蚓", "", "")
+    p5 = await plugin_j._load_player("96005")
+    check(
+        mod._safe_number(p5.get("luck_charges"), 0) == 0
+        and abs(mod._effective_luck(p5) - 0.30) < 1e-9,
+        f"再抛一竿也不会有「残留手气」-> {mod._effective_luck(p5)}",
+    )
+
+    # 状态行照实写：玉佩 + 一次性各写各的（不再把两者混成一句）
+    p5["luck_charges"] = 0.5
+    line = plugin_j._buff_status_line(p5)
+    check("还剩" in line and "取较高" in line and "+50%" in line,
+        f"一次性更高时状态行写清「取较高的」-> {line}")
+    p5["luck_charges"] = 0.1
+    line_low = plugin_j._buff_status_line(p5)
+    check("更低" in line_low and "不叠加" in line_low,
+        f"一次性更低时也说清不叠加（免得玩家以为加了）-> {line_low}")
+    p5["luck_charges"] = 0.0
+    check("一次性" not in plugin_j._buff_status_line(p5), "只剩玉佩时不提一次性")
+
+    # --- 老存档迁移：以前玉佩的加成写在 luck_charges 里 ---
+    legacy_luck, _ = mod._repair_player(
+        {"gold": 1, "luck_charges": 0.3, "buff_casts_left": 12}, "96102"
+    )
+    check(
+        abs(mod._safe_number(legacy_luck.get("buff_quality"), 0) - 0.3) < 1e-9
+        and mod._safe_number(legacy_luck.get("luck_charges"), 0) == 0,
+        "老存档：还在生效的那份手气搬进 buff_quality，一次性储备清零（不双算）",
+    )
+    stale_luck, _ = mod._repair_player(
+        {"gold": 1, "luck_charges": 0.3, "buff_casts_left": 0, "buff_quality": 0.3}, "96103"
+    )
+    check(
+        mod._safe_number(stale_luck.get("buff_quality"), 0) == 0
+        and abs(mod._safe_number(stale_luck.get("luck_charges"), 0) - 0.3) < 1e-9,
+        "竿数已经用完的老存档：加成清掉，一次性储备留着（下一竿照常生效）",
+    )
 
     # --- 老存档兼容：没有新字段也不炸 ---
     old_p, migrated = mod._repair_player({"gold": 77, "total_caught": 3}, "96100")

@@ -182,10 +182,24 @@ class CommandsMixin:
             low, high = self._event_reward_range(reward["luck"])
             gain = max(0.0, random.uniform(low, high))
             if gain > 0:
-                player["luck_charges"] = _clamp(
-                    _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
+                # 一次性手气：只作用于**下一竿**，用完即清（_calc._consume_luck）。
+                # 和锦鲤玉佩不叠加 —— 同时有时取较高的那个，这里照实说明。
+                before = _safe_number(player.get("luck_charges"), 0.0)
+                player["luck_charges"] = _clamp(before + gain, 0.0, 2.0)
+                end = _safe_number(player["luck_charges"], 0.0)
+                pendant = (
+                    _safe_number(player.get("buff_quality"), 0.0)
+                    if _safe_int(player.get("buff_casts_left"), 0, 0) > 0
+                    else 0.0
                 )
-                lines.append(f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}")
+                hint = f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}"
+                if pendant > 0:
+                    # 不叠加：说清下一竿到底按哪个算，别让玩家以为会加在一起
+                    if end > pendant:
+                        hint += f"（一次性，比玉佩的 {pendant:.0%} 高，下一竿按 {end:.0%} 算）"
+                    else:
+                        hint += f"（一次性；玉佩的 {pendant:.0%} 更高，不叠加）"
+                lines.append(hint)
         if "note" in reward and BOTTLE_NOTES:
             low, high = self._event_reward_range(reward["note"])
             chance = _clamp(random.uniform(min(low, high), max(low, high)), 0.0, 1.0)
@@ -2158,21 +2172,20 @@ class CommandsMixin:
                     await self._save_player(player)
 
             # --- 钓手手气 buff（锦鲤玉佩）：作用在人身上，持续 buff_cast_count 竿 ---
+            # 它写的是 buff_quality（每竿加多少）+ buff_casts_left（还剩几竿），
+            # **不碰 luck_charges**（那是一次性的，见 _calc._effective_luck / _consume_luck）
             if _safe_number(effects.get("buff_quality"), 0.0) > 0:
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                 gain = _safe_number(effects.get("buff_quality"), 0.0)
                 casts = int(self.cfg["buff_cast_count"])
                 active = _safe_int(player.get("buff_casts_left"), 0, 0) > 0
                 if active:
-                    # 同种道具的效果不叠加：还在生效就只把剩余竿数刷新回满，
+                    # 同一件道具的效果不叠加：还在生效就只把剩余竿数刷新回满，
                     # 手气数值保持原样（不给玩家添提示，按站长要求静默处理）
-                    player["luck_charges"] = _clamp(
-                        _safe_number(player.get("luck_charges"), 0.0), 0.0, 2.0
-                    )
+                    if _safe_number(player.get("buff_quality"), 0.0) <= 0:
+                        player["buff_quality"] = _clamp(gain, 0.0, 2.0)
                 else:
-                    player["luck_charges"] = _clamp(
-                        _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
-                    )
+                    player["buff_quality"] = _clamp(gain, 0.0, 2.0)
                 player["buff_casts_left"] = max(
                     _safe_int(player.get("buff_casts_left"), 0, 0), casts
                 )
@@ -2180,7 +2193,7 @@ class CommandsMixin:
                 lines = [
                     f"🎐 使用 {self._item_label(item_id)}",
                     f"　作用在你自己身上：接下来 {casts} 竿手气更好"
-                    f"（{_luck_stars(_safe_number(player.get('luck_charges'), 0.0), 0.3)}）",
+                    f"（{_luck_stars(_safe_number(player.get('buff_quality'), 0.0), 0.3)}）",
                     "　（不是喂鱼，鱼的三维不会变）",
                 ]
                 if not saved:
@@ -2538,8 +2551,6 @@ class CommandsMixin:
         buff = self._buff_status_line(player)
         if buff:
             lines.append(buff)
-        elif _safe_number(player.get("luck_charges"), 0.0) > 0:
-            lines.append(f"🔮 手气储备 {_luck_stars(player['luck_charges'], 0.5)}")
         async for _r in self._say_msg(event, "profile.view", event.plain_result("\n".join(lines))):
             yield _r
 
