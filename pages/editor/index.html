@@ -557,6 +557,15 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   overflow: auto;
 }
 
+/* 数值页「算给你看」的小提示（升级曲线这类光看名字猜不出该填多少的） */
+.num-hint {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.num-hint b { color: var(--fg); font-weight: 620; }
+
 /* 行内确认条 */
 .confirm-strip {
   display: inline-flex;
@@ -1618,9 +1627,9 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["variant_chance", "变异概率", "概率", "钓到变异个体的概率", false, "经济"],
 
     // ---- 等级与图鉴 ----
-    ["level_xp_base", "升级曲线基准", "竿", "每级基础竿数", false, "等级"],
-    ["level_xp_ratio", "等级曲线底数", "倍", "指数曲线底数，越大后期越难升级", false, "等级"],
-    ["level_xp_growth", "升级曲线二次项", "系数", "0 = 纯指数曲线；调大会让后期额外变慢", false, "等级"],
+    ["level_xp_base", "升级曲线基准", "竿", "每级的「基础」竿数。升到 L 级所需累计钓获 = base×(ratio^(L−1)−1)/(ratio−1) + growth×(L−1)²。推荐 5（出厂值）；改它等于整体拉长/缩短所有等级", false, "等级"],
+    ["level_xp_ratio", "等级曲线底数", "倍", "指数项：1.08 = 每级需求比上一级多 8%（推荐值，也是出厂值）；填 1.0 退化成等差（线性）；越大越陡，越能卡住最高进度的人", false, "等级"],
+    ["level_xp_growth", "升级曲线二次项", "系数", "二次项，默认 0（= 不用）。推荐 0；想让后期再陡一点填 0.2~0.5，填 2 就已经很硬了。它只加在平方那一项上：第 L 级多加 growth×(L−1)² 条（下面是按当前数值实时算的）", false, "等级"],
     ["location_codex_gate", "钓点图鉴门槛", "比例", "上一个钓点图鉴开到几成才能前往下一个", false, "等级"],
 
     // ---- 稀有度与数值表 ----
@@ -3286,6 +3295,65 @@ table.grid td.actions .btn { vertical-align: middle; }
       .filter(function (x) { return x !== ""; });
   }
 
+  /* ===========================================================================
+     数值页的「算给你看」：几个光看名字猜不出该填多少的数值，直接按当前值
+     把结果算出来写在说明下面（含推荐值），省得站长瞎填。
+     =========================================================================== */
+
+  /** 取数值页某一行当前的输入值（含还没保存的改动）。 */
+  function numberRowValue(key) {
+    var row = (state.data.numbers || []).filter(function (r) { return r.key === key; })[0];
+    if (!row) return NaN;
+    var v = Number(row.value);
+    return isFinite(v) ? v : NaN;
+  }
+
+  /** 和插件侧 _level_threshold() 同一套公式：base×(ratio^(L-1)−1)/(ratio−1) + growth×(L-1)² */
+  function levelThresholdAt(level, base, ratio, growth) {
+    var n = Math.max(0, Number(level) - 1);
+    if (!(n > 0)) return 0;
+    var geometric = Math.abs(ratio - 1) < 1e-9 ? base * n : base * (Math.pow(ratio, n) - 1) / (ratio - 1);
+    return Math.round(geometric + growth * n * n);
+  }
+
+  var LEVEL_HINT_LEVELS = [10, 20, 30, 45];
+
+  function levelCurveHint(row) {
+    var base = numberRowValue("level_xp_base");
+    var ratio = numberRowValue("level_xp_ratio");
+    var growth = numberRowValue("level_xp_growth");
+    if (!(base > 0) || !(ratio >= 1) || !(growth >= 0)) return "";
+    var line = LEVEL_HINT_LEVELS.map(function (lv) {
+      return lv + " 级 <b>" + fmtNum(levelThresholdAt(lv, base, ratio, growth)) + "</b> 条";
+    }).join("　·　");
+    var out = '<div class="num-hint">📈 当前这组数（base ' + base + " / ratio " + ratio +
+      " / growth " + growth + "）算出来：升到 " + line + "</div>";
+    if (row.key !== "level_xp_growth") return out;
+
+    // 只有二次项这一项：把推荐值和「填了会变成多少」摆出来，别让人猜
+    var cur30 = levelThresholdAt(30, base, ratio, growth);
+    function tryGrowth(g) {
+      return levelThresholdAt(30, base, ratio, g);
+    }
+    out += '<div class="num-hint">✅ 推荐：<b>0</b>（出厂值，纯指数曲线，平衡就是照它调的）；' +
+      "想再卡一下后期就填 <b>0.5</b>（30 级 " + fmtNum(cur30) + " → <b>" + fmtNum(tryGrowth(0.5)) +
+      "</b> 条）或 <b>2</b>（→ <b>" + fmtNum(tryGrowth(2)) + "</b> 条）；" +
+      "填太大（比如 10 以上）前期也会变慢，容易劝退新人。</div>";
+    out += '<div class="num-hint">🧮 它只加在<b>平方</b>那一项上：第 L 级多加 growth×(L−1)² 条 —— ' +
+      "10 级 +" + fmtNum(Math.round(growth * 81)) + " 条、30 级 +" + fmtNum(Math.round(growth * 841)) +
+      " 条；填 0 就是不启用。</div>";
+    return out;
+  }
+
+  /** 数值页某一行的额外提示（没有就返回空串）。 */
+  function numberLiveHint(row) {
+    if (!row) return "";
+    if (row.key === "level_xp_base" || row.key === "level_xp_ratio" || row.key === "level_xp_growth") {
+      return levelCurveHint(row);
+    }
+    return "";
+  }
+
   function cellHtml(tab, col, row, index) {
     var v = row[col.key];
     var editing = state.editing && state.editing.index === index && state.editing.key === col.key;
@@ -3315,8 +3383,13 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
 
     if (col.type === "readonly") {
-      return '<span class="' + (col.mono ? "mono faint" : "muted") + (col.key === "desc" ? " cut" : "") +
+      var roText = '<span class="' + (col.mono ? "mono faint" : "muted") + (col.key === "desc" ? " cut" : "") +
         (bad ? " cell-bad" : "") + '"' + titleAttr + ">" + esc(v) + "</span>";
+      // 数值页的说明列：把「算给你看」的实时小提示接在下面
+      if (col.key === "desc" && tab.id === "numbers") {
+        roText += numberLiveHint(row);
+      }
+      return roText;
     }
 
     if (col.type === "rarity") {
@@ -5366,7 +5439,44 @@ table.grid td.actions .btn { vertical-align: middle; }
   /* ===========================================================================
      11. 渲染：总入口 + 状态栏
      =========================================================================== */
-  function render() {
+  /* ===========================================================================
+     滚动位置：整页重绘（render）时保住滚动条 ——
+     不然点一个项再点另一个，页面咻地跳回最上面，长表格根本没法连着改。
+     三个地方要记住：窗口、表格容器、回复页的预览边栏。
+     =========================================================================== */
+  var SCROLL_AREAS = [".table-wrap", ".rp-table-wrap", ".rp-side"];
+
+  function scrollAreas() {
+    var areas = [];
+    var doc = document.scrollingElement || document.documentElement;
+    if (doc) areas.push(doc);
+    SCROLL_AREAS.forEach(function (sel) {
+      var list = document.querySelectorAll(sel);
+      for (var i = 0; i < list.length; i++) areas.push(list[i]);
+    });
+    return areas;
+  }
+
+  /** 记下当前所有滚动容器的位置（下标就是 scrollAreas() 的顺序）。 */
+  function snapshotScroll() {
+    return scrollAreas().map(function (el) {
+      return { top: el.scrollTop || 0, left: el.scrollLeft || 0 };
+    });
+  }
+
+  /** 把位置写回去；DOM 变短了就按浏览器自己能到的最大值。 */
+  function restoreScroll(snap) {
+    if (!snap || !snap.length) return;
+    var areas = scrollAreas();
+    for (var i = 0; i < areas.length && i < snap.length; i++) {
+      if (snap[i].top) areas[i].scrollTop = snap[i].top;
+      if (snap[i].left) areas[i].scrollLeft = snap[i].left;
+    }
+  }
+
+  function render(keepScroll) {
+    // keepScroll === false：明确要求回到顶部（切标签页、切视图时用）
+    var snap = keepScroll === false ? null : snapshotScroll();
     renderTabs();
     var tab = TAB_BY_ID[state.tab];
     var panel = document.getElementById("panel");
@@ -5389,6 +5499,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       panel.innerHTML = banner + renderTableTab(tab);
     }
 
+    restoreScroll(snap);
     renderStatusBar();
   }
 
@@ -5863,7 +5974,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     state.filter = "";
     state.sort = "default";
     try { history.replaceState(null, "", "#" + id); } catch (e) { /* file:// 下可能受限，忽略 */ }
-    render();
+    // 换标签页从顶上开始看（不保留滚动位置）
+    render(false);
   }
 
   document.addEventListener("click", function (ev) {
@@ -6499,9 +6611,12 @@ table.grid td.actions .btn { vertical-align: middle; }
         var wrap = panel.querySelector(".table-wrap");
         var foot = panel.querySelector(".table-foot");
         var list = visibleRows(tab);
+        // 搜索时只换表格内容：滚动位置也得保住，不然每敲一个字就跳回顶部
+        var wrapTop = wrap ? wrap.scrollTop : 0;
         if (wrap) wrap.innerHTML = '<table class="grid stack"><thead>' +
           panel.querySelector("table.grid thead").innerHTML + "</thead><tbody>" +
           renderTableBody(tab, list) + "</tbody></table>";
+        if (wrap) wrap.scrollTop = wrapTop;
         if (foot) foot.innerHTML = '<button class="btn btn-sm" data-act="row:add"' + (tab.makeRow ? "" : " disabled") + ">＋ 新增一行</button>" +
           '<span class="hint faint">' + (tab.makeRow ? "新行会加在表格末尾" : "此页为只读说明列，仅「当前值」可改") + "</span>" +
           '<span class="spacer"></span><span class="hint faint">筛出 ' + list.length + " 条</span>";

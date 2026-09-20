@@ -146,6 +146,9 @@ const hookNames = [
   "previewModelFor", "replyBadButtons", "refreshReplyLive", "replyRowMax", "knownPlaceholderNames",
   "replyFilterScenes", "replyVisibleGroups", "renderReplyMain", "replyStatsHtml",
   "jumpToSceneCard",
+  // 滚动位置保留（点一项再点另一项不该跳回顶部）+ 数值页的实时提示
+  "scrollAreas", "snapshotScroll", "restoreScroll",
+  "numberRowValue", "levelThresholdAt", "levelCurveHint", "numberLiveHint",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -694,6 +697,68 @@ async function channelHelpers() {
     "文本行不会被判「需要是数字」", JSON.stringify(T.validateRow(T.TAB_BY_ID.numbers, kwRow)));
   check(Object.keys(T.validateRow(T.TAB_BY_ID.numbers, { key: "stamina_max", value: "乱写" })).length === 1,
     "同一张表的数字行照样会拦（文本行没把校验放松）");
+
+  /* ---- 点一个项再点另一个，不许跳回最上面（站长报的） ---- */
+  console.log("  ── 📜 滚动位置：整页重绘要保住 ──");
+  documentStub.scrollingElement = { scrollTop: 640, scrollLeft: 12 };
+  const snapScroll = T.snapshotScroll();
+  check(snapScroll.length === 1 && snapScroll[0].top === 640 && snapScroll[0].left === 12,
+    "snapshotScroll 记下窗口滚动位置", JSON.stringify(snapScroll));
+  documentStub.scrollingElement.scrollTop = 0;      // 模拟重绘把位置冲掉
+  documentStub.scrollingElement.scrollLeft = 0;
+  T.restoreScroll(snapScroll);
+  check(documentStub.scrollingElement.scrollTop === 640
+    && documentStub.scrollingElement.scrollLeft === 12,
+    "restoreScroll 把位置写回去（重绘后不跳回顶部）",
+    String(documentStub.scrollingElement.scrollTop));
+  check(/function render\(keepScroll\)[\s\S]{0,200}?snapshotScroll\(\)/.test(html)
+    && /restoreScroll\(snap\);\s*\n\s*renderStatusBar\(\);/.test(html),
+    "render() 自己会先记位置、渲染完再写回");
+  check(/render\(false\);/.test(html) && /换标签页从顶上开始看/.test(html),
+    "切标签页是明确要求回顶部的（render(false)）");
+  check(/var wrapTop = wrap \? wrap\.scrollTop : 0;/.test(html),
+    "搜索只换表格内容时也保住表格内的滚动位置");
+  delete documentStub.scrollingElement;
+
+  /* ---- 升级二次曲线：给推荐值 + 按当前数值实时算 ---- */
+  console.log("  ── 📈 数值页：算给你看（升级曲线） ──");
+  const savedNumbers = T.state.data.numbers;
+  T.state.data.numbers = [
+    { key: "level_xp_base", label: "升级曲线基准", value: 5, unit: "竿", text: false },
+    { key: "level_xp_ratio", label: "等级曲线底数", value: 1.08, unit: "倍", text: false },
+    { key: "level_xp_growth", label: "升级曲线二次项", value: 0, unit: "系数", text: false }
+  ];
+  check(T.numberRowValue("level_xp_ratio") === 1.08, "numberRowValue 读得到当前输入值");
+  check(T.levelThresholdAt(30, 5, 1.08, 0) === 520 && T.levelThresholdAt(45, 5, 1.08, 0) === 1785,
+    "页面算的等级门槛与插件 _level_threshold 一致（30 级 520 / 45 级 1785）");
+  const growthHint = T.numberLiveHint({ key: "level_xp_growth" });
+  check(growthHint.indexOf("num-hint") > 0 && growthHint.indexOf("10 级 <b>62</b>") > 0
+    && growthHint.indexOf("30 级 <b>520</b>") > 0,
+    "二次项那行写出了当前曲线（10 级 62 条 / 30 级 520 条）");
+  const flatHint = growthHint.replace(/[,\s]/g, "");
+  check(flatHint.indexOf("推荐：<b>0</b>") > 0 && flatHint.indexOf("0.5") > 0
+    && flatHint.indexOf("940") > 0 && flatHint.indexOf("2202") > 0,
+    "给了推荐值，并且把「填 0.5 / 2 会变成多少条」算出来（940 / 2202）");
+  check(growthHint.indexOf("平方") > 0 && growthHint.indexOf("(L−1)²") > 0,
+    "讲清了它只加在平方项上（第 L 级多加 growth×(L−1)² 条）");
+  T.state.data.numbers[2].value = 0.5;
+  const grownHint = T.numberLiveHint({ key: "level_xp_growth" });
+  check(/10 级 \+\s*41\s*条/.test(grownHint) && /30 级 \+\s*421\s*条/.test(grownHint)
+    && grownHint.indexOf("30 级 <b>940</b>") > 0,
+    "把 growth 改成 0.5，提示立刻跟着变（每级多加 41 / 421 条，30 级门槛 940）",
+    grownHint.slice(0, 80));
+  T.state.data.numbers[2].value = 0;
+  const baseHint = T.numberLiveHint({ key: "level_xp_base" });
+  check(baseHint.indexOf("num-hint") > 0 && baseHint.indexOf("推荐") < 0,
+    "基准/底数两行也显示当前曲线（不用重复讲推荐值）");
+  check(T.numberLiveHint({ key: "stamina_max" }) === "",
+    "其它数值行不乱加提示（不刷屏）");
+  const numTab = T.renderTableTab(T.TAB_BY_ID.numbers);
+  check(numTab.indexOf("num-hint") > 0 && numTab.indexOf("算给你看") < 0,
+    "提示真的渲染到数值页上了", numTab.length);
+  check(/\.num-hint \{[\s\S]{0,160}?color: var\(--muted\)/.test(html),
+    "提示样式低调（小字灰色，不抢眼）");
+  T.state.data.numbers = savedNumbers;
 
   /* ---- 长列表不再一行拉到底（站长报的「各钓点咬钩系数把表格拉长了」）---- */
   const longRow = {

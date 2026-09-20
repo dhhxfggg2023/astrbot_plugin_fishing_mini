@@ -524,19 +524,19 @@
   },
   "level_xp_base": {
     "invisible": true,
-    "description": "升级曲线：基础竿数。升到 L 级所需累计钓获 = base×(ratio^(L-1)−1)/(ratio−1) + growth×(L-1)²。默认 base=5 / ratio=1.08 时：10 级 62 条、20 级 207 条、30 级 520 条、45 级 1785 条",
+    "description": "升级曲线：基础竿数。升到 L 级所需累计钓获 = base×(ratio^(L-1)−1)/(ratio−1) + growth×(L-1)²。推荐 5（出厂值）：base=5 / ratio=1.08 时 10 级 62 条、20 级 207 条、30 级 520 条、45 级 1785 条",
     "type": "float",
     "default": 5.0
   },
   "level_xp_ratio": {
     "invisible": true,
-    "description": "升级曲线：等比底数（指数项）。1.08 = 每级需求递增 8%，越大越陡、越能卡住最高进度玩家；填 1.0 退化成等差（线性）",
+    "description": "升级曲线：等比底数（指数项）。推荐 1.08（出厂值）= 每级需求递增 8%，越大越陡、越能卡住最高进度玩家；填 1.0 退化成等差（线性）",
     "type": "float",
     "default": 1.08
   },
   "level_xp_growth": {
     "invisible": true,
-    "description": "升级曲线：二次增长系数（默认 0 = 不用）。想让后期再陡一点可以调到 0.2 之类的值，和指数项叠加生效",
+    "description": "升级曲线：二次增长系数。推荐 0（出厂值 = 不用，平衡就是照它调的）；想让后期再陡一点填 0.2~0.5，填 2 已经很硬，10 以上会连前期一起变慢。它只加在平方项上：第 L 级多加 growth×(L-1)² 条（10 级 +81×growth、30 级 +841×growth）；编辑器「⚙️ 数值」页那一行下面会按当前数值实时算出结果",
     "type": "float",
     "default": 0.0
   },
