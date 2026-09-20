@@ -187,7 +187,7 @@ function runAssertions() {
   check(Object.keys(T.TAB_BY_ID).length === 16, "标签页数量 = 16（12 + 玩家 + 命令别名 + 自定义命令 + 💬 回复）",
     Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
-  check((T.state.data.locations || []).length === 16, "演示钓点 16 个", (T.state.data.locations || []).length);
+  check((T.state.data.locations || []).length === 16, "演示钓点 16 个（离线演示数据，与线上 19 个无关）", (T.state.data.locations || []).length);
   check((T.state.snapshots || []).length === 4, "演示存档 4 份", (T.state.snapshots || []).length);
   check(T.state.loading === false, "载入流程已结束");
   check((T.state.originals.fish && Object.keys(T.state.originals.fish).length === 18),
@@ -819,8 +819,8 @@ async function channelHelpers() {
     { key: "quality_myth_chance", label: "洗髓出神话的概率", value: 0, unit: "每次重掷", text: false },
     { key: "reroll_daily_limit", label: "洗髓丹每日上限", value: 3, unit: "颗/鱼", text: false }
   ];
-  check(T.numberLiveHint({ key: "quality_myth_chance" }).indexOf("永远洗不出神话") > 0,
-    "概率填 0 时提示「永远洗不出神话」");
+  check(T.numberLiveHint({ key: "quality_myth_chance" }).indexOf("永远洗不出神品") > 0,
+    "概率填 0 时提示「永远洗不出神品」");
   T.state.data.numbers = beforeMyth;
 
   // editor_status 解析

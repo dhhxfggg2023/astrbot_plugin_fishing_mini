@@ -243,6 +243,52 @@ LOCATION_ROSTERS: dict[str, list[dict]] = {
         {"id": "aurora_eternal_night_sturgeon", "name": "永夜冰鲟", "rarity": "传说", "flavor": "骨板下压着整片永夜"},
         {"id": "aurora_aurora_primordial_dragon", "name": "极光古龙", "rarity": "神话", "flavor": "光幕裂开它缓缓垂下头"},
     ],
+    # ===== v1.18.8 新增的三个终局钓点：给已经打到极光冰渊的钓手再往上留三级 =====
+    "starfall": [
+        {"id": "starfall_silver_crucian", "name": "陨湖银鲫", "rarity": "常见", "flavor": "鳞片里嵌着洗不掉的星砂"},
+        {"id": "starfall_stardust_goby", "name": "星屑虾虎", "rarity": "少见", "flavor": "趴在陨石坑边捡碎屑吃"},
+        {"id": "starfall_glow_loach", "name": "夜光泥鳅", "rarity": "少见", "flavor": "受惊时整条泛起淡蓝色的光"},
+        {"id": "starfall_iron_catfish", "name": "陨铁鲶", "rarity": "少见", "flavor": "骨头里像掺了铁，沉得拖不动"},
+        {"id": "starfall_meteor_eel", "name": "流星鳗", "rarity": "稀有", "flavor": "划过水面时留下一道白痕"},
+        {"id": "starfall_meteor_grouper", "name": "陨石斑", "rarity": "稀有", "flavor": "身上的斑点像被砸出来的坑"},
+        {"id": "starfall_galaxy_tetra", "name": "银河灯鱼", "rarity": "稀有", "flavor": "成群游动时像一条旋转的星河"},
+        {"id": "starfall_starcore_koi", "name": "星核锦鲤", "rarity": "传说", "flavor": "胸口一团光，据说是星核"},
+        {"id": "starfall_comet_marlin", "name": "彗尾旗鱼", "rarity": "传说", "flavor": "冲刺时拖着几十米长的光尾"},
+        {"id": "starfall_fallen_whaleshark", "name": "陨落鲸鲨", "rarity": "传说", "flavor": "背上嵌着一整块陨石"},
+        {"id": "starfall_stardust_medusa", "name": "碎星水母", "rarity": "传说", "flavor": "伞下悬着一片碎掉的星光"},
+        {"id": "starfall_meteor_roc", "name": "天陨鹏鱼", "rarity": "神话", "flavor": "展鳍如翼，从星陨里游出来"},
+    ],
+    "void_sea": [
+        {"id": "voidsea_blindfish", "name": "归墟盲鱼", "rarity": "常见", "flavor": "没有眼睛，靠水流认路"},
+        {"id": "voidsea_bottomless_eel", "name": "无底鳗", "rarity": "少见", "flavor": "尾巴探不到尽头"},
+        {"id": "voidsea_still_hydra", "name": "静水螅", "rarity": "少见", "flavor": "整片水都停了，只有它在动"},
+        {"id": "voidsea_lantern_eye", "name": "灯眼鱼", "rarity": "少见", "flavor": "眼眶里点着一盏不会灭的灯"},
+        {"id": "voidsea_vortex_turtle", "name": "漩涡龟", "rarity": "稀有", "flavor": "游过的地方会自动转起漩涡"},
+        {"id": "voidsea_silent_whale", "name": "无声鲸", "rarity": "稀有", "flavor": "它唱歌的时候你什么也听不见"},
+        {"id": "voidsea_myriad_jelly", "name": "万水母", "rarity": "稀有", "flavor": "触手像天下所有河流的分叉"},
+        {"id": "voidsea_elder_whale", "name": "归墟祖鲸", "rarity": "传说", "flavor": "背上的藤壶比船还大"},
+        {"id": "voidsea_boat_swallower", "name": "吞舟鱼", "rarity": "传说", "flavor": "张口的瞬间，光都被吞进去"},
+        {"id": "voidsea_nether_marlin", "name": "幽冥旗鱼", "rarity": "传说", "flavor": "鳍是半透明的，像一片幽影"},
+        {"id": "voidsea_dark_arowana", "name": "无光龙鱼", "rarity": "传说", "flavor": "鳞片把所有照到它的光都吃掉"},
+        {"id": "voidsea_abyss_dragon", "name": "归墟渊龙", "rarity": "神话", "flavor": "它一翻身，整片海就换了方向"},
+        {"id": "voidsea_chaos_devourer", "name": "混沌吞天鱼", "rarity": "神话", "flavor": "据说它饿的时候会吃掉自己的影子"},
+    ],
+    "dragon_palace": [
+        {"id": "palace_glass_lanternfish", "name": "琉璃灯鱼", "rarity": "常见", "flavor": "身体像一盏会游的宫灯"},
+        {"id": "palace_coral_maid", "name": "珊瑚宫女鱼", "rarity": "少见", "flavor": "排着队从珊瑚廊下穿过"},
+        {"id": "palace_pearl_shellfish", "name": "珍珠贝鱼", "rarity": "少见", "flavor": "壳里那颗珠子是它的心"},
+        {"id": "palace_coiled_carp", "name": "蟠龙小鲤", "rarity": "少见", "flavor": "还没长开，鳞上已有龙纹"},
+        {"id": "palace_ambergris_whale", "name": "龙涎香鲸", "rarity": "稀有", "flavor": "一整片水域都是它的香气"},
+        {"id": "palace_crystal_barbel", "name": "水晶龙须鱼", "rarity": "稀有", "flavor": "两根长须像水晶做的天线"},
+        {"id": "palace_pillar_fish", "name": "定海柱鱼", "rarity": "稀有", "flavor": "沉在水底一动不动，像根柱子"},
+        {"id": "palace_golden_dragon", "name": "敖氏金龙", "rarity": "传说", "flavor": "鳞片上刻着王朝般的纹路"},
+        {"id": "palace_night_pearl", "name": "夜明珠鱼", "rarity": "传说", "flavor": "整座宫殿的光都是它给的"},
+        {"id": "palace_yaksha", "name": "巡海夜叉鱼", "rarity": "传说", "flavor": "提着叉子沿宫墙巡夜"},
+        {"id": "palace_sky_koi", "name": "九霄龙鲤", "rarity": "传说", "flavor": "传说跃过龙门就能化龙"},
+        {"id": "palace_dragon_king", "name": "东海龙王", "rarity": "神话", "flavor": "它一睁眼，整片东海都安静了"},
+        {"id": "palace_yinglong", "name": "应龙", "rarity": "神话", "flavor": "有翼的龙，掌着天下雨水"},
+        {"id": "palace_zhulong", "name": "烛龙", "rarity": "神话", "flavor": "睁眼为昼，闭眼为夜"},
+    ],
 }
 
 # ===== 配置默认值：当前生效鱼池的文本形态（由导出脚本生成，勿手改）=====
@@ -481,4 +527,43 @@ glacier_icefish|冰鱼|常见|95|glacier:0.7|血是透明的，贴着冰面游
 glacier_char|北极红点鲑|传说|1355|glacier:0.7|身上洒满红色小点
 aurora_crystal_fish|极光晶鱼|稀有|748|aurora:0.7|鳞片折出的光一直在变色
 aurora_ghost_whale|极光幽灵鲸|神话|3607|aurora:0.7|游过时整片冰面都亮了一下
-big_fat_fish|大肥鱼|稀有|360|novice:0.1579,bamboo:0.1579,canal:0.1579,lake:0.1579,reed:0.1579,sea:0.1579,dock:0.1579,night:0.1579,mangrove:0.1579,swamp:0.1579,cave:0.1579,ruins:0.1579,abyss:0.1579,trench:0.1579,glacier:0.1579,aurora:0.1579|原型据说是现实里的 DeepSeek 模型：问它什么都肯答，答得又稳又长，就是偶尔会想很久'''
+starfall_silver_crucian|陨湖银鲫|常见|136|starfall:0.9628|鳞片里嵌着洗不掉的星砂
+starfall_stardust_goby|星屑虾虎|少见|348|starfall:0.9451|趴在陨石坑边捡碎屑吃
+starfall_glow_loach|夜光泥鳅|少见|395|starfall:1.0876|受惊时整条泛起淡蓝色的光
+starfall_iron_catfish|陨铁鲶|少见|391|starfall:1.0759|骨头里像掺了铁，沉得拖不动
+starfall_meteor_eel|流星鳗|稀有|789|starfall:0.9280|划过水面时留下一道白痕
+starfall_meteor_grouper|陨石斑|稀有|924|starfall:1.1023|身上的斑点像被砸出来的坑
+starfall_galaxy_tetra|银河灯鱼|稀有|865|starfall:1.0267|成群游动时像一条旋转的星河
+starfall_starcore_koi|星核锦鲤|传说|1969|starfall:0.9262|胸口一团光，据说是星核
+starfall_comet_marlin|彗尾旗鱼|传说|2205|starfall:1.0486|冲刺时拖着几十米长的光尾
+starfall_fallen_whaleshark|陨落鲸鲨|传说|1947|starfall:0.9151|背上嵌着一整块陨石
+starfall_stardust_medusa|碎星水母|传说|2078|starfall:0.9826|伞下悬着一片碎掉的星光
+starfall_meteor_roc|天陨鹏鱼|神话|4457|starfall:0.9250|展鳍如翼，从星陨里游出来
+voidsea_blindfish|归墟盲鱼|常见|155|void_sea:0.8962|没有眼睛，靠水流认路
+voidsea_bottomless_eel|无底鳗|少见|447|void_sea:1.0033|尾巴探不到尽头
+voidsea_still_hydra|静水螅|少见|389|void_sea:0.8602|整片水都停了，只有它在动
+voidsea_lantern_eye|灯眼鱼|少见|450|void_sea:1.0108|眼眶里点着一盏不会灭的灯
+voidsea_vortex_turtle|漩涡龟|稀有|978|void_sea:0.9466|游过的地方会自动转起漩涡
+voidsea_silent_whale|无声鲸|稀有|942|void_sea:0.9079|它唱歌的时候你什么也听不见
+voidsea_myriad_jelly|万水母|稀有|1083|void_sea:1.0585|触手像天下所有河流的分叉
+voidsea_elder_whale|归墟祖鲸|传说|2848|void_sea:1.1179|背上的藤壶比船还大
+voidsea_boat_swallower|吞舟鱼|传说|2889|void_sea:1.1353|张口的瞬间，光都被吞进去
+voidsea_nether_marlin|幽冥旗鱼|传说|2650|void_sea:1.0339|鳍是半透明的，像一片幽影
+voidsea_dark_arowana|无光龙鱼|传说|2633|void_sea:1.0267|鳞片把所有照到它的光都吃掉
+voidsea_abyss_dragon|归墟渊龙|神话|5346|void_sea:0.9100|它一翻身，整片海就换了方向
+voidsea_chaos_devourer|混沌吞天鱼|神话|6410|void_sea:1.1095|据说它饿的时候会吃掉自己的影子
+palace_glass_lanternfish|琉璃灯鱼|常见|210|dragon_palace:1.0066|身体像一盏会游的宫灯
+palace_coral_maid|珊瑚宫女鱼|少见|605|dragon_palace:1.1227|排着队从珊瑚廊下穿过
+palace_pearl_shellfish|珍珠贝鱼|少见|571|dragon_palace:1.0546|壳里那颗珠子是它的心
+palace_coiled_carp|蟠龙小鲤|少见|604|dragon_palace:1.1209|还没长开，鳞上已有龙纹
+palace_ambergris_whale|龙涎香鲸|稀有|1343|dragon_palace:1.0774|一整片水域都是它的香气
+palace_crystal_barbel|水晶龙须鱼|稀有|1312|dragon_palace:1.0498|两根长须像水晶做的天线
+palace_pillar_fish|定海柱鱼|稀有|1112|dragon_palace:0.8755|沉在水底一动不动，像根柱子
+palace_golden_dragon|敖氏金龙|传说|3361|dragon_palace:1.0783|鳞片上刻着王朝般的纹路
+palace_night_pearl|夜明珠鱼|传说|2759|dragon_palace:0.8683|整座宫殿的光都是它给的
+palace_yaksha|巡海夜叉鱼|传说|3159|dragon_palace:1.0078|提着叉子沿宫墙巡夜
+palace_sky_koi|九霄龙鲤|传说|3073|dragon_palace:0.9778|传说跃过龙门就能化龙
+palace_dragon_king|东海龙王|神话|7740|dragon_palace:1.0969|它一睁眼，整片东海都安静了
+palace_yinglong|应龙|神话|7995|dragon_palace:1.1362|有翼的龙，掌着天下雨水
+palace_zhulong|烛龙|神话|6233|dragon_palace:0.8653|睁眼为昼，闭眼为夜
+big_fat_fish|大肥鱼|稀有|360|novice:0.1579,bamboo:0.1579,canal:0.1579,lake:0.1579,reed:0.1579,sea:0.1579,dock:0.1579,night:0.1579,mangrove:0.1579,swamp:0.1579,cave:0.1579,ruins:0.1579,abyss:0.1579,trench:0.1579,glacier:0.1579,aurora:0.1579,starfall:0.1579,void_sea:0.1579,dragon_palace:0.1579|原型据说是现实里的 DeepSeek 模型：问它什么都肯答，答得又稳又长，就是偶尔会想很久'''

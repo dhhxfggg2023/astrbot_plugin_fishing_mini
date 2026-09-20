@@ -2203,7 +2203,7 @@ class CommandsMixin:
                 return
 
             # --- 洗髓丹（quality_reroll）：重掷这条鱼的个体品质，取更好的那次 ---
-            # 效果值和「重掷几次」同义：写 3 就是掷 3 次取最好（次数越多越容易出极品）
+            # 效果值和「重掷几次」同义：写 3 就是掷 3 次取最好（次数越多越容易出珍品/绝品）
             if _safe_number(effects.get("quality_reroll"), 0.0) > 0:
                 reroll_tank: list[dict[str, Any]] = player.get("aquarium") or []
                 if not reroll_tank:

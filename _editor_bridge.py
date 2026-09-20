@@ -1094,6 +1094,7 @@ class EditorBridgeMixin(EditorApiMixin):
             self.config.update(normalized)
         except Exception as e:
             return False, f"写入配置失败：{e}"
+        self._editor_note_user_edits(list(normalized))
         saved = await self._editor_save_config()
         self._editor_refresh_runtime()
         names = "、".join(f"{k}({len(v) if isinstance(v, list) else '文本'})" for k, v in normalized.items())
@@ -1158,6 +1159,7 @@ class EditorBridgeMixin(EditorApiMixin):
             self.config.update(changed)
         except Exception as e:
             return False, f"写入配置失败：{e}"
+        self._editor_note_user_edits(list(changed))
         saved = await self._editor_save_config()
         self._editor_refresh_runtime()
         detail = "；".join(
@@ -1199,6 +1201,7 @@ class EditorBridgeMixin(EditorApiMixin):
             self.config.update(changed)
         except Exception as e:
             return False, f"写入配置失败：{e}"
+        self._editor_note_user_edits(list(changed))
         saved = await self._editor_save_config()
         self._editor_refresh_runtime()
         names = "、".join(f"{k}={v}" for k, v in list(changed.items())[:8])
@@ -1206,6 +1209,43 @@ class EditorBridgeMixin(EditorApiMixin):
         if not saved:
             return True, f"已写入 {names}{more}（配置这次没落盘，重启会丢）"
         return True, f"已写入 {names}{more}"
+
+    # ------------------------------------------------- 站长改过哪些配置（升级不覆盖）
+    def _editor_user_edited_keys(self) -> list[str]:
+        """站长自己改过的配置键（给页面显示：这些项升级时不会被覆盖）。"""
+        try:
+            current = self.config.get("user_edited_keys")
+        except Exception:
+            return []
+        return sorted({str(x) for x in (current or []) if str(x).strip()})
+
+    def _editor_note_user_edits(self, keys: Any) -> list[str]:
+        """记下站长手动改过的配置键 —— 升级同步默认值时会跳过这些键。
+
+        站长反馈过「更新一次就要重改一遍配置」，所以只要他从编辑器里保存过，
+        这个键就永远归他（想恢复出厂值：自己改回去，或把 defaults_sync_mode 设成 all）。
+        """
+        try:
+            wanted = [str(k) for k in (keys or []) if str(k).strip()]
+        except Exception:
+            return []
+        if not wanted:
+            return []
+        try:
+            current = self.config.get("user_edited_keys")
+        except Exception:
+            current = None
+        edited = [str(x) for x in (current or []) if str(x).strip()]
+        added = [k for k in wanted if k not in edited]
+        if not added:
+            return edited
+        merged = edited + added
+        try:
+            self.config["user_edited_keys"] = merged
+        except Exception as e:  # pragma: no cover - 记不上也不该影响保存
+            _log_debug(f"记录站长改过的配置键失败：{e}")
+            return edited
+        return merged
 
     # ------------------------------------------------------------ save_autobackup
     async def _editor_save_autobackup(self, payload: dict[str, Any]) -> tuple[bool, str]:
@@ -1240,6 +1280,7 @@ class EditorBridgeMixin(EditorApiMixin):
             self.config.update(changed)
         except Exception as e:
             return False, f"写入配置失败：{e}"
+        self._editor_note_user_edits(list(changed))
         saved = await self._editor_save_config()
         self._editor_refresh_runtime()
         names = "、".join(f"{k}={v}" for k, v in changed.items())
@@ -1448,6 +1489,8 @@ class EditorBridgeMixin(EditorApiMixin):
             "gold_max": PLAYER_GOLD_MAX,
             # 玩家页要用：上一次「找回旧数据」的扫描结果（没扫过就是 null）
             "legacy": getattr(self, "_editor_legacy_cache", None),
+            # 数值页要用：站长自己改过的键（升级时不会被新版默认值覆盖）
+            "user_edited_keys": self._editor_user_edited_keys(),
             "transport": "plugin-api",
         }
         try:

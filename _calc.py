@@ -614,7 +614,7 @@ def _parse_quality_tiers(
     defaults: list[tuple[str, float, float, str]],
     key: str,
 ) -> list[tuple[str, float, float, str]]:
-    """``普通:0.8-1.0:⚪,优良:1.0-1.35:🟢`` → [(名称, 下限, 上限, emoji)]。"""
+    """``凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢`` → [(名称, 下限, 上限, emoji)]。"""
     if not raw.strip():
         return list(defaults)
     tiers: list[tuple[str, float, float, str]] = []
@@ -1862,7 +1862,7 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
     return player, migrated
 
 def _instance_line(instance: dict[str, Any], with_value: bool = True) -> str:
-    """一行完整信息：``🌟✨ 黄金锦鲤 ✨传说 🟣极品 · 1280``。"""
+    """一行完整信息：``🌟✨ 黄金锦鲤 ✨传说 🏆珍品 · 1280``。"""
     fish_id = instance.get("fish_id", "")
     fish = FISH_BY_ID.get(fish_id)
     if fish is None:

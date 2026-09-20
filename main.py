@@ -23,7 +23,8 @@
    钓到的那一刻就定了，任何道具都改不了，决定基础价值区间与稀有度。
 
 2. **个体品质（可提升）**
-   ⚪普通 🟢优良 🔵稀有 🟣极品 🌟传说 🔱神话，共 6 档，
+   ⚪凡品 🟢良品 💎精品 🏆珍品 👑绝品 🔱神品，共 6 档，
+   （故意和鱼种稀有度「常见/少见/稀有/传说/神话」用两套名字，免得混淆）
    由「品质加成倍率 quality_mult」决定，影响售价倍率。
    投喂饲料不会改变它（饲料只加个体数值），
    但「锦鲤玉佩」可以提高掷出好个体的概率——所以个体是可以养出来的。
@@ -233,6 +234,8 @@ DEFAULTS: dict[str, Any] = {
     "config_fingerprint": "",
     # 数值同步档位：auto = 同步数值与内容 / all = 连开关一起重置 / off = 不同步
     "defaults_sync_mode": "auto",
+    # 站长自己改过的配置键（编辑器每次保存都会记一笔）：升级时这些键不会被新版默认值覆盖
+    "user_edited_keys": [],
     "initial_gold": 100,
     "fish_cost": 0,
     # 体力：每钓一次消耗 1 点，攒着最多 stamina_max 点；每 stamina_regen_seconds 秒回 1 点。
@@ -322,7 +325,7 @@ DEFAULTS: dict[str, Any] = {
     "location_hook_factors": (
         "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,night"
         ":0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,trench:0.65"
-        ",glacier:0.62,aurora:0.60"
+        ",glacier:0.62,aurora:0.60,starfall:0.58,void_sea:0.56,dragon_palace:0.54"
     ),
     # 前往下一个钓点需要上一个钓点图鉴开到多少比例
     "location_codex_gate": 0.8,
@@ -393,7 +396,7 @@ DEFAULTS: dict[str, Any] = {
     "rarity_difficulty": "常见:0,少见:0,稀有:0.22,传说:0.5,神话:0.82",
     "rarity_attr_ranges": "常见:40-78,少见:48-85,稀有:55-92,传说:62-97,神话:70-100",
     # 16 个钓点各自的「常见」鱼基准价（按钓点顺序）
-    "tier_base_values": "5,6,7,10,12,14,18,23,26,32,41,49,60,73,90,113",
+    "tier_base_values": "5,6,7,10,12,14,18,23,26,32,41,49,60,73,90,113,138,168,205",
     # 同一条鱼每次上钩的个体差异区间
     "value_variance": "0.92-1.12",
     # 三维属性：售价权重、展示名、及格线
@@ -401,7 +404,7 @@ DEFAULTS: dict[str, Any] = {
     "attr_labels": "meat:肉质,spirit:灵性,sheen:光泽",
     "attr_par": 60.0,
     # 个体品质档位（名称:下限-上限:emoji，从低到高）
-    "quality_tiers": "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑,神话:4.0-6.0:🔱",
+    "quality_tiers": "凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢,精品:1.35-1.8:💎,珍品:1.8-2.5:🏆,绝品:2.5-4.0:👑,神品:4.0-6.0:🔱",
     # 上钩率解析失败时的兜底值、未列出品质的默认逃脱率
     "hook_rate_fallback": 0.30,
     "default_escape_rate": 0.25,
@@ -431,6 +434,8 @@ DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
         "content_auto_merge",
         "defaults_sync_mode",
         "config_fingerprint",
+        # 站长自己改过的键清单：由编辑器页面维护，跟着升级同步就白做了
+        "user_edited_keys",
         # 面板路标：纯说明文字，同步它没有任何意义
         "content_tables_hint",
     }
@@ -484,6 +489,99 @@ def _defaults_fingerprint() -> str:
     payload = {key: DEFAULTS[key] for key in _synced_default_keys()}
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+
+
+# -----------------------------------------------------------------------------
+# 升级时**不覆盖站长改过的配置**（v1.18.8）
+# -----------------------------------------------------------------------------
+# 站长反馈：「更新插件不要把我以前的配置重置，我老是要去改」。
+# 做法：
+#   1. 编辑器页面每次保存都会把改过的键记进 ``user_edited_keys``，升级时这些键跳过；
+#   2. 「容器类」配置（钓点系数表 / 各档基准价 / 品质权重…）改成**合并**而不是覆盖，
+#      这样新增钓点、新增品质档位能进老配置，站长自己调过的条目也不会被抹掉；
+#   3. 官方改过默认值的「整串」配置（例如品质档位表换了名字）登记在
+#      ``DEFAULTS_VALUE_FIXES``：只有当前值**逐字等于旧默认**时才替换；
+#   4. 第一次启用这个机制时（配置里还没有 ``user_edited_keys``）把「当前值 ≠ 新默认」
+#      的键统统当成站长改过的记下来，**这次升级一个都不覆盖**。
+
+#: 这些键是「键:值」形式的映射表：升级时保留站长已有的条目，只补上官方新增的键
+DEFAULTS_MERGE_MAP_KEYS: tuple[str, ...] = (
+    "location_hook_factors",
+    "bait_hook_rates",
+    "rarity_spawn_weights",
+    "rarity_value_factors",
+    "rarity_difficulty",
+    "rarity_attr_ranges",
+    "rarity_escape_chance",
+    "attr_weights",
+    "attr_labels",
+)
+
+#: 这些键是真正的列表：升级时保留站长已有的项，只在**比新默认短**时补尾巴
+DEFAULTS_MERGE_LIST_KEYS: tuple[str, ...] = (
+    "quality_weights",
+    "rarity_display_names",
+    "codex_bonus_per_rarity",
+    "backpack_upgrades",
+    "aquarium_slots",
+)
+
+#: 这些键是「,」分隔的数字文本（列表型）：同样按长度补尾巴
+DEFAULTS_MERGE_NUMBER_TEXT_KEYS: tuple[str, ...] = ("tier_base_values",)
+
+#: 官方改过默认值的整串配置：``键 -> ((旧默认, 新默认), ...)``
+#: 只有配置里的值**逐字等于旧默认**才替换（站长自己改过的绝不碰）
+DEFAULTS_VALUE_FIXES: dict[str, tuple[tuple[Any, Any], ...]] = {
+    # v1.18.8：个体品质改名（原来叫 普通/优良/稀有/极品/传说/神话，
+    # 和鱼种稀有度撞名 → 改成 凡品/良品/精品/珍品/绝品/神品）
+    "quality_tiers": (
+        (
+            "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑",
+            "凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢,精品:1.35-1.8:💎,珍品:1.8-2.5:🏆,绝品:2.5-4.0:👑,神品:4.0-6.0:🔱",
+        ),
+        (
+            "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑,神话:4.0-6.0:🔱",
+            "凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢,精品:1.35-1.8:💎,珍品:1.8-2.5:🏆,绝品:2.5-4.0:👑,神品:4.0-6.0:🔱",
+        ),
+    ),
+}
+
+
+def _merge_map_text(old: Any, new: str) -> Any:
+    """「键:值,键:值」形式的配置：保留 old 里已有的键值，补上 new 里缺的键。"""
+    if not isinstance(old, str) or not old.strip():
+        return new
+    parts = [piece.strip() for piece in old.split(",") if piece.strip()]
+    seen = {piece.split(":", 1)[0].strip() for piece in parts}
+    for piece in str(new).split(","):
+        piece = piece.strip()
+        if not piece:
+            continue
+        key = piece.split(":", 1)[0].strip()
+        if key not in seen:
+            parts.append(piece)
+            seen.add(key)
+    return ",".join(parts)
+
+
+def _merge_list_tail(old: Any, new: list[Any]) -> Any:
+    """列表型配置：老值比新默认短就补尾巴（站长已有的项一个不动）。"""
+    if not isinstance(old, list):
+        return new
+    if len(old) >= len(new):
+        return old
+    return list(old) + list(new[len(old):])
+
+
+def _merge_number_text(old: Any, new: str) -> Any:
+    """「1,2,3」形式的数字文本：按个数补尾巴。"""
+    if not isinstance(old, str) or not old.strip():
+        return new
+    parts = [piece.strip() for piece in old.split(",") if piece.strip()]
+    fresh = [piece.strip() for piece in str(new).split(",") if piece.strip()]
+    if len(parts) >= len(fresh):
+        return old
+    return ",".join(parts + fresh[len(parts):])
 
 # =============================================================================
 # 二、鱼种品质（固有属性，5 档）
@@ -642,11 +740,13 @@ FISH_POOL: list[dict[str, Any]] = [
 LOCATION_TIER_ORDER: tuple[str, ...] = (
     "novice", "bamboo", "canal", "lake", "reed", "sea", "dock", "night",
     "mangrove", "swamp", "cave", "ruins", "abyss", "trench", "glacier", "aurora",
+    "starfall", "void_sea", "dragon_palace",
 )
 
 #: 各档「常见」鱼的基准价（每档约 ×1.22，是整条价值曲线的主干）
 TIER_BASE_VALUE: tuple[float, ...] = (
     5, 6, 7, 10, 12, 14, 18, 23, 26, 32, 41, 49, 60, 73, 90, 113,
+    138, 168, 205,
 )
 
 #: 品质价值系数（相对同档「常见」）
@@ -1340,6 +1440,16 @@ LOCATIONS: list[dict[str, Any]] = [
     {"id": "aurora", "name": "极光冰渊", "emoji": "❄️", "level_gate": 45,
      "gold_gate": 450000, "value_mult": 1.78,
      "desc": "极光下的裂隙，据说通着别处"},
+    # ---- v1.18.8 新增：给已经打到终局的钓手再往上留三级 ----
+    {"id": "starfall", "name": "星陨湖", "emoji": "🌠", "level_gate": 50,
+     "gold_gate": 700000, "value_mult": 1.86,
+     "desc": "陨石砸出来的环形湖，夜里水面浮着星光"},
+    {"id": "void_sea", "name": "万水归墟", "emoji": "🌀", "level_gate": 56,
+     "gold_gate": 1100000, "value_mult": 1.95,
+     "desc": "天下水流的尽头，连声音都被吞掉"},
+    {"id": "dragon_palace", "name": "龙宫", "emoji": "🐉", "level_gate": 62,
+     "gold_gate": 1800000, "value_mult": 2.05,
+     "desc": "琉璃为瓦珊瑚为梁，龙王的水晶宫"},
 ]
 
 #: 钓点定义字符串（配置项 `location_defs` 的默认值）由 LOCATIONS 生成，
@@ -1848,20 +1958,20 @@ EVENT_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in RANDOM_EVENTS}
 
 # =============================================================================
 # 四、个体品质（6 档，可提升）
-#    普通 → 优良 → 稀有 → 极品 → 传说 → **神话**
+#    凡品 → 良品 → 精品 → 珍品 → 绝品 → **神品**
 #    神话只能靠洗髓丹洗出来（自然上钩的权重是 0），概率见 quality_myth_chance
 # =============================================================================
 #
 # 名称, 加成下限, 加成上限, emoji
 
 QUALITY_TIERS: list[tuple[str, float, float, str]] = [
-    ("普通", 0.80, 1.00, "⚪"),
-    ("优良", 1.00, 1.35, "🟢"),
-    ("稀有", 1.35, 1.80, "🔵"),
-    ("极品", 1.80, 2.50, "🟣"),
-    ("传说", 2.50, 4.00, "🌟"),
-    # 神话：自然上钩永远不出（quality_weights 最后一位 0），只能靠洗髓丹洗出来
-    ("神话", 4.00, 6.00, "🔱"),
+    ("凡品", 0.80, 1.00, "⚪"),
+    ("良品", 1.00, 1.35, "🟢"),
+    ("精品", 1.35, 1.80, "💎"),
+    ("珍品", 1.80, 2.50, "🏆"),
+    ("绝品", 2.50, 4.00, "👑"),
+    # 神品：自然上钩永远不出（quality_weights 最后一位 0），只能靠洗髓丹洗出来
+    ("神品", 4.00, 6.00, "🔱"),
 ]
 QUALITY_ORDER = [name for name, _, _, _ in QUALITY_TIERS]
 QUALITY_RANK = {name: idx for idx, name in enumerate(QUALITY_ORDER)}
@@ -2268,7 +2378,7 @@ def _roll_quality_mult(
 
 
 def _quality_tag(instance: dict[str, Any]) -> str:
-    """个体品质标签，例如 ``🟣极品``。"""
+    """个体品质标签，例如 ``🏆珍品``。"""
     quality = instance.get("quality", QUALITY_TIERS[0][0])
     return f"{QUALITY_EMOJI.get(quality, '⚪')}{quality}"
 
@@ -2836,15 +2946,17 @@ class FishingPlugin(
             unlock("legend_hunter")
         if rarity == "神话":
             unlock("myth_hunter")
-        # ---- 个体品质 ----
-        if quality == "极品":
+        # ---- 个体品质（凡品→良品→精品→珍品→绝品→神品；和鱼种稀有度是两套名字）----
+        if quality == "珍品":
             unlock("perfect_one")
-        if quality == "传说":
+        if quality == "绝品":
             unlock("mythic_one")
+        if quality == "神品":
+            unlock("divine_one")
         top_quality = sum(
             1
             for x in inventory + aquarium
-            if QUALITY_RANK.get(x.get("quality", ""), 0) >= QUALITY_RANK["极品"]
+            if QUALITY_RANK.get(x.get("quality", ""), 0) >= QUALITY_RANK["珍品"]
         )
         if top_quality >= 3:
             unlock("perfect_three")
@@ -3972,17 +4084,19 @@ class FishingPlugin(
             self._custom_running = False
 
     async def _sync_defaults(self) -> None:
-        """把代码里的新默认数值同步进插件配置。
+        """把代码里的新默认数值同步进插件配置 —— **不覆盖站长自己改过的项**。
 
-        站长痛点：每次插件升级改了数值，都得手点一次 WebUI 的「重置配置」，
-        否则旧值一直生效。这里用「默认值指纹」解决：
+        站长痛点：每次插件升级改了数值，都得手改回来一遍（v1.18.8 他明确要求别再重置）。
+        这里的规则：
 
-        * 指纹相同 → 什么都不做（几乎零开销）
-        * 指纹不同 → 按 ``defaults_sync_mode`` 决定同步范围：
-          ``auto``（默认）只同步数值与内容，``all`` 连开关一起重置，
-          ``off`` 只更新指纹、保留站长改过的所有值
-
-        ``data_*`` / ``backup_*`` 这类管理设置**永远**不同步。
+        1. ``user_edited_keys`` 里的键（编辑器每次保存都会记）**一律跳过**；
+        2. 容器类配置**合并**：新钓点系数 / 各档基准价 / 品质权重这些，
+           保留站长已有的条目，只把官方新增的补进去；
+        3. ``DEFAULTS_VALUE_FIXES`` 里的整串修正：只有当前值逐字等于旧默认才替换；
+        4. 第一次启用（配置里还没有 ``user_edited_keys``）时，把「当前值 ≠ 新默认」的键
+           全当成站长改过的记下来，这次升级**一个都不覆盖**；
+        5. ``defaults_sync_mode``：``auto``（默认，按上面来）/ ``all``（强制全部重置）/
+           ``off``（什么都不动，只更新指纹）。
         """
         try:
             current = _defaults_fingerprint()
@@ -3994,13 +4108,83 @@ class FishingPlugin(
                 mode = "auto"
 
             changed: dict[str, Any] = {}
+            edited: list[str] = []
             if mode != "off":
+                try:
+                    edited = [
+                        str(x) for x in (self.config.get("user_edited_keys") or [])
+                        if str(x).strip()
+                    ]
+                except Exception:
+                    edited = []
+                edited_set = set(edited)
+                # 「还没记录过任何站长改过的键」= 第一次启用这套机制：
+                # 此时无法区分「站长改过」和「官方这次改了默认值」，一律按前者处理
+                # （宁可少同步，也不要把他的话改回去）；官方确实改了默认值的那些键
+                # 走上面的 DEFAULTS_VALUE_FIXES / 容器合并，照样能到老配置。
+                first_run = not edited
                 keys = list(DEFAULTS) if mode == "all" else _synced_default_keys()
+                kept_for_user: list[str] = []
+
                 for key in keys:
-                    if key in ("config_fingerprint", "defaults_sync_mode"):
+                    if key in ("config_fingerprint", "defaults_sync_mode", "user_edited_keys"):
                         continue
-                    if self.config.get(key) != DEFAULTS[key]:
-                        changed[key] = DEFAULTS[key]
+                    now = self.config.get(key)
+                    want = DEFAULTS[key]
+
+                    # 3) 官方改过的整串（例如品质档位表改名）：只有逐字等于旧默认才替换
+                    fixed = False
+                    for old_value, new_value in DEFAULTS_VALUE_FIXES.get(key, ()):  # type: ignore[arg-type]
+                        if now == old_value:
+                            if now != new_value:
+                                changed[key] = new_value
+                            fixed = True
+                            break
+                    if fixed:
+                        continue
+
+                    # 2) 容器类：合并（保留站长条目，补官方新增）
+                    if key in DEFAULTS_MERGE_MAP_KEYS and isinstance(want, str):
+                        merged = _merge_map_text(now, want)
+                        if merged != now:
+                            changed[key] = merged
+                        continue
+                    if key in DEFAULTS_MERGE_LIST_KEYS and isinstance(want, list):
+                        merged_list = _merge_list_tail(now, want)
+                        if merged_list != now:
+                            changed[key] = merged_list
+                        continue
+                    if key in DEFAULTS_MERGE_NUMBER_TEXT_KEYS and isinstance(want, str):
+                        merged_text = _merge_number_text(now, want)
+                        if merged_text != now:
+                            changed[key] = merged_text
+                        continue
+
+                    # 1) 站长改过的：一个字节都不动（模式 all 时例外，那是明确要重置）
+                    if mode == "auto" and key in edited_set:
+                        kept_for_user.append(key)
+                        continue
+
+                    # 4) 第一次启用：值和新默认不一样的，当成站长改过的保住它
+                    if mode == "auto" and first_run and now != want:
+                        kept_for_user.append(key)
+                        continue
+
+                    if now != want:
+                        changed[key] = want
+
+                if mode == "auto":
+                    # 记下这次保住的所有键 + 之前的记录（以后也不会再被覆盖）
+                    merged_edited = sorted(set(edited) | set(kept_for_user))
+                    if merged_edited != sorted(set(edited)) or first_run:
+                        changed["user_edited_keys"] = merged_edited
+                    if kept_for_user:
+                        logger.info(
+                            f"配置同步：保留站长自己改过的 {len(kept_for_user)} 项"
+                            f"（{'、'.join(kept_for_user[:6])}"
+                            f"{'…' if len(kept_for_user) > 6 else ''}）"
+                        )
+
             changed["config_fingerprint"] = current
 
             self.config.update(changed)

@@ -1639,12 +1639,12 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["rarity_attr_ranges", "品质三维范围", "品质:低-高", "钓上来时三维的随机区间", true, "稀有度"],
     ["rarity_escape_chance", "品质逃脱率", "品质:概率", "这些品质要拉线，拉失败就跑（不写 = 只按 default_escape_rate）", true, "稀有度"],
     ["rarity_display_names", "品质显示名", "5 个名字", "图鉴/背包上显示的名字（顺序 = 常见到神话；改了记得同步「数值」里其它按品质写的表）", true, "稀有度"],
-    ["tier_base_values", "各钓点基准价", "16 个数", "从第一个钓点到最后一个钓点的基准价倍数", true, "稀有度"],
+    ["tier_base_values", "各钓点基准价", "19 个数", "从第一个钓点到最后一个钓点的基准价倍数", true, "稀有度"],
     ["value_variance", "个体差异范围", "低-高", "同一条鱼每条之间的价格浮动", true, "稀有度"],
-    ["quality_weights", "个体品质权重", "6 个数", "普通/优良/稀有/极品/传说/神话 的出现权重。最后一位留 0 = 自然上钩永远不出神话（只能靠洗髓丹洗出来）", true, "稀有度"],
-    ["quality_tiers", "个体品质档位", "档位表", "名字:倍率下限-上限:表情，例如 普通:0.8-1.0:⚪；最后一档「神话」只能靠洗髓丹洗出来", true, "稀有度"],
-    ["reroll_daily_limit", "洗髓丹每日上限", "颗/鱼", "同一条鱼每天最多吃几颗洗髓丹；吃满当天它就对洗髓丹「厌恶」，第二天自动恢复（0 = 不限）", false, "稀有度"],
-    ["quality_myth_chance", "洗髓出神话的概率", "每次重掷", "每次重掷独立判定（一颗丹默认重掷 3 次）；0.0025 = 0.25%/次，填 0 = 永远洗不出", false, "稀有度"],
+    ["quality_weights", "个体品质权重", "6 个数", "凡品/良品/精品/珍品/绝品/神品 的出现权重。最后一位留 0 = 自然上钩永远不出神品（只能靠洗髓丹洗出来）", true, "稀有度"],
+    ["quality_tiers", "个体品质档位", "档位表", "名字:倍率下限-上限:表情，例如 凡品:0.8-1.0:⚪（和鱼种稀有度是两套名字）；最后一档「神品」只能靠洗髓丹洗出来", true, "稀有度"],
+    ["reroll_daily_limit", "洗髓丹每日上限", "颗/鱼", "同一条鱼每天最多吃几颗洗髓丹（默认 3）；吃满当天它就对洗髓丹「厌恶」，第二天自动恢复（0 = 不限）", false, "稀有度"],
+    ["quality_myth_chance", "洗髓出神品的概率", "每次重掷", "每次重掷独立判定（一颗丹默认重掷 3 次）；0.0025 = 0.25%/次，填 0 = 永远洗不出神品", false, "稀有度"],
     ["attr_weights", "三维权重", "键:权重", "计算鱼价时肉质/灵性/光泽各占多少", true, "稀有度"],
     ["attr_labels", "三维显示名", "键:名字", "背包/图鉴里显示的名字（meat:肉质 这种）", true, "稀有度"],
     ["attr_par", "三维及格线", "分", "低于它按它算，避免小鱼卖成负数", false, "稀有度"],
@@ -2033,6 +2033,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     if (status.players !== undefined) state.players = num(status.players, 0);
     if (status.next_auto_backup !== undefined) state.nextAutoBackup = text(status.next_auto_backup);
+    if (Array.isArray(status.user_edited_keys)) state.userEditedKeys = status.user_edited_keys.map(text);
     if (status.autobackup) state.autoBackup = autobackupFromStatus(status);
     // 旧作用域扫描结果：插件缓存着上一次扫描（没扫过是 null，那就保持页面现状）
     if (status.legacy && typeof status.legacy === "object") state.legacy = status.legacy;
@@ -2736,6 +2737,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     playersError: "",           // 读取玩家列表失败的原因
     playersLoading: false,
     playersGoldMax: 1000000000, // 金币上限（插件回写，防止手滑写出天文数字）
+    userEditedKeys: [],         // 站长自己改过的配置键（插件回写：这些不会被升级覆盖）
     playersScanLimit: 2000,
     snapshotPick: "",           // 当前选中的存档名
     snapshotPlayers: [],        // 该存档里的玩家
@@ -3361,7 +3363,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /**
    * 洗髓丹那一组数值「算给你看」：一次重掷的概率 → 一颗丹 → 每天每条鱼 →
-   * 攒到「大概率出一条神话」需要多少颗 / 多少天（站长最想知道的就是这个）。
+   * 攒到「大概率出一条神品」需要多少颗 / 多少天（站长最想知道的就是这个）。
    */
   function mythChanceHint(row) {
     var chance = numberRowValue("quality_myth_chance");
@@ -3378,10 +3380,10 @@ table.grid td.actions .btn { vertical-align: middle; }
       var days = perDay > 0 ? Math.ceil(Math.log(0.5) / Math.log(1 - perDay)) : Infinity;
       var pills = perPill > 0 ? Math.ceil(Math.log(0.5) / Math.log(1 - perPill)) : Infinity;
       out += '<div class="num-hint">📅 期望值：大约 <b>' + fmtNum(pills) + "</b> 颗丹 / <b>" +
-        (isFinite(days) ? fmtNum(days) : "∞") + "</b> 天（同一条鱼每天喂满）能有一半概率洗出一条神话" +
-        (chance === 0 ? "　—— 现在是 0，永远洗不出神话" : "") + "</div>";
+        (isFinite(days) ? fmtNum(days) : "∞") + "</b> 天（同一条鱼每天喂满）能有一半概率洗出一条神品" +
+        (chance === 0 ? "　—— 现在是 0，永远洗不出神品" : "") + "</div>";
     } else {
-      out += '<div class="num-hint">📅 现在「每日上限」是 0 = 不限；填个 3 就能看到「一天最多几颗、大概多久出一条神话」</div>';
+      out += '<div class="num-hint">📅 现在「每日上限」是 0 = 不限；填个 3 就能看到「一天最多几颗、大概多久出一条神品」</div>';
     }
     return out;
   }
@@ -3542,6 +3544,16 @@ table.grid td.actions .btn { vertical-align: middle; }
 
     if (tab.notice) {
       html += '<div class="notice"><span class="notice-icon">💡</span><div>' + esc(tab.notice) + "</div></div>";
+    }
+    // 站长最烦「更新一次就要重改一遍配置」：这里明确告诉他哪些项已经归他了
+    var keeps = (state.userEditedKeys || []);
+    if (tab.id === "numbers" && keeps.length) {
+      html += '<div class="notice"><span class="notice-icon">🔒</span><div>' +
+        "你自己改过的 <b>" + keeps.length + "</b> 项不会被升级覆盖：" +
+        '<span class="mono">' + esc(keeps.slice(0, 6).join("、")) +
+        (keeps.length > 6 ? "…" : "") + "</span>" +
+        '<div class="hint faint">新钓点、新品质档位这类「新增内容」仍会自动补进配置；' +
+        "想让全部数值回到出厂值，就把「默认值同步」设成 all。</div></div></div>";
     }
 
     html += renderToolbar(tab, list, d);

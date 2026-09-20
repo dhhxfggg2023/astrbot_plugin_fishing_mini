@@ -240,7 +240,7 @@ async def main():
 
     plugin = make_plugin(cfg)
     check(len(plugin.rods) == 6, f"鱼竿 {len(plugin.rods)} 种")
-    check(len(plugin.locations) == 16, f"钓点 {len(plugin.locations)} 个")
+    check(len(plugin.locations) == 19, f"钓点 {len(plugin.locations)} 个（v1.18.8 加了星陨湖/万水归墟/龙宫）")
     check(len(plugin.backpack_upgrades) == 3, f"扩容 {len(plugin.backpack_upgrades)} 档")
     check(cfg["backpack_base"] == 30, f"初始鱼篓 {cfg['backpack_base']}")
 
@@ -287,7 +287,7 @@ async def main():
     v3 = {
         "user_id": "70001", "data_version": 3, "gold": 500,
         "inventory": [
-            {"id": "a", "fish_id": "carp", "value": 20, "quality": "优良",
+            {"id": "a", "fish_id": "carp", "value": 20, "quality": "良品",
              "quality_mult": 1.2, "source": "fishing", "ts": 1}
         ],
         "baits": {"worm": 2},
@@ -362,7 +362,7 @@ async def main():
         zero = [fid for fid in species if mod._safe_number(weights.get(fid), 0) <= 0]
         if zero:
             dead.append(f"{loc['id']} 权重为 0：{zero[:3]}")
-    check(not dead, f"16 个钓点的常规鱼种都还能抽到 -> {dead or '无异常'}")
+    check(not dead, f"{len(mod.LOCATIONS)} 个钓点的常规鱼种都还能抽到 -> {dead or '无异常'}")
 
     ev = FakeEvent("20001")
     out = await cmd(plugin, ev, "钓点", "解锁", "城中运河")
@@ -702,9 +702,12 @@ async def main():
     sync_plugin.config = c1
     await sync_plugin._sync_defaults()
     check(
-        c1["item_drop_chance"] == mod.DEFAULTS["item_drop_chance"]
-        and c1["sell_discount"] == mod.DEFAULTS["sell_discount"],
-        f"数值被同步为新默认 -> {c1['item_drop_chance']} / {c1['sell_discount']}",
+        c1["item_drop_chance"] == 0.99 and c1["sell_discount"] == 2.5,
+        f"站长改过的数值**不再被升级覆盖**（v1.18.8 起）-> {c1['item_drop_chance']} / {c1['sell_discount']}",
+    )
+    check(
+        {"item_drop_chance", "sell_discount"} <= set(c1.get("user_edited_keys") or []),
+        f"并且被记进 user_edited_keys（以后升级也不会动）-> {c1.get('user_edited_keys')}",
     )
     check(
         c1["data_target"] == "站长手填的目标" and c1["backup_dir"] == "/my/backups",
@@ -4500,10 +4503,10 @@ async def main():
     check(mod.VALUE_VARIANCE == (0.92, 1.12), f"写坏的区间回退默认 -> {mod.VALUE_VARIANCE}")
 
     # 自定义个体品质档位（增删档位都能生效）
-    p_num.config["quality_tiers"] = "普通:0.5-1.0:⚪,极品:3.0-5.0:🏆"
+    p_num.config["quality_tiers"] = "凡品:0.5-1.0:⚪,珍品:3.0-5.0:🏆"
     p_num._refresh_config()
     check(
-        mod.QUALITY_ORDER == ["普通", "极品"],
+        mod.QUALITY_ORDER == ["凡品", "珍品"],
         f"自定义个体品质档位 -> {mod.QUALITY_ORDER}",
     )
 
@@ -4514,7 +4517,7 @@ async def main():
     p_num.config["value_variance"] = mod.DEFAULTS["value_variance"]
     p_num._refresh_config()
     check(
-        mod.QUALITY_ORDER == ["普通", "优良", "稀有", "极品", "传说", "神话"],
+        mod.QUALITY_ORDER == ["凡品", "良品", "精品", "珍品", "绝品", "神品"],
         f"恢复默认后档位复原 -> {mod.QUALITY_ORDER}",
     )
 
@@ -5304,14 +5307,15 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 108,
+        len(_schema) == 109,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
         f" + v1.13.0 的 button_style_mode/button_default_style"
         f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden"
         f" + v1.18.0 的 button_empty_scenes"
-        f" + v1.18.7 的 reroll_daily_limit/quality_myth_chance；aquarium_bonus* 两项已在 v1.18.0 删掉）",
+        f" + v1.18.7 的 reroll_daily_limit/quality_myth_chance"
+        f" + v1.18.8 的 user_edited_keys；aquarium_bonus* 两项已在 v1.18.0 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -5319,7 +5323,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 105, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 106, f"其余 {len(_hidden)} 项全部 invisible")
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
@@ -5333,7 +5337,9 @@ async def main():
         _set_content_tables = set(_bridge_mod.CONTENT_TABLES)
         _wl = set(_bridge_mod.number_whitelist())
         _skip = {"config_fingerprint", "defaults_sync_mode", "content_tables_hint",
-                 "content_auto_merge", "enable_auto_backup", "data_status"}
+                 "content_auto_merge", "enable_auto_backup", "data_status",
+                 # 站长改过哪些键的清单：插件自动维护，不是给人改的
+                 "user_edited_keys"}
         _unreachable = sorted(
             k for k in mod.DEFAULTS
             if k not in _page_keys and k not in _reply_keys and k not in _set_content_tables
@@ -5701,34 +5707,34 @@ async def main():
     # --- 个体品质新增「神话」：只能洗髓丹洗出来（v1.18.7）---
     print("\n[10r] 神话个体品质：自然洗不出、只能洗髓丹洗、每条鱼每天 3 颗")
     check(
-        mod.QUALITY_ORDER[-1] == "神话" and len(mod.QUALITY_TIERS) == 6,
-        f"个体品质 6 档，最高是神话 -> {mod.QUALITY_ORDER}",
+        mod.QUALITY_ORDER[-1] == "神品" and len(mod.QUALITY_TIERS) == 6,
+        f"个体品质 6 档，最高是神品（和鱼种稀有度分两套名字）-> {mod.QUALITY_ORDER}",
     )
     check(
-        mod.QUALITY_TIERS[-1][1] >= 4.0 and mod.QUALITY_EMOJI.get("神话") == "🔱",
-        f"神话档区间与 emoji -> {mod.QUALITY_TIERS[-1]}",
+        mod.QUALITY_TIERS[-1][1] >= 4.0 and mod.QUALITY_EMOJI.get("神品") == "🔱",
+        f"神品档区间与 emoji -> {mod.QUALITY_TIERS[-1]}",
     )
     check(
         len(cfg_r["quality_weights"]) == 6 and cfg_r["quality_weights"][-1] == 0,
-        f"神话的自然权重是 0 -> {cfg_r['quality_weights']}",
+        f"神品的自然权重是 0 -> {cfg_r['quality_weights']}",
     )
     # 自然上钩：运气拉满也掷不到神话（旧写法会把「运气爆棚」落到最后一个档）
     seen = set()
     for _ in range(4000):
         seen.add(mod._quality_label(mod._roll_quality_mult(cfg_r["quality_weights"], extra_luck=1.0))[0])
     check(
-        "神话" not in seen,
-        f"4000 次「运气拉满」的自然掷品质里没有神话 -> {sorted(seen)}",
+        "神品" not in seen,
+        f"4000 次「运气拉满」的自然掷品质里没有神品 -> {sorted(seen)}",
     )
     check(
         mod._quality_ceil() >= 6.0,
-        f"倍率钳制上限跟着最高档走（神话 6.0 不会被削）-> {mod._quality_ceil()}",
+        f"倍率钳制上限跟着最高档走（神品 6.0 不会被削）-> {mod._quality_ceil()}",
     )
     myth_inst = mod._new_instance("carp", 1.0)
     mod._apply_quality(myth_inst, 5.5)
     check(
-        myth_inst["quality"] == "神话" and abs(myth_inst["quality_mult"] - 5.5) < 1e-9,
-        f"5.5 倍率落在神话档且不被截断 -> {myth_inst['quality']} {myth_inst['quality_mult']}",
+        myth_inst["quality"] == "神品" and abs(myth_inst["quality_mult"] - 5.5) < 1e-9,
+        f"5.5 倍率落在神品档且不被截断 -> {myth_inst['quality']} {myth_inst['quality_mult']}",
     )
 
     # 洗髓丹：概率拉到 1 = 必出神话（验证「洗得出来」这条链路）
@@ -5742,10 +5748,10 @@ async def main():
     p_m = await plugin_m._load_player("96006")
     got = p_m["aquarium"][0]
     check(
-        got["quality"] == "神话",
-        f"quality_myth_chance=1 时洗出神话 -> {got['quality']}（{got['quality_mult']}）",
+        got["quality"] == "神品",
+        f"quality_myth_chance=1 时洗出神品 -> {got['quality']}（{got['quality_mult']}）",
     )
-    check("神话" in out and "脱胎换骨" in out, f"洗出神话有专门提示 -> {out.strip()[:60]}")
+    check("神品" in out and "脱胎换骨" in out, f"洗出神品有专门提示 -> {out.strip()[:60]}")
     check("今天 1/3" in out, f"提示里带上「今天几颗」-> {[l for l in out.splitlines() if '今天' in l][:1]}")
     check(
         mod._reroll_used(got, plugin_m._today_text()) == 1,
@@ -5827,8 +5833,8 @@ async def main():
         await cmd(plugin_nomyth, FakeEvent("96009"), "洗", "1")
     p_n = await plugin_nomyth._load_player("96009")
     check(
-        p_n["aquarium"][0]["quality"] != "神话",
-        f"quality_myth_chance=0 时洗不出神话 -> {p_n['aquarium'][0]['quality']}",
+        p_n["aquarium"][0]["quality"] != "神品",
+        f"quality_myth_chance=0 时洗不出神品 -> {p_n['aquarium'][0]['quality']}",
     )
     # 老存档：鱼实例没有 reroll_* 字段也不炸，且默认「不厌恶」
     legacy_inst, _ = mod._repair_player(
@@ -5858,6 +5864,198 @@ async def main():
         "|1200|" in str(plugin_fix.cfg["item_defs"][0])
         and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 1200,
         "老配置里那行没被改过 → 自动升级成新价（CONTENT_ROW_FIXES）",
+    )
+
+    # --- 品质名和鱼种稀有度分开：两套名字不能撞名（站长就是嫌撞名尴尬）---
+    check(
+        not (set(mod.QUALITY_ORDER) & set(mod.RARITY_ORDER)),
+        f"个体品质名与鱼种稀有度不重名 -> {mod.QUALITY_ORDER} vs {mod.RARITY_ORDER}",
+    )
+    legacy_names, _ = mod._repair_player(
+        {"gold": 1, "inventory": [{"fish_id": "carp", "quality": "极品",
+                                   "quality_mult": 2.0, "value": 100}]}, "96111"
+    )
+    check(
+        legacy_names["inventory"][0]["quality"] == "珍品",
+        f"老存档里的旧品质名读档时自动换成新名 -> {legacy_names['inventory'][0]['quality']}",
+    )
+
+    # =====================================================================
+    print("\n[10s] 新增三个终局钓点（星陨湖 / 万水归墟 / 龙宫）")
+    plugin_loc = make_plugin()
+    tail = [loc["id"] for loc in plugin_loc.locations][-3:]
+    check(
+        tail == ["starfall", "void_sea", "dragon_palace"],
+        f"最后三个钓点就是新增的 -> {tail}",
+    )
+    check(
+        [loc["name"] for loc in plugin_loc.locations][-3:] == ["星陨湖", "万水归墟", "龙宫"],
+        f"名字 -> {[loc['name'] for loc in plugin_loc.locations][-3:]}",
+    )
+    gates = [loc["level_gate"] for loc in plugin_loc.locations]
+    check(
+        gates == sorted(gates) and gates[-1] == 62,
+        f"等级门槛递增且到 62 级 -> {gates[-4:]}",
+    )
+    golds = [loc["gold_gate"] for loc in plugin_loc.locations]
+    check(
+        golds == sorted(golds) and golds[-1] == 1800000,
+        f"金币门槛递增且到 180 万 -> {golds[-4:]}",
+    )
+    check(mod.MAX_LEVEL == 67, f"等级上限跟着最后一档走（62+5）-> {mod.MAX_LEVEL}")
+    for loc_id in ("starfall", "void_sea", "dragon_palace"):
+        pool = mod._location_pool(loc_id)
+        rarities = {fish["rarity"] for fish, _w in pool}
+        check(
+            len(pool) >= 13 and "神话" in rarities,
+            f"{loc_id} 有 {len(pool)} 种鱼，含神话",
+        )
+    check(
+        any(fish["id"] == "big_fat_fish" for fish, _w in mod._location_pool("dragon_palace")),
+        "大肥鱼在龙宫也能出（隐藏生物的分布跟着新钓点走）",
+    )
+    check(
+        len(mod.TIER_BASE_VALUE) == len(mod.LOCATIONS)
+        and mod.TIER_BASE_VALUE[-1] > mod.TIER_BASE_VALUE[15],
+        f"各档基准价补到 {len(mod.TIER_BASE_VALUE)} 个数且末档更贵 -> {mod.TIER_BASE_VALUE[-3:]}",
+    )
+    check(
+        len(mod._parse_number_list(str(plugin_loc.cfg["tier_base_values"]),
+                                  list(mod.DEFAULTS["tier_base_values"].split(",")) and [float(x) for x in mod.DEFAULTS["tier_base_values"].split(",")],
+                                  "tier_base_values")) == 19,
+        "配置里的 tier_base_values 也是 19 个数",
+    )
+    check(
+        "dragon_palace:" in str(plugin_loc.cfg["location_hook_factors"]),
+        f"新的咬钩系数进了配置 -> ...{str(plugin_loc.cfg['location_hook_factors'])[-28:]}",
+    )
+    check(
+        len(mod.FISH_POOL) == 271,
+        f"鱼种总数 {len(mod.FISH_POOL)}（v1.18.8 新增 39 种）",
+    )
+
+    # =====================================================================
+    print("\n[10t] 升级不再重置站长的配置（v1.18.8）")
+
+    # 1) 站长改过的键（已在清单里）—— 升级不覆盖
+    p_sync = make_plugin()
+    p_sync.config["fish_value_mult"] = 3.5
+    p_sync.config["user_edited_keys"] = ["fish_value_mult"]
+    p_sync.config["config_fingerprint"] = "旧指纹"
+    p_sync.config["stamina_max"] = 999          # 没登记在清单里：应当被新版默认覆盖
+    p_sync._refresh_config()
+    await p_sync._sync_defaults()
+    check(
+        p_sync.config["fish_value_mult"] == 3.5,
+        f"清单里改过的键保持站长的值 -> {p_sync.config['fish_value_mult']}",
+    )
+    check(
+        p_sync.config["stamina_max"] == mod.DEFAULTS["stamina_max"],
+        f"没改过的键照常同步到新默认 -> {p_sync.config['stamina_max']}",
+    )
+    check(
+        p_sync.config["config_fingerprint"] == mod._defaults_fingerprint(),
+        "指纹更新了（下次启动不会反复同步）",
+    )
+
+    # 2) 第一次启用（配置里还没有 user_edited_keys）：一个都不覆盖，并全部记下来
+    p_first = make_plugin()
+    p_first.config.pop("user_edited_keys", None)
+    p_first.config["fish_value_mult"] = 2.5
+    p_first.config["stamina_max"] = 77
+    p_first.config["config_fingerprint"] = "旧指纹"
+    p_first._refresh_config()
+    await p_first._sync_defaults()
+    check(
+        p_first.config["fish_value_mult"] == 2.5 and p_first.config["stamina_max"] == 77,
+        "第一次升级不会覆盖任何「和新默认不同」的值",
+    )
+    check(
+        set(p_first.config.get("user_edited_keys") or []) >= {"fish_value_mult", "stamina_max"},
+        f"这些键被记进 user_edited_keys -> {len(p_first.config.get('user_edited_keys') or [])} 项",
+    )
+
+    # 3) 容器类：老配置里的表比新默认短 → 合并（补新增），站长改过的条目保留
+    p_merge = make_plugin()
+    old_factors = ",".join(
+        f"{loc['id']}:{0.5 if loc['id'] == 'aurora' else 0.9}" for loc in mod.LOCATIONS[:16]
+    )
+    p_merge.config["location_hook_factors"] = old_factors
+    p_merge.config["tier_base_values"] = "5,6,7,10,12,14,18,23,26,32,41,49,60,73,90,113"
+    p_merge.config["quality_weights"] = [44, 28, 16, 9, 3]
+    p_merge.config["user_edited_keys"] = ["location_hook_factors"]
+    p_merge.config["config_fingerprint"] = "旧指纹"
+    p_merge._refresh_config()
+    await p_merge._sync_defaults()
+    factors_now = str(p_merge.config["location_hook_factors"])
+    check(
+        "starfall:" in factors_now and "void_sea:" in factors_now and "dragon_palace:" in factors_now,
+        f"钓点系数表补上了新钓点 -> ...{factors_now[-36:]}",
+    )
+    check(
+        "aurora:0.5" in factors_now,
+        "站长自己改过的那个钓点值保留（没被覆盖成 0.6）",
+    )
+    check(
+        len(mod._parse_number_list(str(p_merge.config["tier_base_values"]),
+                                  [float(x) for x in mod.DEFAULTS["tier_base_values"].split(",")],
+                                  "tier_base_values")) == 19,
+        f"各档基准价补到 19 个数 -> {p_merge.config['tier_base_values'][-18:]}",
+    )
+    check(
+        len(list(p_merge.config["quality_weights"])) == 6
+        and list(p_merge.config["quality_weights"])[-1] == 0,
+        f"品质权重补到 6 个（末位 0）-> {p_merge.config['quality_weights']}",
+    )
+
+    # 4) 官方改过的整串（品质档位表改名）：逐字等于旧默认才替换
+    p_tier = make_plugin()
+    p_tier.config["quality_tiers"] = (
+        "普通:0.8-1.0:⚪,优良:1.0-1.35:🟢,稀有:1.35-1.8:💎,极品:1.8-2.5:🏆,传说:2.5-4.0:👑"
+    )
+    p_tier.config["config_fingerprint"] = "旧指纹"
+    p_tier._refresh_config()
+    await p_tier._sync_defaults()
+    check(
+        "神品" in str(p_tier.config["quality_tiers"])
+        and "普通" not in str(p_tier.config["quality_tiers"]),
+        f"旧默认的档位表被换成新名字 -> {p_tier.config['quality_tiers'][:22]}…",
+    )
+    p_custom = make_plugin()
+    p_custom.config["quality_tiers"] = "小杂鱼:0.5-1.0:🐟,大货:3.0-9.0:🐋"
+    p_custom.config["config_fingerprint"] = "旧指纹"
+    p_custom._refresh_config()
+    await p_custom._sync_defaults()
+    check(
+        str(p_custom.config["quality_tiers"]).startswith("小杂鱼"),
+        f"站长自己改过的档位表一个字都不动 -> {p_custom.config['quality_tiers']}",
+    )
+
+    # 5) 编辑器保存会记一笔（以后升级就不会覆盖它了）
+    p_note = make_plugin()
+    p_note.config["user_edited_keys"] = []
+    ok_note, _msg = await p_note._editor_save_numbers({"fish_value_mult": 1.7})
+    check(
+        ok_note and "fish_value_mult" in list(p_note.config.get("user_edited_keys") or []),
+        f"编辑器保存数值后自动记录 -> {p_note.config.get('user_edited_keys')}",
+    )
+    status_note = json.loads(await p_note._editor_build_status(action="t", ok=True, message="m"))
+    check(
+        "fish_value_mult" in (status_note.get("user_edited_keys") or []),
+        "状态里带上 user_edited_keys（页面能显示「这些不会被覆盖」）",
+    )
+
+    # 6) 明确要重置时仍然能重置（defaults_sync_mode=all）
+    p_all = make_plugin()
+    p_all.config["fish_value_mult"] = 9.9
+    p_all.config["user_edited_keys"] = ["fish_value_mult"]
+    p_all.config["defaults_sync_mode"] = "all"
+    p_all.config["config_fingerprint"] = "旧指纹"
+    p_all._refresh_config()
+    await p_all._sync_defaults()
+    check(
+        p_all.config["fish_value_mult"] == mod.DEFAULTS["fish_value_mult"],
+        f"mode=all 时强制重置（连改过的也回默认）-> {p_all.config['fish_value_mult']}",
     )
 
     # --- 效果键解析 ---

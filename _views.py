@@ -634,7 +634,7 @@ class ViewsMixin:
                     "品质与拉线",
                     [
                         f"　鱼种：{rarity_line}（固有，不可变）",
-                        "　个体：⚪普通 🟢优良 🔵稀有 🟣极品 🌟传说",
+                        "　个体：⚪凡品 🟢良品 💎精品 🏆珍品 👑绝品 🔱神品",
                         f"　只有 {interactive} 需要拉线",
                         "　🎯完美 > 👍良好 > 😅偏差，超时鱼会跑",
                         f"　图鉴 {len(FISH_POOL)} 种　成就 {len(ACHIEVEMENTS)} 个",
