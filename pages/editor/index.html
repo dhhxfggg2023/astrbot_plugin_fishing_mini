@@ -382,7 +382,9 @@ body {
 .stat-chip.is-dirty b { color: var(--warn); }
 
 /* ---------- 表格 ---------- */
-.table-wrap { overflow: auto; max-height: calc(100vh - 320px); }
+/* 高度：给一个下限（max(...)），窗口矮的时候别把表格压成一条缝；
+   内容比下限还矮时按内容高，不浪费空间 */
+.table-wrap { overflow: auto; max-height: max(360px, calc(100vh - 300px)); }
 table.grid {
   width: 100%;
   border-collapse: separate;
@@ -566,7 +568,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 /* ============================== 存档页 ============================== */
 .snap-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--sp-3);
   padding: var(--sp-4);
 }
@@ -624,7 +626,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 /* 新建存档表单 */
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: var(--sp-3);
   padding: var(--sp-4);
 }
@@ -690,13 +692,16 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  height: 34px;
-  padding: 0 var(--sp-5);
+  /* 窗口窄的时候允许换行：宁可变成两行，也别把右边的信息挤出屏幕 */
+  flex-wrap: wrap;
+  min-height: 34px;
+  padding: 4px var(--sp-5);
   background: var(--card);
   border-top: 1px solid var(--border);
   font-size: 11.5px;
   color: var(--muted);
 }
+.statusbar > * { min-width: 0; }
 .statusbar .dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--faint); flex: none; display: inline-block; margin-right: 6px;
@@ -763,7 +768,13 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 /* ====================== 💬 回复（场景卡片 + 常驻预览 + 按钮总览） ====================== */
 .rp-split { display: flex; gap: var(--sp-4); align-items: flex-start; }
 .rp-main { flex: 1 1 auto; min-width: 0; }
-.rp-side { flex: 0 0 330px; width: 330px; position: sticky; top: 104px; }
+/* 预览面板：吸在右边；自己高了就在面板内滚，别让下半截顶在屏幕外面够不着 */
+.rp-side {
+  flex: 0 0 330px; width: 330px;
+  position: sticky; top: 104px;
+  max-height: calc(100vh - 118px);
+  overflow: auto;
+}
 
 .rp-group { margin-bottom: var(--sp-4); }
 .rp-group-head { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap; padding: 0 2px var(--sp-2); }
@@ -821,23 +832,85 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 .rp-btn.is-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
 .rp-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
 .rp-mode { display: flex; gap: 6px; align-items: center; }
-.rp-table-wrap { overflow: auto; max-height: calc(100vh - 400px); }
+.rp-table-wrap { overflow: auto; max-height: max(320px, calc(100vh - 380px)); }
 /* 长列表用「换行小方块」铺开，别做成一行横向滚动让人去拉滑块 */
 .chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
 td.actions .btn + .btn { margin-left: 4px; }
+table.grid td.actions { display: table-cell; }
+table.grid td.actions .btn { vertical-align: middle; }
 
 /* ============================== 响应式 ============================== */
 @media (max-width: 1100px) {
   .toolbar { gap: 6px; }
   .field.search { min-width: 190px; }
+}
+/* 回复页：窗口不够宽就把预览挪到卡片下面。
+   别硬挤 —— 右侧固定 330px 一挤，左边的按钮总览表就只剩一半，右边几列直接看不见了。 */
+@media (max-width: 1400px) {
   .rp-split { flex-direction: column; }
   .rp-side { flex: 1 1 auto; width: 100%; position: static; }
 }
 @media (max-width: 820px) {
-  .content { padding: var(--sp-3) var(--sp-3) 72px; }
+  .content { padding: var(--sp-3) var(--sp-3) 108px; }
   .topbar { padding: var(--sp-3); flex-wrap: wrap; }
   .topbar-right { width: 100%; margin-left: 0; justify-content: flex-start; }
   .statusbar { padding: 0 var(--sp-3); }
+  /* 顶栏/标签在这种宽度下会换行，高度估不准：干脆别吸顶，免得压住内容 */
+  .sticky-head { position: static; }
+}
+
+/* 窄窗口（插件页经常被塞进 700~1100px 的 iframe）：表格改成「一行一张卡」，
+   别再让人拉横向滚动条 —— 右边那几列以前就是被切在外面看不见的。
+   卡片模式下也取消表格内部的限高：整页滚动比小框里套小框好找内容。 */
+@media (max-width: 1180px) {
+  .table-wrap.is-stack { max-height: none; overflow: visible; }
+  table.grid.stack { min-width: 0 !important; }
+  table.grid.stack thead { display: none; }
+  table.grid.stack tbody tr {
+    display: block;
+    margin: 0 0 var(--sp-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card);
+    overflow: hidden;
+  }
+  table.grid.stack tbody tr.is-selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft); }
+  table.grid.stack tbody tr.is-invalid { border-color: var(--danger); }
+  table.grid.stack tbody td {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    width: auto !important;
+    padding: 6px var(--sp-3);
+    border-bottom: 1px solid var(--border-soft);
+    text-align: left;
+  }
+  table.grid.stack tbody td:last-child { border-bottom: 0; }
+  table.grid.stack tbody td::before {
+    content: attr(data-label);
+    flex: 0 0 84px;
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 550;
+    padding-top: 1px;
+    white-space: normal;
+  }
+  /* 没标签的格子（勾选框 / 分组标题）不占标签位 */
+  table.grid.stack tbody td[data-label=""]::before { display: none; }
+  table.grid.stack tbody td[data-label=""] { padding: 6px 10px; }
+  /* 长文本（说明、指令）别在卡片里再截断，让它换行占满 */
+  table.grid.stack tbody td .cut,
+  table.grid.stack tbody td .mono,
+  table.grid.stack tbody td .nowrap {
+    max-width: none; overflow: visible; text-overflow: clip;
+    white-space: normal; word-break: break-word;
+  }
+  table.grid.stack tbody td.cell-wide { display: block; }
+  table.grid.stack tbody td.cell-wide::before { display: block; flex: none; margin-bottom: 2px; }
+  table.grid.stack tr.group-row { margin: 0 0 var(--sp-2); border: 0; background: transparent; }
+  table.grid.stack tr.group-row td { display: block; padding: 4px 2px; font-weight: 620; color: var(--muted); }
+  table.grid.stack tr.group-row td::before { display: none; }
+  table.grid.stack tbody td.actions { justify-content: flex-end; }
 }
 
 /* 滚动条（深色下别是刺眼的白色） */
@@ -2526,13 +2599,13 @@ td.actions .btn + .btn { margin-left: 4px; }
       // 说明写得很长（每个键都讲清「改了什么会怎样」），让它换行显示，
       // 别为了塞进一行又把表格撑出横向滚动条
       wrapCells: true,
-      tableMinWidth: "620px",
+      tableMinWidth: "560px",
       sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueDesc", "按数值（高→低）"]],
       columns: [
-        { key: "label", label: "数值项",    type: "readonly", w: "200px" },
-        { key: "key",   label: "配置键",    type: "readonly", w: "220px", mono: true },
-        { key: "value", label: "当前值",    type: "number",   w: "120px", num: true, step: "any", valueKey: true },
-        { key: "unit",  label: "单位",      type: "readonly", w: "70px" },
+        { key: "label", label: "数值项",    type: "readonly", w: "150px" },
+        { key: "key",   label: "配置键",    type: "readonly", w: "170px", mono: true },
+        { key: "value", label: "当前值",    type: "number",   w: "104px", num: true, step: "any", valueKey: true },
+        { key: "unit",  label: "单位",      type: "readonly", w: "56px" },
         { key: "desc",  label: "说明",      type: "readonly" }
       ],
       makeRow: null,
@@ -3251,7 +3324,7 @@ td.actions .btn + .btn { margin-left: 4px; }
         var g = toText(row.group) || "其他";
         if (g !== lastGroup) {
           lastGroup = g;
-          head = '<tr class="group-row"><td colspan="' + (tab.columns.length + 2) + '">' +
+          head = '<tr class="group-row"><td data-label="" colspan="' + (tab.columns.length + 2) + '">' +
             esc(g) + "</td></tr>";
         }
       }
@@ -3268,8 +3341,12 @@ td.actions .btn + .btn { margin-left: 4px; }
         var cls = [];
         if ((col.num || col.type === "number") && !row.text) cls.push("num");
         if (col.key === "id" || col.key === "key") cls.push("id-cell");
-        if (col.w) return '<td class="' + cls.join(" ") + '" style="width:' + col.w + '">' + cellHtml(tab, col, row, index) + "</td>";
-        return '<td class="' + cls.join(" ") + '">' + cellHtml(tab, col, row, index) + "</td>";
+        // 长文本列（说明/风味）在卡片模式下占满一行，别挤在标签右边
+        if (col.key === "desc" || col.key === "flavor" || col.key === "notice") cls.push("cell-wide");
+        // data-label：窄窗口把表格拆成「一行一张卡」时，用它当每格的标签
+        var labelAttr = ' data-label="' + esc(col.label) + '"';
+        if (col.w) return '<td class="' + cls.join(" ") + '"' + labelAttr + ' style="width:' + col.w + '">' + cellHtml(tab, col, row, index) + "</td>";
+        return '<td class="' + cls.join(" ") + '"' + labelAttr + ">" + cellHtml(tab, col, row, index) + "</td>";
       }).join("");
 
       var confirming = state.pendingConfirm && state.pendingConfirm.scope === "row" && state.pendingConfirm.index === index;
@@ -3282,9 +3359,9 @@ td.actions .btn + .btn { margin-left: 4px; }
 
       return head + '<tr class="' + (isSel ? "is-selected " : "") + (isDirty ? "is-dirty " : "") + (invalid ? "is-invalid " : "") +
         (state.editing && state.editing.index === index ? "is-editing" : "") + '">' +
-        '<td style="width:34px"><input type="checkbox" data-act="row:select" data-index="' + index + '"' + (isSel ? " checked" : "") + " /></td>" +
+        '<td data-label="" style="width:34px"><input type="checkbox" data-act="row:select" data-index="' + index + '"' + (isSel ? " checked" : "") + " /></td>" +
         tds +
-        '<td class="actions">' + actions + "</td>" +
+        '<td class="actions" data-label="操作">' + actions + "</td>" +
         "</tr>";
     }).join("");
   }
@@ -3305,7 +3382,7 @@ td.actions .btn + .btn { margin-left: 4px; }
 
     html += renderToolbar(tab, list, d);
 
-    html += '<div class="table-wrap"><table class="grid' + (tab.wrapCells ? " wrap-cells" : "") + '"' + (tab.tableMinWidth ? ' style="min-width:' + tab.tableMinWidth + '"' : "") + ">";
+    html += '<div class="table-wrap is-stack"><table class="grid stack' + (tab.wrapCells ? " wrap-cells" : "") + '"' + (tab.tableMinWidth ? ' style="min-width:' + tab.tableMinWidth + '"' : "") + ">";
     html += "<thead><tr>";
     html += '<th style="width:34px"><input type="checkbox" data-act="selectAll" title="全选/取消" /></th>';
     html += tab.columns.map(function (col) {
@@ -3708,7 +3785,7 @@ td.actions .btn + .btn { margin-left: 4px; }
         '<div style="margin-top:6px">' + legacyCloseBtn + "</div></div></div>";
     }
     if (state.legacy && (state.legacy.players || []).length) {
-      html += '<div class="table-wrap" style="max-height:260px"><table class="grid wrap-cells" style="min-width:640px">' +
+      html += '<div class="table-wrap is-stack" style="max-height:max(220px,40vh)"><table class="grid stack wrap-cells" style="min-width:640px">' +
         "<thead><tr><th>旧作用域里发现的玩家</th><th>状态</th><th>金币</th><th>累计竿数</th><th>钓点</th></tr></thead><tbody>" +
         state.legacy.players.slice(0, 60).map(function (p) {
           var have = p.present === true;
@@ -3716,9 +3793,11 @@ td.actions .btn + .btn { margin-left: 4px; }
           var note = p.uid_fixed
             ? ' <span class="hint faint" title="旧键名是 ' + esc(text(p.key)) + '">（导入时取干净 ID）</span>'
             : "";
-          return "<tr><td class=\"mono\">" + esc(p.user_id) + note + "</td><td>" + mark + "</td><td class=\"num\">" +
-            esc(fmtNum(p.gold)) + "</td><td class=\"num\">" + esc(fmtNum(p.caught)) +
-            "</td><td class=\"num\">" + p.locations + "</td></tr>";
+          return '<tr><td class="mono" data-label="玩家">' + esc(p.user_id) + note +
+            '</td><td data-label="状态">' + mark +
+            '</td><td class="num" data-label="金币">' + esc(fmtNum(p.gold)) +
+            '</td><td class="num" data-label="累计竿数">' + esc(fmtNum(p.caught)) +
+            '</td><td class="num" data-label="钓点">' + p.locations + "</td></tr>";
         }).join("") + "</tbody></table></div>";
     }
 
@@ -3737,7 +3816,7 @@ td.actions .btn + .btn { margin-left: 4px; }
           ? "有玩家在群里发过 /钓鱼 之后这里就会出现"
           : "先在上面选一份存档；没有存档就去「💾 存档」页新建一份") + "</div></div>";
     } else {
-      html += '<div class="table-wrap"><table class="grid" style="min-width:1000px">';
+      html += '<div class="table-wrap is-stack"><table class="grid stack" style="min-width:1000px">';
       html += "<thead><tr>" +
         '<th style="width:130px">玩家 ID</th><th style="width:130px">昵称</th>' +
         '<th class="num" style="width:190px">金币（可改）</th>' +
@@ -3785,16 +3864,16 @@ td.actions .btn + .btn { margin-left: 4px; }
         (confirming ? "disabled" : "") + ">✏️ 改金币</button>";
     }
     return "<tr>" +
-      '<td class="mono">' + esc(uid) + "</td>" +
-      "<td>" + (r.name ? esc(r.name) : '<span class="placeholder">未记录</span>') + "</td>" +
-      '<td class="num">' + goldCell + "</td>" +
-      '<td class="num">' + esc(r.level) + "</td>" +
-      '<td class="num">' + esc(fmtNum(r.caught)) + "</td>" +
-      '<td class="num">' + esc(fmtNum(r.sold)) + "</td>" +
-      '<td class="num">' + esc(r.fish) + "</td>" +
-      '<td class="num">' + esc(r.aquarium) + "</td>" +
-      (live ? "<td class=\"faint mono\">" + esc(r.saved_text || "—") + "</td>" : "") +
-      "<td>" + actions + "</td>" +
+      '<td class="mono" data-label="玩家 ID">' + esc(uid) + "</td>" +
+      '<td data-label="昵称">' + (r.name ? esc(r.name) : '<span class="placeholder">未记录</span>') + "</td>" +
+      '<td class="num" data-label="金币（可改）">' + goldCell + "</td>" +
+      '<td class="num" data-label="等级">' + esc(r.level) + "</td>" +
+      '<td class="num" data-label="钓获">' + esc(fmtNum(r.caught)) + "</td>" +
+      '<td class="num" data-label="卖出">' + esc(fmtNum(r.sold)) + "</td>" +
+      '<td class="num" data-label="鱼篓">' + esc(r.fish) + "</td>" +
+      '<td class="num" data-label="水族馆">' + esc(r.aquarium) + "</td>" +
+      (live ? '<td class="faint mono" data-label="最近保存">' + esc(r.saved_text || "—") + "</td>" : "") +
+      '<td class="actions" data-label="操作">' + actions + "</td>" +
       "</tr>";
   }
 
@@ -4865,7 +4944,8 @@ td.actions .btn + .btn { margin-left: 4px; }
     html += '<div id="rpWarn-' + esc(scene.id) + '">' + replyWarnHtml(warnings, false) + "</div>";
 
     html += '<div class="rp-row"><span class="rp-label">按钮</span>' +
-      '<span class="hint faint">文案 → 点击后发送的指令；顺序就是 QQ 里的显示顺序</span></div>';
+      '<span class="hint faint">文案 → 点击后发送的指令；顺序就是 QQ 里的显示顺序。' +
+      "在这里加/改 = <b>只改这个场景</b>；「🔘 按钮总览」只用来检查、删除和批量改样式。</span></div>";
     if (!d.buttons.length) {
       html += '<div class="hint faint">这个场景' +
         (src === "none" ? "目前没有任何按钮" : "现在用的是「" + esc(REPLY_SOURCE_LABEL[src] || src) + "」的按钮") +
@@ -4876,7 +4956,8 @@ td.actions .btn + .btn { margin-left: 4px; }
     }).join("") + "</div>";
     html += '<div class="rp-row">' +
       (r.readonly ? "" :
-        '<button class="btn btn-sm" data-act="rp:btnAdd" data-scene="' + esc(scene.id) + '">＋ 加按钮</button>') +
+        '<button class="btn btn-sm' + (d.buttons.length ? "" : " btn-primary") +
+        '" data-act="rp:btnAdd" data-scene="' + esc(scene.id) + '">＋ 加按钮</button>') +
       '<span class="divider"></span><span class="hint">每行</span>' +
       '<input class="cell-input" style="width:58px" type="number" min="1" max="' + replyRowMax() +
       '" data-act="rp:perRow" data-scene="' + esc(scene.id) + '" value="' + esc(ownRow) +
@@ -4889,6 +4970,22 @@ td.actions .btn + .btn { margin-left: 4px; }
       "</div>";
     html += "</div></article>";
     return html;
+  }
+
+  /** 跳到某个场景的卡片：清掉搜索、展开它所在的分组、聚焦并打开预览。 */
+  function jumpToSceneCard(sceneId) {
+    var id = toText(sceneId);
+    state.replies.view = "cards";
+    state.replies.focus = id;
+    state.replies.previewOpen = true;
+    // 清掉搜索：跳过去就得看得见那张卡（否则目标卡片可能被筛掉）
+    state.replies.query = "";
+    state.replies.collapsed = state.replies.collapsed || {};
+    (state.replies.groups || []).forEach(function (g) {
+      (g.scenes || []).forEach(function (s) {
+        if (s.id === id) state.replies.collapsed[g.id] = false;
+      });
+    });
   }
 
   /** 预览模型（草稿 -> 预览）：卡片里改什么，预览就跟着变。 */
@@ -4995,9 +5092,13 @@ td.actions .btn + .btn { margin-left: 4px; }
     html += "</section>";
 
     html += '<section class="card">';
-    html += '<div class="card-head"><h2>🔘 所有按钮</h2><span class="hint">共 ' + rows.length +
+    html += '<div class="card-head"><h2>🔘 所有按钮（总览）</h2><span class="hint">共 ' + rows.length +
       " 个按钮 · 和场景卡片是同一份草稿，改哪边都一样</span>" +
       '<span class="spacer"></span><span class="hint faint">批量操作：先勾选左边</span></div>';
+    html += '<div class="notice"><span class="notice-icon">✍️</span><div>' +
+      "这个总览是用来<b>检查 / 删除 / 批量改样式</b>的：要改某个场景的按钮文案和指令，" +
+      "点那行的「＋ 加按钮」或「✏️ 改」，会直接跳到<b>那个场景的卡片</b>里编辑" +
+      "（输入框在卡片里；在这里改不了文字）。</div></div>";
     if (r.readonly) {
       html += '<div class="notice"><span class="notice-icon">🔒</span><div>只读模式：场景接口没读到，这里是 button_defs 的现有内容。</div></div>';
     } else {
@@ -5015,30 +5116,30 @@ td.actions .btn + .btn { margin-left: 4px; }
         '<div class="empty-title">所有场景都没有按钮</div>' +
         '<div class="empty-sub">到「场景卡片」视图里给需要的场景点「＋ 加按钮」</div></div>';
     } else {
-      html += '<div class="table-wrap rp-table-wrap"><table class="grid" style="min-width:980px">';
+      html += '<div class="table-wrap rp-table-wrap is-stack"><table class="grid stack" style="min-width:900px">';
       html += "<thead><tr>" +
         (r.readonly ? "" : '<th style="width:34px"></th>') +
         '<th style="width:210px">场景</th><th style="width:170px">按钮文案</th>' +
         '<th style="width:220px">点击后发送</th><th style="width:120px">样式</th>' +
-        "<th>说明</th>" + (r.readonly ? "" : '<th style="width:130px"></th>') + "</tr></thead><tbody>";
+        "<th>说明</th>" + (r.readonly ? "" : '<th style="width:150px"></th>') + "</tr></thead><tbody>";
       rows.forEach(function (row) {
         var errs = validateReplyButton(row.button);
         var bad = Object.keys(errs).length > 0;
         html += "<tr" + (bad ? ' class="is-invalid"' : "") + ">" +
-          (r.readonly ? "" : '<td><input type="checkbox" data-act="rp:sel" data-key="' +
+          (r.readonly ? "" : '<td data-label=""><input type="checkbox" data-act="rp:sel" data-key="' +
             esc(row.key) + '"' + (r.sel[row.key] ? " checked" : "") + " /></td>") +
-          '<td class="id-cell">' + esc(row.scene_label) +
+          '<td class="id-cell" data-label="场景">' + esc(row.scene_label) +
           ' <span class="mono faint">' + esc(row.scene_id) + "</span></td>" +
-          "<td>" + esc(row.button.label) + "</td>" +
-          '<td class="mono">' + esc(row.button.data) + "</td>" +
-          "<td>" + esc(row.button.style) + "</td>" +
-          '<td class="faint">' + esc(REPLY_SOURCE_LABEL[row.source] || row.source) +
+          '<td data-label="按钮文案">' + esc(row.button.label) + "</td>" +
+          '<td class="mono" data-label="点击后发送">' + esc(row.button.data) + "</td>" +
+          '<td data-label="样式">' + esc(row.button.style) + "</td>" +
+          '<td class="faint" data-label="说明">' + esc(REPLY_SOURCE_LABEL[row.source] || row.source) +
           (bad ? "　<span style=\"color:var(--danger)\">" + esc(errs.label || errs.data || errs.style) + "</span>" : "") +
           "</td>" +
           (r.readonly ? "" :
-            '<td class="actions">' +
-            '<button class="btn btn-sm" data-act="rp:btnAdd" data-scene="' + esc(row.scene_id) +
-            '" title="给这个场景再加一个按钮">＋</button>' +
+            '<td class="actions" data-label="操作">' +
+            '<button class="btn btn-sm btn-primary" data-act="rp:btnAdd" data-scene="' + esc(row.scene_id) +
+            '" data-jump="card" title="给这个场景再加一个按钮，并跳到卡片里填文案和指令">＋ 加按钮</button>' +
             '<button class="btn btn-sm" data-act="rp:goto" data-scene="' + esc(row.scene_id) +
             '" title="跳到这张卡片">✏️ 改</button>' +
             '<button class="btn btn-sm btn-danger" data-act="rp:btnDel" data-scene="' + esc(row.scene_id) +
@@ -5055,11 +5156,11 @@ td.actions .btn + .btn { margin-left: 4px; }
     if (emptyScenes.length && !r.readonly) {
       html += '<div class="card-foot" style="padding:10px 14px;border-top:1px solid var(--border)">' +
         '<div class="hint" style="margin-bottom:6px">还没有按钮的场景（' + emptyScenes.length +
-        " 个）—— 点场景名就给它加一个按钮：</div>" +
+        " 个）—— 点场景名就给它加一个按钮（会自动跳到那个场景的卡片里填文案）：</div>" +
         '<div class="chip-wrap">' +
         emptyScenes.slice(0, 200).map(function (s) {
           return '<button class="btn btn-sm" data-act="rp:btnAdd" data-scene="' + esc(s.id) +
-            '" title="' + esc(s.desc || s.id) + '">＋ ' + esc(s.label) + "</button>";
+            '" data-jump="card" title="' + esc(s.desc || s.id) + '">＋ ' + esc(s.label) + "</button>";
         }).join("") +
         "</div></div>";
     }
@@ -6035,6 +6136,11 @@ td.actions .btn + .btn { margin-left: 4px; }
         });
         ad.buttonsTouched = true;
         state.replies.focus = addId;
+        // 从「按钮总览」点进来的：直接跳到这个场景的卡片 ——
+        // 文案/指令的输入框在卡片里，总览里只有只读文字（站长反馈过这点）
+        if (el.getAttribute("data-jump") === "card") {
+          jumpToSceneCard(addId);
+        }
         render();
         var newBoxes = document.querySelectorAll('[data-act="rp:btnLabel"][data-scene="' + addId + '"]');
         if (newBoxes && newBoxes.length && newBoxes[newBoxes.length - 1].focus) {
@@ -6073,9 +6179,7 @@ td.actions .btn + .btn { margin-left: 4px; }
         break;
       }
       case "rp:goto": {
-        state.replies.view = "cards";
-        state.replies.focus = el.getAttribute("data-scene");
-        state.replies.previewOpen = true;
+        jumpToSceneCard(el.getAttribute("data-scene"));
         render();
         break;
       }
@@ -6336,7 +6440,7 @@ td.actions .btn + .btn { margin-left: 4px; }
         var wrap = panel.querySelector(".table-wrap");
         var foot = panel.querySelector(".table-foot");
         var list = visibleRows(tab);
-        if (wrap) wrap.innerHTML = '<table class="grid"><thead>' +
+        if (wrap) wrap.innerHTML = '<table class="grid stack"><thead>' +
           panel.querySelector("table.grid thead").innerHTML + "</thead><tbody>" +
           renderTableBody(tab, list) + "</tbody></table>";
         if (foot) foot.innerHTML = '<button class="btn btn-sm" data-act="row:add"' + (tab.makeRow ? "" : " disabled") + ">＋ 新增一行</button>" +

@@ -144,7 +144,8 @@ const hookNames = [
   "replyTextBaseline", "replyDirtyCount", "replyEffectivePerRow", "replyGlobalPerRow",
   "replyFallbackPayload", "applyButtonsTextToTable", "markRepliesSaved", "replyOverviewRows",
   "previewModelFor", "replyBadButtons", "refreshReplyLive", "replyRowMax", "knownPlaceholderNames",
-  "replyFilterScenes", "replyVisibleGroups", "renderReplyMain", "replyStatsHtml"
+  "replyFilterScenes", "replyVisibleGroups", "renderReplyMain", "replyStatsHtml",
+  "jumpToSceneCard",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -1011,6 +1012,61 @@ async function repliesPure() {
     "收起分组后这一组的卡片不再渲染（其他组照常）");
   check(collapsedMain.indexOf("3 个场景") > 0, "分组标题上写着这一组有几个场景");
   T.state.replies.collapsed = {};
+  T.state.replies.query = "";
+
+  /* ---- 窄窗口不再横着切：表格在窄屏改成「一行一张卡」 ---- */
+  console.log("  ── 🖼️ 窄窗口布局：表格拆卡片 ----");
+  check(/@media \(max-width: 1180px\)/.test(html), "页面里有窄窗口断点（1180px）");
+  check(/@media \(max-width: 1400px\) \{[\s\S]{0,200}?\.rp-split \{ flex-direction: column; \}/.test(html),
+    "回复页在 1400px 以下就把预览挪到下面（不硬挤左边那半张表）");
+  check(/table\.grid\.stack thead \{ display: none; \}/.test(html),
+    "窄屏下隐藏表头（改成每格自己带标签）");
+  check(/content: attr\(data-label\)/.test(html), "卡片模式用 data-label 当每格的标签");
+  check(/\.table-wrap\.is-stack \{ max-height: none/.test(html),
+    "卡片模式取消表格内部限高（整页滚动，不再小框里套小框）");
+  check(/max-height: max\(360px/.test(html), "表格限高带下限（窗口矮也不会被压成一条缝）");
+  check(/\.statusbar \{[\s\S]{0,400}?flex-wrap: wrap/.test(html),
+    "底部状态栏允许换行（窄窗口不再把右边信息挤出屏幕）");
+  check(/minmax\(240px, 1fr\)/.test(html) && /minmax\(170px, 1fr\)/.test(html),
+    "存档卡片 / 表单栅格的最小宽度调小（窄容器也能放下）");
+  check(/\.rp-side \{[\s\S]{0,240}?max-height: calc\(100vh - 118px\)[\s\S]{0,80}?overflow: auto/.test(html),
+    "预览面板自己高了就在面板内滚（下半截不会顶在屏幕外够不着）");
+  check(/@media \(max-width: 820px\) \{[\s\S]{0,600}?\.sticky-head \{ position: static; \}/.test(html),
+    "很窄时顶栏不再吸顶（它换行后高度估不准，容易压住内容）");
+
+  const fishTabHtml = T.renderTableTab(T.TAB_BY_ID.fish);
+  check(fishTabHtml.indexOf('class="grid stack') > 0 && fishTabHtml.indexOf("is-stack") > 0,
+    "内容表带上了 stack 标记");
+  check(fishTabHtml.indexOf('data-label="') > 0, "内容表的每个格子都带 data-label");
+  const numTabHtml = T.renderTableTab(T.TAB_BY_ID.numbers);
+  check(numTabHtml.indexOf('data-label="当前值"') > 0,
+    "数值页「当前值」格子有标签");
+
+  /* ---- 「在场景里加按钮」：总览里的 ＋ 要跳到那张卡片 ---- */
+  console.log("  ── ✍️ 场景按钮：总览只做检查，改按钮跳回卡片 ──");
+  T.state.replies.view = "overview";
+  T.state.replies.sel = {};
+  const overviewHtml = T.renderReplyOverview();
+  check(overviewHtml.indexOf('data-jump="card"') > 0,
+    "总览里的「＋ 加按钮」带上了跳转标记（点了会去场景卡片）");
+  check(overviewHtml.indexOf("要改某个场景的按钮文案和指令") > 0,
+    "总览顶部写明「改按钮请到卡片里」");
+  const cardHtml = T.renderReplyCard(T.replySceneById("cast.hit"));
+  check(cardHtml.indexOf("只改这个场景") > 0,
+    "场景卡片里写明「在这里加/改 = 只改这个场景」");
+  check(cardHtml.indexOf('data-act="rp:btnAdd"') > 0, "场景卡片里有「＋ 加按钮」");
+
+  T.state.replies.query = "zzz";
+  T.state.replies.collapsed = { cast: true };
+  T.state.replies.previewOpen = false;
+  T.jumpToSceneCard("cast.hit");
+  check(T.state.replies.view === "cards" && T.state.replies.focus === "cast.hit"
+    && T.state.replies.query === "" && T.state.replies.collapsed.cast === false
+    && T.state.replies.previewOpen === true,
+    "跳到场景卡片时：切回卡片视图、清搜索、展开分组、开预览",
+    JSON.stringify({ v: T.state.replies.view, q: T.state.replies.query,
+                     c: T.state.replies.collapsed.cast }));
+  T.state.replies.view = "cards";
 
   // 24 组 × 7 个场景 = 168 个场景（比线上的 154 个还多一点）：渲染不能炸、也得筛得动
   const bigGroups = [];
