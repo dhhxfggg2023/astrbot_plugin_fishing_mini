@@ -1817,19 +1817,28 @@ for _loc_id, _pool in ROSTER_WEIGHTS.items():
 # 三·六、鱼竿（越贵越强，主要提升价值与幸运）
 # =============================================================================
 
+#: ⚠️ 这是 `rod_defs` 为空/写坏时的**出厂兜底**，数值必须与
+#: `DEFAULTS["rod_defs"]` 逐项一致 —— 以前两处各写一套（价格更便宜、手气更低），
+#: 一旦站长清空 rod_defs，鱼竿数值就会悄悄换一套（`test_local.py` 的 [6n] 钉住了这条）。
 RODS: list[dict[str, Any]] = [
     {"id": "bamboo", "name": "竹竿", "emoji": "🎋", "price": 0,
-     "value_bonus": 0.00, "luck_bonus": 0.00, "desc": "村口杂货铺送的，能用"},
-    {"id": "carbon", "name": "碳素竿", "emoji": "🎣", "price": 300,
-     "value_bonus": 0.08, "luck_bonus": 0.03, "desc": "轻巧顺手，新手进阶首选"},
-    {"id": "stream", "name": "溪流竿", "emoji": "🪝", "price": 1200,
-     "value_bonus": 0.15, "luck_bonus": 0.05, "desc": "韧性好，适合溪流与湖泊"},
-    {"id": "dragon", "name": "龙纹竿", "emoji": "🐉", "price": 4000,
-     "value_bonus": 0.25, "luck_bonus": 0.10, "desc": "竿身刻龙，专治大鱼"},
-    {"id": "starlight", "name": "星辉竿", "emoji": "✨", "price": 10000,
-     "value_bonus": 0.32, "luck_bonus": 0.14, "desc": "夜里会泛微光，深海也用得上"},
+     "value_bonus": 0.00, "luck_bonus": 0.00, "unlock_level": 1,
+     "desc": "村口杂货铺送的，能用"},
+    {"id": "carbon", "name": "碳素竿", "emoji": "🎣", "price": 400,
+     "value_bonus": 0.05, "luck_bonus": 0.03, "unlock_level": 4,
+     "desc": "轻巧顺手，新手进阶首选"},
+    {"id": "stream", "name": "溪流竿", "emoji": "🪝", "price": 1600,
+     "value_bonus": 0.09, "luck_bonus": 0.05, "unlock_level": 9,
+     "desc": "韧性好，适合溪流与湖泊"},
+    {"id": "dragon", "name": "龙纹竿", "emoji": "🐉", "price": 5400,
+     "value_bonus": 0.17, "luck_bonus": 0.11, "unlock_level": 16,
+     "desc": "竿身刻龙，专治大鱼"},
+    {"id": "starlight", "name": "星辉竿", "emoji": "✨", "price": 11000,
+     "value_bonus": 0.23, "luck_bonus": 0.16, "unlock_level": 26,
+     "desc": "夜里会泛微光，深海也用得上"},
     {"id": "mythic", "name": "神话竿", "emoji": "🌈", "price": 22000,
-     "value_bonus": 0.40, "luck_bonus": 0.18, "desc": "传说钓具，据说能引来神话之鱼"},
+     "value_bonus": 0.30, "luck_bonus": 0.22, "unlock_level": 38,
+     "desc": "传说钓具，据说能引来神话之鱼"},
 ]
 ROD_BY_ID: dict[str, dict[str, Any]] = {rod["id"]: rod for rod in RODS}
 DEFAULT_ROD = "bamboo"

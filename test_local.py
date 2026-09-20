@@ -2071,6 +2071,119 @@ async def main():
     check("/钓鱼 道具 买" in text_of(out), "道具店用法说明指向道具店")
 
     # =====================================================================
+    print("\n[6n] 要拉线的鱼也吃鱼竿/玉佩手气（v1.18.14）")
+    # 站长问「手气的具体效果」时发现的：拉线那条路径只把「鱼饵+天气+评价加成」
+    # 传给品质掷骰，鱼竿手气和玉佩/插曲那份**没传**，可收尾时照样扣玉佩额度 ——
+    # 花了钱没效果。这里把口径钉死：两条路径的手气算法必须一致。
+
+    pull_cfg = dict(_CFG)
+    pull_cfg["interactive_rarities"] = "常见"          # 让常见鱼也走拉线
+    pull_cfg["rarity_escape_chance"] = "常见:0.0"      # 必不跑，专注看掷骰
+    pull_cfg["rarity_spawn_weights"] = "常见:100,少见:0,稀有:0,传说:0,神话:0"
+    pull_cfg["enable_weather"] = False                 # 天气手气固定 0，断言才好写
+    pull_plugin = make_plugin(pull_cfg)
+    _worm_luck = pull_plugin.baits["worm"]["luck"]
+    _rod_luck = pull_plugin.rod_by_id["mythic"]["luck_bonus"]
+    pp = mod._default_player("89070")
+    pp["baits"] = {"worm": 10}
+    pp["equipped_bait"] = "worm"                       # 蚯蚓手气（_worm_luck）
+    pp["rods"] = ["bamboo", "mythic"]
+    pp["equipped_rod"] = "mythic"                      # 神话竿手气（_rod_luck）
+    pp["buff_casts_left"] = 5
+    pp["buff_quality"] = 0.30                          # 玉佩 0.30
+    pp["luck_charges"] = 0.10                          # 一次性 0.10
+    await pull_plugin._save_player(pp)
+
+    captured: dict[str, float] = {}
+    real_roll = mod.INTERACTIONS._roll_quality_mult
+
+    def _spy_roll(weights, bait_luck=0.0, extra_luck=0.0):
+        captured["bait_luck"] = bait_luck
+        captured["extra_luck"] = extra_luck
+        return real_roll(weights, bait_luck=bait_luck, extra_luck=extra_luck)
+
+    mod.INTERACTIONS._roll_quality_mult = _spy_roll
+    try:
+        await cast(pull_plugin, FakeEvent("89070"))
+    finally:
+        mod.INTERACTIONS._roll_quality_mult = real_roll
+    pp = await pull_plugin._load_player("89070")
+    check(
+        len(pp.get("inventory") or []) == 1 and captured,
+        f"这一竿确实走完了拉线流程并上鱼 -> 背包 {len(pp.get('inventory') or [])} 条",
+    )
+    # 常驻来源：鱼饵 + 鱼竿（天气关掉了 = 0）
+    check(
+        abs(captured.get("bait_luck", -1) - (_worm_luck + _rod_luck)) < 1e-9,
+        f"拉线路径吃到鱼饵 {_worm_luck} + 鱼竿 {_rod_luck} 手气"
+        f" -> bait_luck={captured.get('bait_luck')}",
+    )
+    # 一次性 + 玉佩 = 0.40；拉线评价是「偏差」（测试里落点贴近超时），加成为 0
+    check(
+        abs(captured.get("extra_luck", -1) - 0.40) < 1e-9,
+        f"拉线路径也吃到玉佩 + 一次性手气 -> extra_luck={captured.get('extra_luck')}",
+    )
+    # 两条路径的口径要一致：同样的装备/状态，非拉线那一竿算出来的手气应完全相同
+    plain_cfg = dict(pull_cfg)
+    plain_cfg["interactive_rarities"] = ""             # 这条路径不拉线
+    plain_cfg["bait_hook_rates"] = "worm:1.0"          # 保证上鱼（这条路径不看互动）
+    plain_plugin = make_plugin(plain_cfg)
+    pp2 = mod._default_player("89071")
+    pp2["baits"] = {"worm": 10}
+    pp2["equipped_bait"] = "worm"
+    pp2["rods"] = ["bamboo", "mythic"]
+    pp2["equipped_rod"] = "mythic"
+    pp2["buff_casts_left"] = 5
+    pp2["buff_quality"] = 0.30
+    pp2["luck_charges"] = 0.10
+    await plain_plugin._save_player(pp2)
+    captured.clear()
+    real_roll2 = mod.ENGINE._roll_quality_mult
+
+    def _spy_roll2(weights, bait_luck=0.0, extra_luck=0.0):
+        captured["bait_luck"] = bait_luck
+        captured["extra_luck"] = extra_luck
+        return real_roll2(weights, bait_luck=bait_luck, extra_luck=extra_luck)
+
+    mod.ENGINE._roll_quality_mult = _spy_roll2
+    try:
+        await cast(plain_plugin, FakeEvent("89071"))
+    finally:
+        mod.ENGINE._roll_quality_mult = real_roll2
+    check(
+        abs(captured.get("bait_luck", -1) - (_worm_luck + _rod_luck)) < 1e-9
+        and abs(captured.get("extra_luck", -1) - 0.40) < 1e-9,
+        f"两条路径的手气口径完全一致 -> {captured}",
+    )
+    # 手气最终还是被钳到 0~1（叠满也不会顶穿品质表）
+    check(
+        mod._roll_quality_mult([44, 28, 16, 9, 3, 0], bait_luck=0.8, extra_luck=0.9)
+        <= mod._quality_ceil(),
+        "手气叠满时品质倍率仍在最高档区间内（钳到 0~1 后再掷）",
+    )
+
+    # --- 出厂兜底鱼竿（RODS）必须与 rod_defs 的数值一致 ---
+    # 两条数据路径以前各写一套（兜底那套更便宜、手气更低），一旦 rod_defs 被清空
+    # 数值就会悄悄变一套 —— 这里钉死「两套一模一样」。
+    _defs_rods = {
+        r["id"]: r for r in mod.CALC._parse_rod_defs(mod.DEFAULTS["rod_defs"])
+    }
+    _mismatch = [
+        r["id"]
+        for r in mod.RODS
+        if r["id"] in _defs_rods
+        and (
+            int(r["price"]) != int(_defs_rods[r["id"]]["price"])
+            or abs(float(r["value_bonus"]) - float(_defs_rods[r["id"]]["value_bonus"])) > 1e-9
+            or abs(float(r["luck_bonus"]) - float(_defs_rods[r["id"]]["luck_bonus"])) > 1e-9
+        )
+    ]
+    check(
+        not _mismatch,
+        f"出厂兜底鱼竿与 rod_defs 数值一致（对不上的：{_mismatch or '无'}）",
+    )
+
+    # =====================================================================
     print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
 
     real_curve = dict(mod.LEVEL_CURVE)

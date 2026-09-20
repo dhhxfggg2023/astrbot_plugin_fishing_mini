@@ -255,10 +255,15 @@ class EngineMixin:
                 )
                 rating = None
             else:
-                # 把天气/装备/图鉴/变异信息带进互动，供拉线成功后造鱼使用
+                # 把天气/装备/图鉴/变异信息带进互动，供拉线成功后造鱼使用。
+                # ⚠️ 手气也必须带进去（v1.18.14 修的）：拉线的鱼（传说/神话）以前只吃
+                # 鱼饵+天气+拉线评价，鱼竿手气和玉佩/插曲那份**一点没吃到**，
+                # 可收尾时 `_consume_luck()` 照样扣玉佩额度 —— 花了钱没效果。
                 spec = dict(spec)
                 spec["variant"] = variant
                 spec["weather_luck"] = weather_luck
+                spec["gear_luck"] = gear_luck
+                spec["player_luck"] = luck
                 spec["rod_value_bonus"] = rod_value
                 spec["location_mult"] = loc_value
                 spec["codex_mult"] = codex_mult
