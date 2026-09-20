@@ -98,7 +98,7 @@ class EngineMixin:
                         bait_id = "none"
                         bait_note = (
                             f"🎒 {self._bait_label(matched)} 用完了，这一竿改用空钩"
-                            f"（/钓鱼 商店 买 {self.baits[matched]['name']} 补货，"
+                            f"（/钓鱼 鱼饵 买 {self.baits[matched]['name']} 补货，"
                             f"或 /钓鱼 换饵 空钩 固定用空钩）"
                         )
             else:
@@ -116,7 +116,7 @@ class EngineMixin:
                         player["equipped_bait"] = "none"
                         bait_note = (
                             f"🎒 {self._bait_label(equipped)} 用完了，"
-                            f"已自动换回空钩（/钓鱼 商店 买 {self.baits[equipped]['name']} "
+                            f"已自动换回空钩（/钓鱼 鱼饵 买 {self.baits[equipped]['name']} "
                             f"可补货）"
                         )
 
@@ -151,7 +151,7 @@ class EngineMixin:
             if len(player.get("inventory") or []) >= backpack_cap:
                 async for _r in self._say_msg(event, "cast.bag_full", event.plain_result(
                         f"🎒 背包满了（{backpack_cap}）！先 /钓鱼 卖 或 /钓鱼 水族馆 放，"
-                        f"也可以 /钓鱼 商店 买 扩建背包"
+                        f"也可以 /钓鱼 扩建背包"
                     )):
                     yield _r
                 return
@@ -407,7 +407,7 @@ class EngineMixin:
                     async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
                             f"🎒 {self._bait_label(equipped)}只剩 {owned} 个，"
                             f"连钓 {times} 次要 {times} 个\n"
-                            f"　/钓鱼 商店 买 {self.baits[equipped]['name']} 补货，"
+                            f"　/钓鱼 鱼饵 买 {self.baits[equipped]['name']} 补货，"
                             f"或先 /钓鱼 {owned} 把这几个用掉"
                         )):
                         yield _r

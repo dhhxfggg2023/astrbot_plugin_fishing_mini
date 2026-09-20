@@ -616,8 +616,9 @@ async function channelHelpers() {
     "全角冒号也认（站长用中文输入法写配置是常态）");
   check(customDef.parse("没有动作") === null && customDef.parse("甲|发送:") === null,
     "缺动作/空内容的行解析成 null");
-  check(T.canonicalCommands().length === 26 && T.canonicalCommands().indexOf("背包") >= 0,
-    "页面知道 26 个规范子命令（离线用演示清单，在线以插件回写的为准）",
+  check(T.canonicalCommands().length === 29 && T.canonicalCommands().indexOf("背包") >= 0
+    && T.canonicalCommands().indexOf("道具") >= 0 && T.canonicalCommands().indexOf("鱼饵") >= 0,
+    "页面知道 29 个规范子命令（v1.18.13 商店拆成三家 + 买；离线用演示清单，在线以插件回写的为准）",
     T.canonicalCommands().length);
   // 校验：目标子命令、动作、重名都要在页面上就标红
   const vAlias = function (row) { return Object.keys(T.validateRow(T.TAB_BY_ID.aliases, row)); };

@@ -9,7 +9,10 @@
 - ``/钓鱼 卖 …``         卖鱼
 - ``/钓鱼 图鉴``         收集进度
 - ``/钓鱼 水族馆 …``     水族馆 / 投喂 / 领取收益 / 扩建
-- ``/钓鱼 商店 …``       鱼饵与道具
+- ``/钓鱼 鱼竿 …``       鱼竿店（买竿 / 换竿）
+- ``/钓鱼 道具 …``       道具店（饲料 / 仙露 / 育灵水 / 洗髓丹 / 玉佩 / 造景）
+- ``/钓鱼 鱼饵 …``       鱼饵店（面包屑 / 蚯蚓 / 红虫 / 玉米粒…）
+  （v1.18.13 起 ``/钓鱼 商店`` 已拆成上面三家，老写法只会回一句指路）
 - ``/钓鱼 体力``         看体力
 - ``/钓鱼 档案 / 签到``  个人档案与签到
 - ``/钓鱼 帮助``         简洁说明
@@ -170,7 +173,14 @@ SUBCOMMAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     "解锁": ("解锁", "解", "unlock"),
     "今日": ("今日", "天气", "行情", "today", "weather", "market"),
     "排行": ("排行", "排行榜", "rank", "top", "榜"),
-    "商店": ("商店", "鱼饵", "道具", "shop", "买"),
+    "商店": ("商店", "铺子", "shop"),
+    "鱼饵": ("鱼饵", "鱼饵店", "饵店", "饵"),
+    "道具": ("道具", "道具店", "物品", "item", "items"),
+    # 「买」本身也是一条子命令（智能买：按名字自动认它在哪家店）。
+    # 把它登记成内置写法的副作用正好是我们想要的：**别名抢不走它** ——
+    # 老配置里的 `商店|鱼饵,道具,shop,买` 会让 `买` 变成「商店」的别名，
+    # 于是 /钓鱼 买 蚯蚓 被路由到「商店已拆成三家」的指路提示，玩家就买不到东西了。
+    "买": ("买", "购买", "buy"),
     "用": ("用", "使用", "道具用", "use"),
     "查": ("查", "查询", "鱼", "鱼查", "资料", "info", "lookup"),
     "事件": ("事件", "插曲", "选择", "event"),
@@ -267,7 +277,12 @@ DEFAULTS: dict[str, Any] = {
     "sell_discount": 1.0,
     "enable_group_broadcast": True,
     "backpack_base": 30,
-    "backpack_upgrades": ["15|400", "25|1100", "30|2700"],
+    # 背包扩容档位：`加多少格|价格`，按顺序买（v1.18.13 从 3 档加到 7 档：
+    # 40 → 100 格只够玩到中期，后面越买越贵，最后几档是长期目标）
+    "backpack_upgrades": [
+        "15|400", "25|1100", "30|2700", "40|6500",
+        "55|15000", "75|34000", "100|75000",
+    ],
     "aquarium_capacity": 8,
     "interactive_rarities": "传说,神话",
     "window_min": 4,
@@ -319,6 +334,13 @@ DEFAULTS: dict[str, Any] = {
     "variant_chance": 0.005,
     "easter_egg_chance": 0.05,
     "story_chance": 0.06,
+    # ---- 小插曲 / 连载剧情（v1.18.13）----
+    # 这次插曲走「连载的下一话/新开一条线」的概率，其余情况演一次性小插曲
+    "story_chain_chance": 0.5,
+    # 连载两话之间至少隔几竿（免得像连播；一次性插曲不受它影响）
+    "story_chain_gap": 6,
+    # 插曲/连载的选项**位置每次随机**（免得同一个选择永远待在 1 号位）
+    "story_shuffle_choices": True,
     # ---- 数据管理（都在 WebUI 里操作，不用发指令）----
     "level_xp_base": 5.0,           # 升级曲线：每级基础竿数
     "level_xp_ratio": 1.08,         # 升级曲线：等比底数（指数项，越大越陡）
@@ -365,7 +387,12 @@ DEFAULTS: dict[str, Any] = {
     "decoration_hours": 72,
     # 钓手本人的手气 buff 持续多少竿
     "buff_cast_count": 20,
-    "aquarium_slots": ["精致缸|1600", "生态缸|5400", "深海缸|16000"],
+    # 水族馆：`名字|价格` 或 `名字|价格|加几个位`（第三段省略 = 1 个）。
+    # v1.18.13 从 3 档加到 6 档：后面几档一次加 2~4 个位，价格也成倍往上走。
+    "aquarium_slots": [
+        "精致缸|1600", "生态缸|5400", "深海缸|16000",
+        "珊瑚宫殿|38000|2", "龙宫别苑|88000|3", "水晶宫|190000|4",
+    ],
     # 鱼饵：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明
     # 「需要鱼竿」填鱼竿 id 或名称，表示**拥有**那根竿才能买；解锁等级是新号也能用的门槛
     "bait_defs": [
@@ -994,6 +1021,9 @@ def _command_reserved_words(cfg: dict[str, Any]) -> set[str]:
 
     ``/钓鱼 蚯蚓`` 会直接拿去下竿（见 ``_find_bait``），所以别名/自定义命令
     不能叫这个名字，否则玩家永远打不到它——配置阶段就跳过并告警。
+
+    （``买``/``购买`` 的保护不在这里：它们是内置子命令，见 SUBCOMMAND_KEYWORDS
+    的「买」那一行 —— 内置写法本来就不许被别名抢走。）
     """
     reserved: set[str] = set()
     try:
@@ -1866,6 +1896,7 @@ _CONTENT_FALLBACK: dict[str, Any] = {
     "WEATHERS": [],
     "EASTER_EGGS": [],
     "RANDOM_EVENTS": [],
+    "STORY_CHAINS": [],
     "MILESTONES": {},
     "ACHIEVEMENTS": {},
     # 官方改过的默认行（老配置迁移用）；⚠️ 必须列在这里，
@@ -1881,6 +1912,7 @@ VARIANTS: list[dict[str, Any]] = _CONTENT["VARIANTS"]
 WEATHERS: list[dict[str, Any]] = _CONTENT["WEATHERS"]
 EASTER_EGGS: list[dict[str, Any]] = _CONTENT["EASTER_EGGS"]
 RANDOM_EVENTS: list[dict[str, Any]] = _CONTENT["RANDOM_EVENTS"]
+STORY_CHAINS: list[dict[str, Any]] = _CONTENT["STORY_CHAINS"]
 MILESTONES: dict[int, str] = _CONTENT["MILESTONES"]
 ACHIEVEMENTS: dict[str, str] = _CONTENT["ACHIEVEMENTS"]
 
@@ -1947,8 +1979,38 @@ EASTER_EGG_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in EASTER_EGGS}
 
 #: 钓鱼时的小插曲：给两个选择，结果由选择 + 一点随机决定，奖励都很小。
 #: **不对外说明触发条件**，玩家只会偶尔撞见一次。
+#:
+#: v1.18.13 起还多了「连载」：见 _game_data.STORY_CHAINS。
+#: 每一话都被登记成一条「事件」（id = ``<线名>#<第几话>``），
+#: 所以提示、按钮、`/钓鱼 事件 N` 的解析全都走同一条路，不用另写一套。
+#: 玩家身上的进度只有 ``story``（演到哪条线的第几话 + 攒了哪些旗标），
+#: 下一话因此天然接得上上一话的结局。
+
+def _chain_episode_id(chain_id: str, index: int) -> str:
+    """连载第 ``index``（从 0 数）话的事件 id。"""
+    return f"{chain_id}#{index + 1}"
+
+
+CHAIN_BY_ID: dict[str, dict[str, Any]] = {
+    str(c.get("id")): c for c in STORY_CHAINS if isinstance(c, dict) and c.get("id")
+}
+
+_EPISODE_EVENTS: dict[str, dict[str, Any]] = {}
+for _chain_def in STORY_CHAINS:
+    if not isinstance(_chain_def, dict):
+        continue
+    for _ep_index, _episode in enumerate(_chain_def.get("episodes") or []):
+        if not isinstance(_episode, dict):
+            continue
+        _ep_id = _chain_episode_id(str(_chain_def["id"]), _ep_index)
+        _episode.setdefault("id", _ep_id)
+        _episode.setdefault("chain", str(_chain_def["id"]))
+        _episode.setdefault("episode", _ep_index + 1)
+        _episode.setdefault("chain_name", str(_chain_def.get("name") or _chain_def["id"]))
+        _EPISODE_EVENTS[_ep_id] = _episode
 
 EVENT_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in RANDOM_EVENTS}
+EVENT_BY_ID.update(_EPISODE_EVENTS)
 
 
 #: 累计钓获达到这些数量时给一句里程碑文案（只提示一次）
@@ -2637,6 +2699,16 @@ class FishingPlugin(
         cfg["story_chance"] = _clamp(
             _safe_number(cfg.get("story_chance"), 0.06), 0.0, 1.0
         )
+        # 连载相关的三个开关（v1.18.13）：概率、间隔竿数、选项是否打乱
+        cfg["story_chain_chance"] = _clamp(
+            _safe_number(cfg.get("story_chain_chance"), 0.5), 0.0, 1.0
+        )
+        cfg["story_chain_gap"] = int(
+            _clamp(_safe_int(cfg.get("story_chain_gap"), 6, 0), 0, 999)
+        )
+        cfg["story_shuffle_choices"] = _cfg_bool(
+            cfg, "story_shuffle_choices", True
+        )
         cfg["easter_egg_chance"] = _clamp(
             _safe_number(cfg["easter_egg_chance"], 0.05), 0.0, 1.0
         )
@@ -2745,11 +2817,19 @@ class FishingPlugin(
 
 
     def _aquarium_capacity(self, player: dict[str, Any]) -> int:
-        """水族馆总容量 = 基础容量 + 已解锁扩建栏位数。"""
+        """水族馆总容量 = 基础容量 + 已解锁扩建栏位**各自加的位置数**。
+
+        v1.18.13 起每一档可以一次加多个位（`名字|价格|加几个位`），
+        所以这里按 `add` 求和，不再是一个档位一格。
+        """
         unlocked = player.get("aquarium_slots") or []
         if not isinstance(unlocked, list):
             unlocked = []
-        count = sum(1 for slot in self.aquarium_slots if slot["name"] in unlocked)
+        count = sum(
+            max(1, _safe_int(slot.get("add"), 1, 1))
+            for slot in self.aquarium_slots
+            if slot["name"] in unlocked
+        )
         return int(self.cfg["aquarium_capacity"]) + count
 
     # -------------------------------------------------------------------------
@@ -3943,8 +4023,13 @@ class FishingPlugin(
             handler = self._cmd_today(event, user_id)
         elif key in ("排行", "排行榜", "rank", "top", "榜"):
             handler = self._cmd_leaderboard(event, user_id, after_sub)
-        elif key in ("商店", "鱼饵", "道具", "shop"):
-            handler = self._cmd_shop(event, user_id, a2, after_first)
+        # 商店拆成三家（v1.18.13）：老写法「商店」只回一句指路，不再当货架用
+        elif key in ("商店", "铺子", "shop"):
+            handler = self._cmd_shop_moved(event, user_id, a2)
+        elif key in ("鱼饵店", "饵店", "鱼饵", "饵"):
+            handler = self._cmd_bait_shop(event, user_id, a2, after_first)
+        elif key in ("道具店", "道具", "物品", "item", "items"):
+            handler = self._cmd_item_shop(event, user_id, a2, after_first)
         elif key in ("用", "使用", "道具用", "use"):
             handler = self._cmd_use_item(event, user_id, a2, after_first)
         elif key in ("查", "查询", "鱼", "鱼查", "资料", "fish", "info", "lookup"):
@@ -3992,13 +4077,17 @@ class FishingPlugin(
         elif handler is None and key in ("交", "交单", "交货"):
             # /钓鱼 交 1 2 == /钓鱼 订单 交 1 2
             handler = self._cmd_orders(event, user_id, "交", after_sub)
-        elif handler is None and key in ("买", "购买"):
-            # 智能买：蚯蚓/道具走商店，鱼竿走鱼竿
+        elif handler is None and key in ("买", "购买", "buy"):
+            # 智能买：按名字自动认它是鱼竿 / 道具 / 鱼饵（三店各买各的）
             # （以前 /钓鱼 买 星辉竿 会被商店回一句「没这个货」）
-            if self._find_rod(a2) is not None:
+            if not str(a2 or "").strip():
+                handler = self._cmd_buy_usage(event, user_id)
+            elif self._find_rod(a2) is not None:
                 handler = self._cmd_rods(event, user_id, "买", after_sub)
+            elif self._find_item(a2) is not None:
+                handler = self._cmd_item_shop(event, user_id, "买", after_sub)
             else:
-                handler = self._cmd_shop(event, user_id, "买", after_sub)
+                handler = self._cmd_bait_shop(event, user_id, "买", after_sub)
         elif handler is None and key in ("装备", "换竿", "换鱼竿"):
             # /钓鱼 装备 星辉竿 == /钓鱼 竿 用 星辉竿
             handler = self._cmd_rods(event, user_id, "用", after_sub)
@@ -4577,7 +4666,7 @@ CAST_WORDS = {
 SUBCOMMAND_WORDS = {
     "帮助", "菜单", "指令", "背包", "鱼篓", "卖", "一键卖出",
     "图鉴", "收集", "水族馆", "锁定", "解锁", "今日", "排行", "排行榜",
-    "商店", "鱼饵", "道具", "用", "使用", "档案", "体力", "签到",
+    "商店", "鱼饵", "鱼饵店", "道具", "道具店", "用", "使用", "档案", "体力", "签到",
     "订单", "任务", "钓点", "地点", "地图", "鱼竿", "杂物", "漂流瓶",
     "查", "查询",
     "扩容", "扩建背包", "背包扩容", "鱼篓扩容", "去", "前往",
@@ -4587,7 +4676,8 @@ SUBCOMMAND_WORDS = {
 #: 长的写法排在前面也不影响——`_peel_action()` 内部按长度倒序匹配。
 #: 参数是「名字」的的子命令：残留部分不是数字也允许拆（`卖鲤鱼3`、`去湖泊`）
 NAME_ARG_WORDS = {
-    "商店", "鱼饵", "道具", "用", "使用", "水族馆", "馆", "缸", "鱼竿", "竿",
+    "商店", "鱼饵", "鱼饵店", "道具", "道具店", "用", "使用", "水族馆", "馆", "缸",
+    "鱼竿", "竿",
     "钓点", "地点", "地图", "去", "前往", "卖", "图鉴", "订单", "任务",
     "卖垃圾", "一键卖出",
 }
@@ -4595,7 +4685,8 @@ AQUARIUM_ACTIONS = (
     "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
     "升级", "放", "取", "卖", "喂", "领",
 )
-SHOP_ACTIONS = ("扩建背包", "背包扩容", "鱼篓扩容", "扩建", "扩容", "购买", "买")
+#: 三家店都只认「买」；「扩容」不再挂在商店下面（老写法由 shop.moved 指路）
+SHOP_ACTIONS = ("购买", "买")
 ROD_ACTIONS = ("购买", "装备", "买", "用", "换")
 LOCATION_ACTIONS = ("解锁", "前往", "去", "开")
 ORDER_ACTIONS = ("提交", "交")

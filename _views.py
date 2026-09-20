@@ -185,35 +185,101 @@ class ViewsMixin:
         """咬钩提示下面的按钮（button_defs 的 pull.hook 行）。"""
         return self._scene_rows("pull.hook")
 
-    def _event_rows(self, event_def: dict[str, Any]) -> list[list[dict[str, Any]]]:
-        """随机插曲的按钮：button_defs 的 story 行是模板，每个选项生成一行。"""
+    def _event_rows(
+        self, event_def: dict[str, Any], order: list[int] | None = None
+    ) -> list[list[dict[str, Any]]]:
+        """随机插曲的按钮：button_defs 的 story 行是模板，每个选项生成一行。
+
+        ``order`` 是显示顺序（见 ``_interactions._event_order``）：
+        按钮上的 ``{n}`` 必须用**显示序号**，才能和提示里的编号一致。
+        """
         template = self._scene_buttons("story")
+        indices = self._event_order_indices(event_def, order)
         rows: list[list[dict[str, Any]]] = []
-        for index, choice in enumerate(event_def.get("choices") or [], 1):
+        for shown, real_index in enumerate(indices, 1):
+            choice = (event_def.get("choices") or [])[real_index]
             label = str(choice.get("label") or "")
             rows.append([
                 self._btn(
-                    _fill_button_text(text, label, index),
-                    _fill_button_text(data, label, index),
+                    _fill_button_text(text, label, shown),
+                    _fill_button_text(data, label, shown),
                     style,
                 )
                 for text, data, style in template
             ])
         return rows
 
+    @staticmethod
+    def _event_order_indices(
+        event_def: dict[str, Any], order: list[int] | None
+    ) -> list[int]:
+        """把存的显示顺序「洗」成一份可用的下标列表（坏数据一律退回自然顺序）。"""
+        count = len(event_def.get("choices") or [])
+        if not isinstance(order, list) or sorted(
+            _safe_int(x, -1, 0) for x in order
+        ) != list(range(count)):
+            return list(range(count))
+        return [_safe_int(x, 0, 0) for x in order]
+
+    def _event_recap(self, event_def: dict[str, Any], player: dict[str, Any]) -> str:
+        """连载的「前情提要」一行（不是连载就返回空串）。"""
+        chain_id = str(event_def.get("chain") or "")
+        if not chain_id:
+            return ""
+        chain = CHAIN_BY_ID.get(chain_id)
+        name = str(event_def.get("chain_name") or (chain or {}).get("name") or chain_id)
+        episode = _safe_int(event_def.get("episode"), 1, 1)
+        total = len((chain or {}).get("episodes") or []) or episode
+        head = f"📖 连载《{name}》第 {episode}/{total} 话"
+        story = player.get("story") if isinstance(player.get("story"), dict) else {}
+        last = str((story or {}).get("last") or "")
+        return f"{head}　上次：{last}" if last else head
+
     # -------------------------------------------------------------------------
     # 随机小插曲
     # -------------------------------------------------------------------------
 
+    def _event_text(
+        self, event_def: dict[str, Any], player: dict[str, Any] | None = None
+    ) -> str:
+        """这一段的开场白。
+
+        连载的后续话会用 ``text_when`` **按旗标挑版本**（前面选过什么，这里就怎么演）：
+        取第一个「旗标为真」的版本，都不满足就用 ``default``；两样都没有才退回 ``text``。
+        """
+        when = event_def.get("text_when")
+        if isinstance(when, dict) and when:
+            story = (player or {}).get("story")
+            flags = story.get("flags") if isinstance(story, dict) else {}
+            flags = flags if isinstance(flags, dict) else {}
+            for key, variant in when.items():
+                if str(key) == "default":
+                    continue
+                if flags.get(str(key)):
+                    return str(variant)
+            if when.get("default"):
+                return str(when["default"])
+        return str(event_def.get("text") or "")
+
     def _event_prompt(
-        self, event_def: dict[str, Any], rows: bool = True
+        self,
+        event_def: dict[str, Any],
+        order: list[int] | None = None,
+        rows: bool = True,
+        text: str | None = None,
     ) -> tuple[str, list[list[dict[str, Any]]]]:
-        """插曲的文案 + 按钮。"""
-        lines = [f"❔ {event_def['text']}"]
-        for index, choice in enumerate(event_def.get("choices") or [], 1):
-            lines.append(f"　{index}. {choice['label']}　/钓鱼 事件 {index}")
-        text = "\n".join(lines)
-        return text, (self._event_rows(event_def) if rows else [])
+        """插曲的文案 + 按钮。
+
+        选项顺序按 ``order`` 打乱后显示，编号、文案、按钮三处一致
+        （连载的「前情提要」是单独一条 `story.recap`，见 `_event_recap`）。
+        ``text`` 由调用方用 ``_event_text()`` 解析好传进来（连载要按旗标换开场白）。
+        """
+        lines = [f"❔ {text if text is not None else self._event_text(event_def)}"]
+        indices = self._event_order_indices(event_def, order)
+        for shown, real_index in enumerate(indices, 1):
+            choice = (event_def.get("choices") or [])[real_index]
+            lines.append(f"　{shown}. {choice['label']}　/钓鱼 事件 {shown}")
+        return "\n".join(lines), (self._event_rows(event_def, order) if rows else [])
 
     def _milestone_text(self, player: dict[str, Any]) -> str:
         """刚达到里程碑时返回文案并标记；否则返回空串。"""
@@ -361,6 +427,19 @@ class ViewsMixin:
         self._sort_aquarium(aquarium)
         capacity = self._aquarium_capacity(player)
         lines = [f"🐠 水族馆 {len(aquarium)}/{capacity}"]
+        # 缸满了才提扩建（平时不占版面）：写清下一档叫什么、加几个位、多少钱
+        unlocked = player.get("aquarium_slots") or []
+        if not isinstance(unlocked, list):
+            unlocked = []
+        nxt_slot = next(
+            (s for s in self.aquarium_slots if s["name"] not in unlocked), None
+        )
+        if nxt_slot is not None and len(aquarium) >= capacity:
+            lines.append(
+                f"🏠 缸满了　可扩建「{nxt_slot['name']}」"
+                f"（+{max(1, _safe_int(nxt_slot.get('add'), 1, 1))} 个位，"
+                f"{_fmt_gold(nxt_slot['price'])}）　/钓鱼 水族馆 扩建"
+            )
         slots_cfg = int(self.cfg["decoration_slots"])
         now_ts = int(time.time())
         expired = _prune_decorations(player, now=now_ts)
@@ -426,7 +505,7 @@ class ViewsMixin:
             lines.append(f"　挂机产出 +{deco_bonus:.0%}（离线时间也照算）")
         else:
             lines.append(
-                f"🪸 装饰位 0/{slots_cfg}　/钓鱼 商店 买 珊瑚造景"
+                f"🪸 装饰位 0/{slots_cfg}　/钓鱼 道具 买 珊瑚造景"
             )
         if expired:
             lines.append(f"　（清理了 {expired} 个已失效的装饰）")
@@ -438,14 +517,12 @@ class ViewsMixin:
             lines.append("　💤 刚入缸的鱼还没开始产出（按每条鱼在缸里的时间算）")
         return "\n".join(lines)
 
-    def _shop_view(self, player: dict[str, Any]) -> str:
-        """商店货架：**只上架已解锁的东西**（未达等级/缺鱼竿的整条不显示）。"""
+    def _bait_shop_view(self, player: dict[str, Any]) -> str:
+        """鱼饵店货架（v1.18.13 起商店拆成三家）：**只上架已解锁的**。"""
         baits = player.get("baits") or {}
-        items = player.get("items") or {}
         lines = [
-            f"🛒 商店　💰 {_fmt_gold(player.get('gold', 0))}",
+            f"🪱 鱼饵店　💰 {_fmt_gold(player.get('gold', 0))}",
             f"🎣 当前鱼饵：{self._bait_label(player.get('equipped_bait', 'none'))}",
-            "— 鱼饵 —",
         ]
         hidden = 0
         for bait_id in self._bait_list():
@@ -459,7 +536,19 @@ class ViewsMixin:
                 f"　持有{owned}　手气{_luck_stars(bait.get('luck'), 0.7)}"
                 f"　{bait.get('desc', '')}"
             )
-        lines.append("— 道具 —")
+        if hidden:
+            # 只说「还有」，不剧透清单、也不写等级数字
+            lines.append("🔒 还有更多鱼饵，等级更高 / 换上更好的竿之后会陆续上架")
+        # ⚠️ 这一行不能举具体饵名：`/钓鱼 鱼饵 买 蚯蚓` 会把未解锁的饵名写进低等级玩家的
+        # 列表里，等于剧透（[6e] 那条「未解锁的完全不显示」断言就是被它踩红的）
+        lines.append("💡 /钓鱼 鱼饵 买 <名字> [数量]　（也可以直接 /钓鱼 买 <名字>）")
+        return "\n".join(lines)
+
+    def _item_shop_view(self, player: dict[str, Any]) -> str:
+        """道具店货架（v1.18.13）：饲料 / 仙露 / 育灵水 / 洗髓丹 / 玉佩 / 造景。"""
+        items = player.get("items") or {}
+        lines = [f"🎁 道具店　💰 {_fmt_gold(player.get('gold', 0))}"]
+        hidden = 0
         for item_id in self._item_list():
             item = self.items[item_id]
             if self._unlock_shortage(player, item):
@@ -471,8 +560,9 @@ class ViewsMixin:
                 f"　{item['desc']}"
             )
         if hidden:
-            # 只说「还有」，不剧透清单、也不写等级数字
-            lines.append("🔒 还有更多鱼饵与道具，等级更高 / 换上更好的竿之后会陆续上架")
+            lines.append("🔒 还有更多道具，等级更高 / 换上更好的竿之后会陆续上架")
+        # 同样不举具体道具名（低等级玩家可能还没解锁它）
+        lines.append("💡 /钓鱼 道具 买 <名字> [数量]　（也可以直接 /钓鱼 买 <名字>）")
         return "\n".join(lines)
 
     def _help_pages(self) -> list[tuple[str, list[str]]]:
@@ -549,8 +639,10 @@ class ViewsMixin:
                     "　/钓鱼 卖 1 2　　　 卖掉第 1、2 条（也能 卖 鲤鱼 / 卖 全部）",
                     "　/钓鱼 卖光光　　　 一次清空（锁定的会留着）",
                     "　/钓鱼 锁定 1　　　 锁定不想卖的鱼（/钓鱼 解锁 1 取消）",
-                    "　/钓鱼 商店　　　　 看货架",
-                    "　/钓鱼 买 蚯蚓 20　 买鱼饵 / 道具 / 鱼竿（写名字就行）",
+                    "　/钓鱼 鱼竿　　　　 鱼竿店（买竿 / 换竿）",
+                    "　/钓鱼 道具　　　　 道具店（饲料 / 育灵水 / 洗髓丹…）",
+                    "　/钓鱼 鱼饵　　　　 鱼饵店（面包屑 / 蚯蚓 / 红虫…）",
+                    "　/钓鱼 买 蚯蚓 20　 懒得记店名就用它（自动认）",
                     "　/钓鱼 装备 星辉竿　换鱼竿（/钓鱼 鱼竿 看全部）",
                     "　/钓鱼 换饵 蚯蚓　　换当前鱼饵（/钓鱼 换饵 空钩 = 不挂饵）",
                     "　/钓鱼 扩建背包　　 背包扩容",

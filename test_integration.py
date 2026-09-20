@@ -1,4 +1,4 @@
-"""真实 AstrBot 事件链集成测试（不属于插件运行时代码，可随时删除）。
+﻿"""真实 AstrBot 事件链集成测试（不属于插件运行时代码，可随时删除）。
 
 使用 **AstrBot 真实的** AstrMessageEvent / AstrBotMessage / MessageEventResult /
 CommandFilter，完整走一遍：
@@ -269,7 +269,7 @@ async def main():
     subs = [
         ("/钓鱼 帮助", "帮助 1/"),
         ("/钓鱼 背包", "背包"),
-        ("/钓鱼 商店", "商店"),
+        ("/钓鱼 商店", "拆成三家"),
         ("/钓鱼 图鉴", "图鉴"),
         ("/钓鱼 水族馆", "水族馆"),
         ("/钓鱼 档案", "档案"),
@@ -326,8 +326,8 @@ async def main():
     p = await plugin._load_player("90002")
     check(len(p["inventory"]) == 1, f"卖掉鲤鱼 -> 剩 {len(p['inventory'])}")
 
-    replies, matched, _ = await send(plugin, "/钓鱼 商店 买 高级饲料", "90002", "群友乙")
-    check(matched, "/钓鱼 商店 买 <道具> 被匹配")
+    replies, matched, _ = await send(plugin, "/钓鱼 道具 买 高级饲料", "90002", "群友乙")
+    check(matched, "/钓鱼 道具 买 <道具> 被匹配")
     p = await plugin._load_player("90002")
     check(p["items"].get("feed_premium") == 1, f"买到道具 -> {p['items']}")
 

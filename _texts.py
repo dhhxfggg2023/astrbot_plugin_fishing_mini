@@ -91,7 +91,7 @@ TEXTS: dict[str, str] = {
     "collection.detail": "{原文}",  # 动态文本
     "collection.location": "{原文}",  # 动态文本
     "aquarium.usage": "📖 水族馆用法\n　/钓鱼 水族馆　　　　　　欣赏\n　/钓鱼 水族馆 放 1　　　 从背包放入\n　/钓鱼 水族馆 取 1　　　 取回（估值+加成）\n　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n　/钓鱼 用 <道具> 1　　　投喂提升三维\n　/钓鱼 水族馆 领　　　　 领取每日收益\n　/钓鱼 水族馆 扩建　　　 花金币扩容",
-    "shop.usage_short": "📖 /钓鱼 商店　　　　　　看货架\n　/钓鱼 商店 买 <名字> [数量]\n　/钓鱼 商店 扩容　　　 背包扩容",
+    "shop.bait_usage": "📖 /钓鱼 鱼饵　　　　　　看鱼饵货架\n　/钓鱼 鱼饵 买 <名字> [数量]\n　例：/钓鱼 鱼饵 买 蚯蚓 20",
     "bait.empty": "{原文}",  # 动态文本
     "item.feed_done": "{原文}",  # 动态文本
     "story.none": "🤔 眼下没什么需要你决定的事",
@@ -161,11 +161,19 @@ TEXTS: dict[str, str] = {
     "aquarium.take_usage": "{原文}",  # 动态文本
     "aquarium.sell_usage": "📖 /钓鱼 水族馆 卖 <栏位号…>\n　例：/钓鱼 水族馆 卖 1　或　卖 1 3 5",
     "aquarium.bad_slot": "{原文}",  # 动态文本
-    "shop.usage": "📖 /钓鱼 商店 买 <名字> [数量]\n　例：/钓鱼 商店 买 蚯蚓（1 个）　买 蚯蚓 20（20 个）\n　鱼饵和道具都按「个」买，数量不写就是 1",
+    "shop.usage": "📖 /钓鱼 鱼竿 买 <名字>　｜　/钓鱼 道具 买 <名字> [数量]　｜　/钓鱼 鱼饵 买 <名字> [数量]\n　三家店各看各的货架，名字写错会说清该去哪家；\n　懒得记也行：/钓鱼 买 <名字> 会自动认出它在哪家店",
+    "shop.item_usage": "📖 /钓鱼 道具　　　　　　看道具货架\n　/钓鱼 道具 买 <名字> [数量]\n　例：/钓鱼 道具 买 高级饲料 5",
     "shop.free_hook": "🪝 空钩是免费的，不需要购买\n　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿",
     "shop.not_found": "{原文}",  # 动态文本
+    "shop.wrong_shop_rod": "{原文}",  # 动态文本
+    "shop.wrong_shop_item": "{原文}",  # 动态文本
+    "shop.wrong_shop_bait": "{原文}",  # 动态文本
+    "shop.bait_list": "{原文}",  # 动态文本
+    "shop.item_list": "{原文}",  # 动态文本
+    "shop.moved": "{原文}",  # 动态文本（拆店提示里带着玩家原本想买的东西）
+    "story.recap": "{原文}",  # 动态文本（连载的「第 N 话　上次：…」）
     "bait.locked": "{原文}",  # 动态文本
-    "item.empty": "🎒 没有道具，去 /钓鱼 商店 买",
+    "item.empty": "🎒 没有道具，去 /钓鱼 道具 买",
     "item.deco_disabled": "🪸 本服没有开放装饰位（decoration_slots = 0）",
     "item.deco_full": "{原文}",  # 动态文本
     "item.breed_no_fish": "🐠 水族馆是空的，先把鱼放进去再培育",

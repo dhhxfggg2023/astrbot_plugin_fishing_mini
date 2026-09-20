@@ -333,7 +333,11 @@ def _parse_item_defs(raw: Any) -> dict[str, dict[str, Any]]:
     return items
 
 def _parse_aquarium_slots(raw: Any) -> list[dict[str, Any]]:
-    """解析水族馆扩建栏位。"""
+    """解析水族馆扩建栏位：``名字|价格`` 或 ``名字|价格|加几个位``。
+
+    第三段（v1.18.13 新增）不写就是 +1 个位；后面几档写 2~4，
+    这样「越贵的一次加得越多」，玩家不会觉得在高价档买一格亏。
+    """
     slots: list[dict[str, Any]] = []
     entries = raw if isinstance(raw, list) else DEFAULTS["aquarium_slots"]
     for entry in entries:
@@ -342,7 +346,16 @@ def _parse_aquarium_slots(raw: Any) -> list[dict[str, Any]]:
         parts = [p.strip() for p in entry.split("|")]
         if len(parts) < 2 or not parts[0]:
             continue
-        slots.append({"name": parts[0], "price": max(0, _to_int(parts[1], 0))})
+        add = 1
+        if len(parts) >= 3:
+            add = _clamp(_to_int(parts[2], 1), 1, 99)
+        slots.append(
+            {
+                "name": parts[0],
+                "price": max(0, _to_int(parts[1], 0)),
+                "add": add,
+            }
+        )
     return slots
 
 
@@ -880,6 +893,23 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # 持续型手气（锦鲤玉佩）：buff_casts_left > 0 时每竿都加这么多
         "buff_casts_left": 0,
         "buff_quality": 0.0,
+        # 小插曲的「连续剧」进度（v1.18.13）：
+        #   arc    = 正在连载的那条线的 id（"" = 没有在连载）
+        #   ep     = 已经演到第几话（下一话 = ep + 1）
+        #   flags  = 攒下来的旗标（喂过猫、教过小孩、听过铃声…）
+        #   since  = 距上一话过了几竿（用来控制「下一话」不要紧挨着来）
+        #   seen   = 已经演过的一次性插曲 id（once 的那些不再重复）
+        #   done   = 已经演完的连载 id
+        #   last   = 上一话的结局一句话（下一话开头当「前情提要」）
+        "story": {
+            "arc": "",
+            "ep": 0,
+            "flags": {},
+            "since": 0,
+            "seen": [],
+            "done": [],
+            "last": "",
+        },
     }
 
 
@@ -1686,12 +1716,20 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         player["orders"] = orders
 
         # --- 正在等玩家决定的随机小插曲 ---
+        # `order` = 选项的显示顺序（v1.18.13 起每次都会打乱，所以必须存下来，
+        # 否则玩家点「1」会和提示里看到的选项对不上）
         raw_event = raw.get("event")
         player["event"] = None
         if isinstance(raw_event, dict) and raw_event.get("id") in EVENT_BY_ID:
+            order_raw = raw_event.get("order")
             player["event"] = {
                 "id": str(raw_event["id"]),
                 "ts": _safe_int(raw_event.get("ts"), 0, 0),
+                "order": (
+                    [_safe_int(x, -1, 0) for x in order_raw]
+                    if isinstance(order_raw, list)
+                    else []
+                ),
             }
 
         # --- 天气与鱼市（按日期缓存）---
@@ -1848,6 +1886,39 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
                     "ts": _safe_int(rec.get("ts"), 0, 0),
                 }
         player["best_records"] = records
+
+        # --- 小插曲的「连续剧」进度（v1.18.13）---
+        # ⚠️ 这一段是白名单式重建：**漏了哪个字段，读档时就被丢掉**
+        #（`tank_since` / `reroll_day` 当年都是同一个坑）。
+        raw_story = raw.get("story")
+        story_raw = raw_story if isinstance(raw_story, dict) else {}
+        flags_raw = story_raw.get("flags")
+        player["story"] = {
+            "arc": str(story_raw.get("arc") or ""),
+            "ep": max(0, _safe_int(story_raw.get("ep"), 0, 0)),
+            "flags": (
+                {str(k): v for k, v in flags_raw.items() if isinstance(k, str)}
+                if isinstance(flags_raw, dict)
+                else {}
+            ),
+            "since": max(0, _safe_int(story_raw.get("since"), 0, 0)),
+            "seen": (
+                [str(x) for x in story_raw.get("seen") if isinstance(x, str)][-200:]
+                if isinstance(story_raw.get("seen"), list)
+                else []
+            ),
+            "done": (
+                [str(x) for x in story_raw.get("done") if isinstance(x, str)][-50:]
+                if isinstance(story_raw.get("done"), list)
+                else []
+            ),
+            "last": str(story_raw.get("last") or "")[:120],
+        }
+        # 正在连载的那条线如果已经从内容表里删掉了（改过 _game_data），
+        # 就把进度清干净，免得卡在一条永远演不下去的线上
+        if player["story"]["arc"] and player["story"]["arc"] not in CHAIN_BY_ID:
+            player["story"]["arc"] = ""
+            player["story"]["ep"] = 0
 
         # --- 钓手手气（两套东西，别混在一起）---
         #   luck_charges    = 一次性储备（随机插曲 / 彩蛋 / 扩展给的「下一竿手气」）：**一竿即清**
@@ -2221,8 +2292,9 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("pull.none", "pull", "发「拉」的时候并没有鱼咬钩", ""),
     ("pull.timeout", "pull", "超时没拉，鱼吐钩跑了", ""),
     ("pull.escape", "pull", "拉到了但鱼挣脱跑了", ""),
-    # ---- 小插曲 ----
-    ("story.prompt", "story", "小插曲的提示与选项", "story"),
+    # ---- 小插曲 / 连载剧情 ----
+    ("story.prompt", "story", "小插曲（或连载下一话）的提示与选项", "story"),
+    ("story.recap", "story", "连载开头那行「第 N 话　上次：…」", ""),
     ("story.wrong_owner", "story", "想插手别人的小插曲", ""),
     ("story.none", "story", "当前没有需要决定的事", ""),
     ("story.expired", "story", "犹豫太久，插曲已经过去了", ""),
@@ -2246,12 +2318,21 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("sell.all_locked", "sell", "选中的鱼都锁着，卖光光不会动它们", ""),
     ("sell.nothing", "sell", "没有可卖的鱼（兜底提示）", ""),
     ("sell.locked_note", "sell", "卖完之后提示还有锁定的鱼留下", ""),
-    # ---- 商店 ----
-    ("shop.list", "shop", "商店货架", ""),
-    ("shop.usage", "shop", "商店用法说明", ""),
-    ("shop.usage_short", "shop", "商店用法（简版，带「看货架」）", ""),
+    # ---- 商店（v1.18.13 拆成三家：鱼竿店 / 道具店 / 鱼饵店）----
+    # shop.list / shop.usage 保留成「共用按钮组」：两家货架、两条用法说明分别继承它，
+    # 所以老配置里给 shop.list 配过的按钮照样生效（升级前后默认行为不变）。
+    ("shop.list", "shop", "共用按钮组：货架（鱼饵店/道具店都继承它）", ""),
+    ("shop.usage", "shop", "共用按钮组：商店用法说明", ""),
+    ("shop.bait_list", "shop", "鱼饵店货架", "shop.list"),
+    ("shop.item_list", "shop", "道具店货架", "shop.list"),
+    ("shop.bait_usage", "shop", "鱼饵店用法说明", "shop.usage"),
+    ("shop.item_usage", "shop", "道具店用法说明", "shop.usage"),
+    ("shop.moved", "shop", "老的「商店」命令已拆成三家（指路）", "shop.usage"),
+    ("shop.wrong_shop_rod", "shop", "在鱼饵/道具店里写鱼竿名字", ""),
+    ("shop.wrong_shop_item", "shop", "在鱼饵店里写道具名字", ""),
+    ("shop.wrong_shop_bait", "shop", "在道具店里写鱼饵名字", ""),
     ("shop.free_hook", "shop", "空钩不用买", ""),
-    ("shop.not_found", "shop", "商店里没有这件东西", ""),
+    ("shop.not_found", "shop", "这家店里没有这件东西", ""),
     ("shop.locked", "shop", "等级 / 鱼竿不够，还没上架", ""),
     ("shop.no_gold_bait", "shop", "买鱼饵金币不足", ""),
     ("shop.no_gold_item", "shop", "买道具金币不足", ""),
@@ -2476,7 +2557,11 @@ BUTTON_COMMAND_WORDS: frozenset[str] = frozenset({
     "锁定", "锁", "lock", "解锁", "解", "unlock",
     "今日", "天气", "行情", "today", "weather", "market",
     "排行", "排行榜", "榜", "rank", "top",
-    "商店", "鱼饵", "道具", "shop", "买",
+    "商店", "铺子", "shop",
+    "鱼竿", "竿", "rod",
+    # 三家店（v1.18.13）：道具店与鱼饵店各有自己的名字，别再写回「商店」
+    "道具", "道具店", "物品", "item", "items",
+    "鱼饵", "鱼饵店", "饵店", "饵",
     "用", "使用", "use", "查", "查询", "鱼", "资料", "fish", "info",
     "事件", "插曲", "选择", "event",
     "换饵", "换鱼饵", "装备饵", "上饵", "bait",
@@ -2484,11 +2569,12 @@ BUTTON_COMMAND_WORDS: frozenset[str] = frozenset({
     "档案", "profile", "me", "金币", "gold",
     "签到", "sign", "订单", "任务", "order", "orders",
     "钓点", "地点", "地图", "map", "location",
-    "鱼竿", "竿", "rod", "杂物", "漂流瓶", "收集品", "collect",
+    "杂物", "漂流瓶", "收集品", "collect",
     "拉", "去", "前往", "go", "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
     # v1.18.0 的短写法（按钮可以直接指向它们）
     "放", "养", "取", "拿", "领", "收租", "喂", "洗", "洗髓",
-    "交", "交单", "交货", "购买", "装备", "换竿", "换鱼竿",
+    # 「买」是智能买（自动认三家店），按钮可以直接用它
+    "交", "交单", "交货", "购买", "买", "装备", "换竿", "换鱼竿",
 })
 
 

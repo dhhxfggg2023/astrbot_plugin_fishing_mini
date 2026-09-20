@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""子命令实现：背包 / 卖鱼 / 商店 / 图鉴 / 钓点 / 鱼竿 / 水族馆 / 订单 / 签到…
+"""子命令实现：背包 / 卖鱼 / 三家商店（鱼竿·道具·鱼饵）/ 图鉴 / 钓点 / 水族馆 / 订单 / 签到…
 
 这些方法是从 main.py 原样搬过来的（缩进未变），可以直接引用 main.py 的常量与
 工具函数——共享方式是「main 在模块末尾把自己的全局注入本模块」，详见 main.py
@@ -65,7 +65,7 @@ def _has_ext_effect(effects: dict[str, Any]) -> tuple[bool, bool]:
 
 
 class CommandsMixin:
-    """子命令实现：背包 / 卖鱼 / 商店 / 图鉴 / 钓点 / 鱼竿 / 水族馆 / 订单 / 签到…（由 FishingPlugin 继承，见 main.py 的类定义）。"""
+    """子命令实现：背包 / 卖鱼 / 三家商店（鱼竿·道具·鱼饵）/ 图鉴 / 钓点 / 水族馆 / 订单 / 签到…（由 FishingPlugin 继承，见 main.py 的类定义）。"""
 
     async def _cmd_event(self, event: AstrMessageEvent, user_id: str, a2: str = ""):
         """处理小插曲的选择：/钓鱼 事件 1"""
@@ -94,14 +94,20 @@ class CommandsMixin:
                 return
 
             choices = event_def.get("choices") or []
+            # 选项顺序是**打乱后**存下来的：玩家看到的 1/2 到底对应哪个选项，
+            # 以存档里的 order 为准（提示、按钮、这里三处必须一致）
+            order = self._event_order_indices(event_def, current.get("order"))
             idx = _to_int(a2, 0)
-            if not (1 <= idx <= len(choices)):
-                text, _ = self._event_prompt(event_def, rows=False)
+            if not (1 <= idx <= len(order)):
+                text, _ = self._event_prompt(
+                    event_def, order, rows=False,
+                    text=self._event_text(event_def, player),
+                )
                 async for _r in self._say_msg(event, "story.bad_choice", event.plain_result(text)):
                     yield _r
                 return
 
-            choice = choices[idx - 1]
+            choice = choices[order[idx - 1]]
             player.pop("event", None)
             lines = [f"　{choice['text']}"]
 
@@ -128,9 +134,44 @@ class CommandsMixin:
                 lines.extend(self._grant_event_reward(player, self._event_consolation(reward)))
 
             new_ach = self._check_achievements(player)
+            # ---- 剧情进度：旗标 / 前情提要 / 一次性与连载的收尾（v1.18.13）----
+            self._record_story_choice(player, event_def, choice)
             saved = await self._save_player(player)
             async for _r in self._say_msg(event, "story.result", event.plain_result("\n".join(lines))):
                 yield _r
+
+    def _record_story_choice(
+        self, player: dict[str, Any], event_def: dict[str, Any], choice: dict[str, Any]
+    ) -> None:
+        """把这一次的选择写进剧情进度（让下一段接得上）。
+
+        * 选项里的 ``set`` → 记旗标（后面的插曲/连载用它决定演什么）
+        * 记一句「上次：…」，下一话开头当前情提要
+        * 一次性插曲记进 ``seen``（``once`` 的不再重复）
+        * 连载演完最后一话 → 收尾（这条线不再从头演）
+        """
+        story = self._story_state(player)
+        flags = story["flags"]
+        for key, value in (choice.get("set") or {}).items():
+            if isinstance(key, str):
+                flags[key] = value
+        recap = str(
+            choice.get("recap") or event_def.get("recap") or choice.get("text") or ""
+        ).strip()
+        if recap:
+            story["last"] = recap[:120]
+        event_id = str(event_def.get("id") or "")
+        chain_id = str(event_def.get("chain") or "")
+        if chain_id:
+            chain = CHAIN_BY_ID.get(chain_id) or {}
+            episodes = chain.get("episodes") or []
+            if _safe_int(event_def.get("episode"), 0, 0) >= len(episodes):
+                if chain_id not in story["done"]:
+                    story["done"].append(chain_id)
+                story["arc"] = ""
+                story["ep"] = 0
+        elif event_def.get("once") and event_id and event_id not in story["seen"]:
+            story["seen"].append(event_id)
 
     def _event_reward_range(self, value: Any) -> tuple[float, float]:
         """把奖励写法统一成 ``(最小, 最大)``：数字 -> 定值，``[a, b]`` -> 区间。"""
@@ -751,7 +792,7 @@ class CommandsMixin:
         """背包扩容的实际逻辑。
 
         ⚠️ 调用方必须**已经持有该玩家的锁**。这是为了避免
-        「/钓鱼 商店 扩容」转发时重复获取同一把 asyncio.Lock 造成自死锁
+        「/钓鱼 商店 扩容」这类老写法转发时重复获取同一把 asyncio.Lock 造成自死锁
         （asyncio.Lock 不可重入，我们真的踩过这个坑）。
         """
         player = await self._load_player(user_id)
@@ -1501,16 +1542,20 @@ class CommandsMixin:
                         yield _r
                     return
                 price = int(nxt["price"])
+                added = max(1, _safe_int(nxt.get("add"), 1, 1))
                 if _safe_int(player.get("gold"), 0, 0) < price:
                     async for _r in self._say_msg(event, "aquarium.no_gold", event.plain_result(
-                            f"💸 扩建「{nxt['name']}」需要 {_fmt_gold(price)}，金币不足"
+                            f"💸 扩建「{nxt['name']}」（+{added} 个位）需要 "
+                            f"{_fmt_gold(price)}，金币不足"
+                            f"\n　现在还差 {_fmt_gold(price - _safe_int(player.get('gold'), 0, 0))}"
                         )):
                         yield _r
                     return
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
                 unlocked.append(nxt["name"])
                 lines = [
-                    f"🏠 扩建成功：{nxt['name']}　容量 → {self._aquarium_capacity(player)}",
+                    f"🏠 扩建成功：{nxt['name']}"
+                    f"（+{added} 个位）　容量 → {self._aquarium_capacity(player)}",
                     f"💰 余额 {_fmt_gold(player['gold'])}",
                 ]
                 saved = await self._save_with_notices(player, lines)
@@ -1853,164 +1898,236 @@ class CommandsMixin:
 
 
     # =========================================================================
-    # 商店 / 道具
+    # 商店（v1.18.13 起拆成三家：鱼竿店 / 道具店 / 鱼饵店）
     # =========================================================================
 
-    async def _cmd_shop(self, event: AstrMessageEvent, user_id: str, a2: str, a3: str = ""):
-        """商店。
+    async def _cmd_buy_usage(self, event: AstrMessageEvent, user_id: str):
+        """``/钓鱼 买`` 不带名字：把三家店的买法一次说清（别只丢一句「用法不对」）。"""
+        async for _r in self._say_msg(event, "shop.usage", event.plain_result(
+                "📖 /钓鱼 买 <名字> [数量]　会自动认出它在哪家店\n"
+                "　三家店也可以直接进：\n"
+                "　　/钓鱼 鱼竿　　鱼竿店\n"
+                "　　/钓鱼 道具　　道具店（饲料 / 仙露 / 洗髓丹…）\n"
+                "　　/钓鱼 鱼饵　　鱼饵店（面包屑 / 蚯蚓 / 红虫…）\n"
+                "　例：/钓鱼 买 蚯蚓 20　｜　/钓鱼 道具 买 洗髓丹 1"
+        )):
+            yield _r
 
-        - ``/钓鱼 商店``                    看货架
-        - ``/钓鱼 商店 买 <名字>``           买一组（鱼饵按组、道具 1 个）
-        - ``/钓鱼 商店 买 <名字> <数量>``     批量买（组数/个数）
-        - ``/钓鱼 商店 扩容``                背包扩容
+    async def _cmd_shop_moved(self, event: AstrMessageEvent, user_id: str, a2: str = ""):
+        """老的 `/钓鱼 商店`：货架拆成三家了，这里只给一句指路。"""
+        todo = (a2 or "").strip()
+        lines = [
+            "🛒 商店拆成三家了，货架看着清爽些：",
+            "　/钓鱼 鱼竿　　鱼竿店（价格 / 价值加成 / 手气 / 解锁等级）",
+            "　/钓鱼 道具　　道具店（饲料 / 仙露 / 育灵水 / 洗髓丹 / 玉佩 / 造景）",
+            "　/钓鱼 鱼饵　　鱼饵店（面包屑 / 蚯蚓 / 红虫 / 玉米粒…）",
+        ]
+        if todo:
+            # 老玩家多半是接着写了「买 蚯蚓」或「扩容」，那就直接告诉他新写法
+            if todo.startswith(("扩容", "扩建", "背包扩")):
+                lines.append("　👉 背包扩容现在直接发：/钓鱼 扩建背包")
+            else:
+                name = todo[1:].strip() if todo[0] in "买购" else todo
+                lines.append(
+                    f"　👉 买「{name}」现在发：/钓鱼 鱼竿 买 {name}"
+                    f"　或 /钓鱼 道具 买 {name}　或 /钓鱼 鱼饵 买 {name}"
+                )
+        lines.append("　（三家店都认「买 <名字> [数量]」，也可以直接 /钓鱼 买 <名字>）")
+        async for _r in self._say_msg(event, "shop.moved", event.plain_result("\n".join(lines))):
+            yield _r
+
+    async def _do_buy_from_shop(
+        self, event: AstrMessageEvent, user_id: str, a2: str, a3: str, kind: str
+    ):
+        """三店共用的购买逻辑（调用方必须已经持有该玩家的锁）。
+
+        ``kind``：``bait``（鱼饵店）/ ``item``（道具店）。
+        别的店里没有的东西直接说清楚去哪家买，别只回一句「没这个货」。
         """
-        sub = (a2 or "").strip().lower()
-        # 少打空格的容错：`买蚯蚓` / `扩容` 这类粘连写法也能拆开
-        peeled_shop = self._peel_action(sub, SHOP_ACTIONS)
-        if peeled_shop:
-            sub, glued = peeled_shop
-            a3 = f"{glued} {a3}".strip()
+        player = await self._load_player(user_id)
         spec = self._tokens(a3)
-        if spec and spec[0].lower() == sub and len(spec) > 1:
-            spec = spec[1:]
-        async with self._lock_for(user_id):
-            player = await self._load_player(user_id)
+        if not spec:
+            usage = (
+                "📖 /钓鱼 鱼饵 买 <名字> [数量]\n　例：/钓鱼 鱼饵 买 蚯蚓 20"
+                if kind == "bait"
+                else "📖 /钓鱼 道具 买 <名字> [数量]\n　例：/钓鱼 道具 买 高级饲料 5"
+            )
+            async for _r in self._say_msg(event, f"shop.{kind}_usage", event.plain_result(usage)):
+                yield _r
+            return
+        name = spec[0]
+        times = _to_int(spec[1], 1) if len(spec) > 1 else 1
+        # 少打空格的容错：`买蚯蚓2` 等价于 `买 蚯蚓 2`
+        if len(spec) == 1:
+            split_nc = self._split_name_count(name)
+            if split_nc and (self._find_bait(split_nc[0]) or self._find_item(split_nc[0])):
+                name, times_text = split_nc
+                times = _to_int(times_text, 1)
+        times = max(1, min(times, 999))
 
-            if not sub:
-                async for _r in self._say_msg(event, "shop.list", event.plain_result(self._shop_view(player))):
+        bait_id = self._find_bait(name)
+        item_id = self._find_item(name)
+        rod = self._find_rod(name)
+
+        if bait_id == "none":
+            async for _r in self._say_msg(event, "shop.free_hook", event.plain_result(
+                    "🪝 空钩是免费的，不需要购买\n"
+                    "　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿"
+            )):
+                yield _r
+            return
+        if rod is not None and bait_id is None and item_id is None:
+            async for _r in self._say_msg(event, "shop.wrong_shop_rod", event.plain_result(
+                    f"🎣 「{rod['name']}」是鱼竿，要去鱼竿店买：\n"
+                    f"　/钓鱼 鱼竿 买 {rod['name']}"
+            )):
+                yield _r
+            return
+        if kind == "bait" and bait_id is None and item_id is not None:
+            async for _r in self._say_msg(event, "shop.wrong_shop_item", event.plain_result(
+                    f"🎁 「{self.items[item_id]['name']}」是道具，要去道具店买：\n"
+                    f"　/钓鱼 道具 买 {self.items[item_id]['name']}"
+            )):
+                yield _r
+            return
+        if kind == "item" and item_id is None and bait_id is not None:
+            async for _r in self._say_msg(event, "shop.wrong_shop_bait", event.plain_result(
+                    f"🪱 「{self.baits[bait_id]['name']}」是鱼饵，要去鱼饵店买：\n"
+                    f"　/钓鱼 鱼饵 买 {self.baits[bait_id]['name']}"
+            )):
+                yield _r
+            return
+        if bait_id is None and item_id is None:
+            # 只报「这一家已上架」的名字：没解锁的东西不剧透
+            if kind == "bait":
+                names = "、".join(
+                    self.baits[b]["name"]
+                    for b in self._bait_list()
+                    if not self._unlock_shortage(player, self.baits[b])
+                )
+                other = "道具店（/钓鱼 道具）"
+            else:
+                names = "、".join(
+                    i["name"]
+                    for i in self.items.values()
+                    if not self._unlock_shortage(player, i)
+                )
+                other = "鱼饵店（/钓鱼 鱼饵）"
+            async for _r in self._say_msg(event, "shop.not_found", event.plain_result(
+                    f"🤔 这家店里没有「{name}」\n　在售：{names}\n"
+                    f"　鱼竿去 /钓鱼 鱼竿，别的道具去 {other}"
+            )):
+                yield _r
+            return
+
+        if kind == "bait" and bait_id is not None:
+            bait = self.baits[bait_id]
+            # 等级 / 需要鱼竿的购买门槛（只限制购买，已持有的不受影响）
+            refuse = self._unlock_refuse_text(player, bait)
+            if refuse:
+                async for _r in self._say_msg(event, "shop.locked", event.plain_result(
+                        f"{refuse}\n　升级靠多钓鱼；要鱼竿就去 /钓鱼 鱼竿 买"
+                )):
                     yield _r
                 return
+            unit = max(0, int(bait.get("price", 0)))   # 单价：按个卖
+            want = max(1, min(times, 9999))
+            price = unit * want
+            if _safe_int(player.get("gold"), 0, 0) < price:
+                async for _r in self._say_msg(event, "shop.no_gold_bait", event.plain_result(
+                        f"💸 金币不足：买 {want} 个需要 {_fmt_gold(price)}，"
+                        f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                        f"（{_fmt_gold(unit)}/个）"
+                )):
+                    yield _r
+                return
+            amount = want
+            player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
+            baits = player.setdefault("baits", {})
+            baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + amount
+            player["equipped_bait"] = bait_id
+            saved = await self._save_player(player)
+            lines = [
+                f"🪱 购买 {self._bait_label(bait_id)} ×{amount}"
+                f"（{_fmt_gold(unit)}/个）→ {_fmt_gold(price)} 金币",
+                "　已装备为当前鱼饵",
+                f"　持有 {player['baits'].get(bait_id, 0)} 个"
+                f"　💰 余额 {_fmt_gold(player['gold'])}",
+            ]
+        else:
+            item = self.items[item_id]
+            price = int(item.get("price", 0)) * times
+            if _safe_int(player.get("gold"), 0, 0) < price:
+                async for _r in self._say_msg(event, "shop.no_gold_item", event.plain_result(
+                        f"💸 金币不足：买 {times} 个需要 {_fmt_gold(price)}，"
+                        f"你只有 {_fmt_gold(player.get('gold', 0))}"
+                )):
+                    yield _r
+                return
+            player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
+            items = player.setdefault("items", {})
+            items[item_id] = _safe_int(items.get(item_id), 0, 0) + times
+            saved = await self._save_player(player)
+            lines = [
+                f"🎁 购买 {self._item_label(item_id)} ×{times}"
+                f" → {_fmt_gold(price)} 金币",
+                f"　{item['desc']}",
+                f"　持有 {player['items'].get(item_id, 0)} 个"
+                f"　💰 余额 {_fmt_gold(player['gold'])}",
+            ]
+        if not saved:
+            lines.append("⚠️ 保存失败")
+        async for _r in self._say_msg(event, "shop.bought", event.plain_result("\n".join(lines))):
+            yield _r
 
-            # 「商店 扩容」：转发到背包扩容（调用无锁版本，避免自死锁）
-            if sub in ("扩容", "扩建背包", "背包扩容", "鱼篓扩容", "鱼篓"):
-                async for result in self._do_backpack_upgrade(event, user_id):
+    async def _cmd_bait_shop(self, event: AstrMessageEvent, user_id: str, a2: str, a3: str = ""):
+        """鱼饵店：/钓鱼 鱼饵 ｜ /钓鱼 鱼饵 买 <名字> [数量]"""
+        sub = (a2 or "").strip().lower()
+        peeled = self._peel_action(sub, SHOP_ACTIONS)
+        if peeled:
+            sub, glued = peeled
+            a3 = f"{glued} {a3}".strip()
+        async with self._lock_for(user_id):
+            if not sub:
+                player = await self._load_player(user_id)
+                async for _r in self._say_msg(event, "shop.bait_list", event.plain_result(self._bait_shop_view(player))):
+                    yield _r
+                return
+            if sub in ("买", "购买", "buy"):
+                async for result in self._do_buy_from_shop(event, user_id, a2, a3, "bait"):
                     yield result
                 return
+            player = await self._load_player(user_id)
+            async for _r in self._say_msg(event, "shop.bait_usage", event.plain_result(
+                    "📖 /钓鱼 鱼饵　　　　　　看鱼饵货架\n"
+                    "　/钓鱼 鱼饵 买 <名字> [数量]\n"
+                    "　例：/钓鱼 鱼饵 买 蚯蚓 20"
+            )):
+                yield _r
 
-            if sub in ("买", "购买", "buy"):
-                if not spec:
-                    async for _r in self._say_msg(event, "shop.usage", event.plain_result(
-                            "📖 /钓鱼 商店 买 <名字> [数量]\n"
-                            "　例：/钓鱼 商店 买 蚯蚓（1 个）　买 蚯蚓 20（20 个）\n"
-                            "　鱼饵和道具都按「个」买，数量不写就是 1"
-                        )):
-                        yield _r
-                    return
-                name = spec[0]
-                times = _to_int(spec[1], 1) if len(spec) > 1 else 1
-                # 少打空格的容错：`买 蚯蚓2` 等价于 `买 蚯蚓 2`
-                if len(spec) == 1:
-                    split_nc = self._split_name_count(name)
-                    if split_nc and (
-                        self._find_bait(split_nc[0]) or self._find_item(split_nc[0])
-                    ):
-                        name, times_text = split_nc
-                        times = _to_int(times_text, 1)
-                times = max(1, min(times, 999))
-                bait_id = self._find_bait(name)
-                item_id = self._find_item(name)
-
-                if bait_id == "none":
-                    async for _r in self._say_msg(event, "shop.free_hook", event.plain_result(
-                            "🪝 空钩是免费的，不需要购买\n"
-                            "　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿"
-                        )):
-                        yield _r
-                    return
-                if bait_id is None and item_id is None:
-                    # 只报「已上架」的名字：没解锁的东西不剧透
-                    names = "、".join(
-                        [
-                            self.baits[b]["name"]
-                            for b in self._bait_list()
-                            if not self._unlock_shortage(player, self.baits[b])
-                        ]
-                        + [
-                            i["name"]
-                            for i in self.items.values()
-                            if not self._unlock_shortage(player, i)
-                        ]
-                    )
-                    async for _r in self._say_msg(event, "shop.not_found", event.plain_result(
-                            f"🤔 商店里没有「{name}」\n　在售：{names}"
-                        )):
-                        yield _r
-                    return
-
-                if bait_id is not None:
-                    bait = self.baits[bait_id]
-                    # 等级 / 需要鱼竿的购买门槛（只限制购买，已持有的不受影响）
-                    refuse = self._unlock_refuse_text(player, bait)
-                    if refuse:
-                        async for _r in self._say_msg(event, "shop.locked", event.plain_result(
-                                f"{refuse}\n　升级靠多钓鱼；要鱼竿就去 /钓鱼 鱼竿 买"
-                            )):
-                            yield _r
-                        return
-                    unit = max(0, int(bait.get("price", 0)))   # 单价：按个卖
-                    want = max(1, min(times, 9999))
-                    price = unit * want
-                    if _safe_int(player.get("gold"), 0, 0) < price:
-                        async for _r in self._say_msg(event, "shop.no_gold_bait", event.plain_result(
-                                f"💸 金币不足：买 {want} 个需要 {_fmt_gold(price)}，"
-                                f"你只有 {_fmt_gold(player.get('gold', 0))}"
-                                f"（{_fmt_gold(unit)}/个）"
-                            )):
-                            yield _r
-                        return
-                    amount = want
-                    player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
-                    baits = player.setdefault("baits", {})
-                    baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + amount
-                    player["equipped_bait"] = bait_id
-                    saved = await self._save_player(player)
-                    lines = [
-                        f"🛒 购买 {self._bait_label(bait_id)} ×{amount}"
-                        f"（{_fmt_gold(unit)}/个）→ {_fmt_gold(price)} 金币"
-                    ]
-                else:
-                    item = self.items[item_id]
-                    price = int(item.get("price", 0)) * times
-                    if _safe_int(player.get("gold"), 0, 0) < price:
-                        async for _r in self._say_msg(event, "shop.no_gold_item", event.plain_result(
-                                f"💸 金币不足：买 {times} 个需要 {_fmt_gold(price)}，"
-                                f"你只有 {_fmt_gold(player.get('gold', 0))}"
-                            )):
-                            yield _r
-                        return
-                    player["gold"] = _safe_int(player.get("gold"), 0, 0) - price
-                    items = player.setdefault("items", {})
-                    items[item_id] = _safe_int(items.get(item_id), 0, 0) + times
-                    saved = await self._save_player(player)
-                    lines = [
-                        f"🛒 购买 {self._item_label(item_id)} ×{times}"
-                        f" → {_fmt_gold(price)} 金币",
-                        f"　{item['desc']}",
-                    ]
-
-                # 统一补上「持有量 + 余额」这两条必要信息
-                if bait_id is not None:
-                    lines.append("　已装备为当前鱼饵")
-                    lines.append(
-                        f"　持有 {player['baits'].get(bait_id, 0)} 个"
-                        f"　💰 余额 {_fmt_gold(player['gold'])}"
-                    )
-                else:
-                    lines.append(
-                        f"　持有 {player['items'].get(item_id, 0)} 个"
-                        f"　💰 余额 {_fmt_gold(player['gold'])}"
-                    )
-                if not saved:
-                    lines.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "shop.bought", event.plain_result("\n".join(lines))):
+    async def _cmd_item_shop(self, event: AstrMessageEvent, user_id: str, a2: str, a3: str = ""):
+        """道具店：/钓鱼 道具 ｜ /钓鱼 道具 买 <名字> [数量]"""
+        sub = (a2 or "").strip().lower()
+        peeled = self._peel_action(sub, SHOP_ACTIONS)
+        if peeled:
+            sub, glued = peeled
+            a3 = f"{glued} {a3}".strip()
+        async with self._lock_for(user_id):
+            if not sub:
+                player = await self._load_player(user_id)
+                async for _r in self._say_msg(event, "shop.item_list", event.plain_result(self._item_shop_view(player))):
                     yield _r
                 return
-
-            async for _r in self._say_msg(event, "shop.usage_short", event.plain_result(
-                    "📖 /钓鱼 商店　　　　　　看货架\n"
-                    "　/钓鱼 商店 买 <名字> [数量]\n"
-                    "　/钓鱼 商店 扩容　　　 背包扩容"
-                )):
+            if sub in ("买", "购买", "buy"):
+                async for result in self._do_buy_from_shop(event, user_id, a2, a3, "item"):
+                    yield result
+                return
+            player = await self._load_player(user_id)
+            async for _r in self._say_msg(event, "shop.item_usage", event.plain_result(
+                    "📖 /钓鱼 道具　　　　　　看道具货架\n"
+                    "　/钓鱼 道具 买 <名字> [数量]\n"
+                    "　例：/钓鱼 道具 买 高级饲料 5"
+            )):
                 yield _r
 
 
@@ -2046,7 +2163,7 @@ class CommandsMixin:
                         f"　{self.baits[bid].get('desc', '')}"
                     )
                 if not any_bait:
-                    lines.append("　（没有鱼饵，/钓鱼 商店 买 蚯蚓）")
+                    lines.append("　（没有鱼饵，/钓鱼 鱼饵 买 蚯蚓）")
                 lines.append("💡 /钓鱼 换饵 蚯蚓　或　/钓鱼 换饵 空钩（不消耗鱼饵）")
                 async for _r in self._say_msg(event, "bait.equipped", event.plain_result("\n".join(lines))):
                     yield _r
@@ -2076,7 +2193,7 @@ class CommandsMixin:
                     return
                 async for _r in self._say_msg(event, "bait.not_owned", event.plain_result(
                         f"🎒 你还没有 {self._bait_label(target)}，"
-                        f"先去 /钓鱼 商店 买 {self.baits[target]['name']}"
+                        f"先去 /钓鱼 鱼饵 买 {self.baits[target]['name']}"
                     )):
                     yield _r
                 return
@@ -2131,7 +2248,7 @@ class CommandsMixin:
             if item_id is None:
                 owned = player.get("items") or {}
                 if not owned:
-                    async for _r in self._say_msg(event, "item.empty", event.plain_result("🎒 没有道具，去 /钓鱼 商店 买")):
+                    async for _r in self._say_msg(event, "item.empty", event.plain_result("🎒 没有道具，去 /钓鱼 道具 买")):
                         yield _r
                     return
                 names = "、".join(
@@ -2144,7 +2261,7 @@ class CommandsMixin:
             items = player.get("items") or {}
             if _safe_int(items.get(item_id), 0, 0) <= 0:
                 async for _r in self._say_msg(event, "item.missing", event.plain_result(
-                        f"🎒 没有 {self._item_label(item_id)}，去 /钓鱼 商店 买"
+                        f"🎒 没有 {self._item_label(item_id)}，去 /钓鱼 道具 买"
                     )):
                     yield _r
                 return

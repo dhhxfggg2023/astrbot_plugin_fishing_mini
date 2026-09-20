@@ -1,4 +1,4 @@
-{
+﻿{
   "content_tables_hint": {
     "description": "内容与数值都已移到「数据编辑器」页面：插件 → 群钓鱼 → 页面 → 数据编辑器（这里只是路标，不用改）",
     "type": "text",
@@ -72,12 +72,16 @@
   },
   "backpack_upgrades": {
     "invisible": true,
-    "description": "鱼篓扩容阶梯。每项格式：增量|价格",
+    "description": "鱼篓扩容阶梯。每项格式：增量|价格，按顺序买、越往后越贵（默认 7 档：30 格一路扩到 370 格）",
     "type": "list",
     "default": [
       "15|400",
       "25|1100",
-      "30|2700"
+      "30|2700",
+      "40|6500",
+      "55|15000",
+      "75|34000",
+      "100|75000"
     ]
   },
   "aquarium_capacity": {
@@ -106,12 +110,15 @@
   },
   "aquarium_slots": {
     "invisible": true,
-    "description": "水族馆扩建栏位。每项格式：栏位名|解锁价格",
+    "description": "水族馆扩建档位。每项格式：栏位名|解锁价格 或 栏位名|解锁价格|一次加几个位（第三段省略 = 加 1 个位）。越往后的档位越贵、一次加得越多；买满后容量 = aquarium_capacity + 各档 add 之和",
     "type": "list",
     "default": [
       "精致缸|1600",
       "生态缸|5400",
-      "深海缸|16000"
+      "深海缸|16000",
+      "珊瑚宫殿|38000|2",
+      "龙宫别苑|88000|3",
+      "水晶宫|190000|4"
     ]
   },
   "interactive_rarities": {
@@ -354,9 +361,27 @@
   },
   "story_chance": {
     "invisible": true,
-    "description": "抛竿时出现随机小插曲的概率（水面异动/旧渔网/漂来的木箱等）",
+    "description": "抛竿时出现随机小插曲 / 连载下一话的概率（水面异动/旧渔网/漂来的木箱、以及《老钓客》这类连载）",
     "type": "float",
     "default": 0.06
+  },
+  "story_chain_chance": {
+    "invisible": true,
+    "description": "这次插曲走「连载」的概率（其余情况演一次性小插曲）。1 = 全是连载、0 = 只演一次性插曲。连载会记住你的选择，下一话接着上一话的结局演",
+    "type": "float",
+    "default": 0.5
+  },
+  "story_chain_gap": {
+    "invisible": true,
+    "description": "连载两话之间至少隔几竿（免得像连播）。一次性插曲不受它影响",
+    "type": "int",
+    "default": 6
+  },
+  "story_shuffle_choices": {
+    "invisible": true,
+    "description": "插曲/连载的选项位置每次随机（免得上和下永远待在 1 号、2 号位）。关掉 = 永远按内容表里的顺序显示",
+    "type": "bool",
+    "default": true
   },
   "codex_bonus_per_rarity": {
     "invisible": true,
@@ -740,9 +765,9 @@
   },
   "command_aliases": {
     "invisible": true,
-    "description": "命令别名：一行一个，格式「规范子命令|别名1,别名2」（全角逗号、顿号也认）。只能增加写法，内置写法永远有效、不会被覆盖。可用规范子命令：拉、帮助、下竿、去、背包、卖、图鉴、水族馆、扩建背包、锁定、解锁、今日、排行、商店、用、查、事件、换饵、体力、档案、金币、签到、订单、钓点、鱼竿、杂物。与内置写法撞名、目标子命令不存在、与鱼饵重名的行会被跳过（日志里有提示）。留空=只认内置写法。",
+    "description": "命令别名：一行一个，格式「规范子命令|别名1,别名2」（全角逗号、顿号也认）。只能增加写法，内置写法永远有效、不会被覆盖。可用规范子命令：拉、帮助、下竿、去、背包、卖、图鉴、水族馆、扩建背包、锁定、解锁、今日、排行、商店（只回指路）、鱼竿、道具、鱼饵、用、查、事件、换饵、体力、档案、金币、签到、订单、钓点、杂物。与内置写法撞名、目标子命令不存在、与鱼饵重名的行会被跳过（日志里有提示）。留空=只认内置写法。",
     "type": "text",
-    "default": "拉|拉线,收,收线,提,提竿,拽,pull,p\n帮助|help,?,？,菜单,指令\n下竿|钓,钓鱼,抛竿,甩竿,下钩,抛,钓鱼吧,cast,fish,fishing\n去|前往,go\n背包|包,bag,鱼篓\n卖|卖鱼,sell,卖垃圾,卖光光,卖光,清空,全卖,空背包,sellall,一键卖出\n图鉴|收集,collection\n水族馆|馆,aquarium,缸\n扩建背包|扩容,背包扩容,鱼篓扩容\n锁定|锁,lock\n解锁|解,unlock\n今日|天气,行情,today,weather,market\n排行|排行榜,rank,top,榜\n商店|鱼饵,道具,shop,买\n用|使用,道具用,use\n查|查询,鱼,鱼查,资料,info,lookup\n事件|插曲,选择,event\n换饵|换鱼饵,装备饵,上饵,bait,equip_bait\n体力|体力值,活力,stamina\n档案|profile,me\n金币|gold\n签到|sign\n订单|任务,order,orders\n钓点|地点,地图,map,location\n鱼竿|竿,rod\n杂物|漂流瓶,收集品,collect",
+    "default": "拉|拉线,收,收线,提,提竿,拽,pull,p\n帮助|help,?,？,菜单,指令\n下竿|钓,钓鱼,抛竿,甩竿,下钩,抛,钓鱼吧,cast,fish,fishing\n去|前往,go\n背包|包,bag,鱼篓\n卖|卖鱼,sell,卖垃圾,卖光光,卖光,清空,全卖,空背包,sellall,一键卖出\n图鉴|收集,collection\n水族馆|馆,aquarium,缸\n扩建背包|扩容,背包扩容,鱼篓扩容\n锁定|锁,lock\n解锁|解,unlock\n今日|天气,行情,today,weather,market\n排行|排行榜,rank,top,榜\n商店|铺子,shop\n鱼饵|鱼饵店,饵店,饵\n道具|道具店,物品,item,items\n买|购买,buy\n用|使用,道具用,use\n查|查询,鱼,鱼查,资料,info,lookup\n事件|插曲,选择,event\n换饵|换鱼饵,装备饵,上饵,bait,equip_bait\n体力|体力值,活力,stamina\n档案|profile,me\n金币|gold\n签到|sign\n订单|任务,order,orders\n钓点|地点,地图,map,location\n鱼竿|竿,rod\n杂物|漂流瓶,收集品,collect",
     "hint": "例：在「背包」那一行后面加「,仓库,行囊」，以后 /钓鱼 仓库 就等于 /钓鱼 背包。保存即生效，不用重载。少打空格的写法（/钓鱼 仓库3）也认。"
   },
   "custom_commands": {

@@ -127,7 +127,14 @@ try:
     plugin = mod.FishingPlugin(context=FakeCtx(), config=dict(cfg))
     check(len(plugin.baits) == 8, f"鱼饵解析 {len(plugin.baits)} 种")
     check(len(plugin.items) == 7, f"道具解析 {len(plugin.items)} 种")
-    check(len(plugin.aquarium_slots) == 3, f"扩建栏位解析 {len(plugin.aquarium_slots)} 个")
+    check(
+        len(plugin.aquarium_slots) == 6,
+        f"扩建栏位解析 {len(plugin.aquarium_slots)} 个（v1.18.13 加档后）",
+    )
+    check(
+        [s.get("add") for s in plugin.aquarium_slots] == [1, 1, 1, 2, 3, 4],
+        f"每档加几个位也解析出来了 -> {[s.get('add') for s in plugin.aquarium_slots]}",
+    )
     check(plugin.escape_map.get("神话", 0) > 0, f"逃脱率表解析 -> {plugin.escape_map}")
     check(
         plugin.cfg["quality_weights"] == [44, 28, 16, 9, 3, 0],

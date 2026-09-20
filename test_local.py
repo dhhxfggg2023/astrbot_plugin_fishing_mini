@@ -241,7 +241,10 @@ async def main():
     plugin = make_plugin(cfg)
     check(len(plugin.rods) == 6, f"鱼竿 {len(plugin.rods)} 种")
     check(len(plugin.locations) == 19, f"钓点 {len(plugin.locations)} 个（v1.18.8 加了星陨湖/万水归墟/龙宫）")
-    check(len(plugin.backpack_upgrades) == 3, f"扩容 {len(plugin.backpack_upgrades)} 档")
+    check(
+        len(plugin.backpack_upgrades) == 7,
+        f"扩容 {len(plugin.backpack_upgrades)} 档（v1.18.13 加档后）",
+    )
     check(cfg["backpack_base"] == 30, f"初始鱼篓 {cfg['backpack_base']}")
 
     # =====================================================================
@@ -489,7 +492,7 @@ async def main():
     p = await plugin._load_player("40001")
     check(len(p["inventory"]) == cap, "未超容量")
 
-    out = await cmd(plugin, ev, "商店", "扩容", "")
+    out = await cmd(plugin, ev, "扩建背包", "", "")
     print("    " + text_of(out).splitlines()[0])
     p = await plugin._load_player("40001")
     check(
@@ -499,6 +502,31 @@ async def main():
     check(p["gold"] == 100000 - 400, f"扣款 -> {p['gold']}")
     out = await cast(plugin, FakeEvent("40001"))
     check("满了" not in text_of(out), "扩容后可以继续抛竿")
+
+    # --- v1.18.13：扩容档位加到 7 档，越往后越贵、容量阶梯一直往上 ---
+    _ups = plugin.backpack_upgrades
+    check(
+        len(_ups) == 7,
+        f"背包扩容 {len(_ups)} 档（v1.18.13 从 3 档加到 7 档）",
+    )
+    check(
+        all(b["price"] > a["price"] for a, b in zip(_ups, _ups[1:]))
+        and all(b["add"] >= a["add"] for a, b in zip(_ups, _ups[1:])),
+        f"价格严格递增、每档加的量不缩水 -> "
+        f"{[u['price'] for u in _ups]}",
+    )
+    p = await plugin._load_player("40001")
+    p["gold"] = 10 ** 9
+    await plugin._save_player(p)
+    for _ in range(len(_ups)):
+        await cmd(plugin, ev, "扩建背包", "", "")
+    p = await plugin._load_player("40001")
+    check(
+        mod._backpack_capacity(p, plugin.cfg) == 30 + sum(u["add"] for u in _ups),
+        f"买满 7 档 -> 容量 {mod._backpack_capacity(p, plugin.cfg)}",
+    )
+    out = await cmd(plugin, ev, "扩建背包", "", "")
+    check("已扩到最大" in text_of(out), "买满之后再点扩容会明说已经最大")
 
     # =====================================================================
     print("\n[6] 杂物与漂流瓶")
@@ -1581,11 +1609,11 @@ async def main():
     p["gold"] = 100000
     await plugin._save_player(p)
     await give_level(plugin, "89001", 2)     # 蚯蚓要 2 级才能买
-    out = await cmd(plugin, ev, "商店买蚯蚓2", "", "")
+    out = await cmd(plugin, ev, "鱼饵买蚯蚓2", "", "")
     p = await plugin._load_player("89001")
     check(
         p["baits"].get("worm", 0) == 2 and "金币不足" not in text_of(out),
-        f"「商店买蚯蚓2」= 买 2 个 -> {p['baits'].get('worm')} 个（默认买 1 个）",
+        f"「鱼饵买蚯蚓2」= 买 2 个 -> {p['baits'].get('worm')} 个（默认买 1 个）",
     )
 
     out = await cmd(plugin, ev, "水族馆放1", "", "")
@@ -1732,9 +1760,9 @@ async def main():
     p["inventory"] = fill(6)
     await plugin2._save_player(p)
     await give_level(plugin2, "89002", 2)    # 蚯蚓要 2 级
-    out = await cmd(plugin2, ev2, "商店买蚯蚓2", "", "")
+    out = await cmd(plugin2, ev2, "鱼饵买蚯蚓2", "", "")
     p = await plugin2._load_player("89002")
-    check(p["baits"].get("worm") == 2, f"「商店买蚯蚓2」= 买 2 个 -> {p['baits'].get('worm')}")
+    check(p["baits"].get("worm") == 2, f"「鱼饵买蚯蚓2」= 买 2 个 -> {p['baits'].get('worm')}")
     await cmd(plugin2, ev2, "卖", "鲤鱼3")
     p = await plugin2._load_player("89002")
     check(len(p["inventory"]) == 3, f"「卖 鲤鱼3」= 卖 3 条 -> 剩 {len(p['inventory'])}")
@@ -1757,6 +1785,49 @@ async def main():
     )
     check("容量不足" in text_of(out), "容量不足有明确提示")
 
+    # --- v1.18.13：鱼缸扩建加到 6 档，后面几档一次加多个位 ---
+    plugin_aq = make_plugin()
+    ev_aq = FakeEvent("89004")
+    aq = mod._default_player("89004")
+    aq["gold"] = 10 ** 9
+    await plugin_aq._save_player(aq)
+    _slots = plugin_aq.aquarium_slots
+    check(len(_slots) == 6, f"鱼缸扩建 {len(_slots)} 档（v1.18.13 从 3 档加到 6 档）")
+    check(
+        all(b["price"] > a["price"] for a, b in zip(_slots, _slots[1:])),
+        f"扩建价格严格递增 -> {[s['price'] for s in _slots]}",
+    )
+    check(
+        [s["add"] for s in _slots] == [1, 1, 1, 2, 3, 4],
+        f"后三档一次加 2/3/4 个位 -> {[s['add'] for s in _slots]}",
+    )
+    check(
+        plugin_aq._aquarium_capacity(aq) == plugin_aq.cfg["aquarium_capacity"],
+        f"没扩建时容量 = 基础值 -> {plugin_aq._aquarium_capacity(aq)}",
+    )
+    for _ in range(len(_slots)):
+        await cmd(plugin_aq, ev_aq, "水族馆", "扩建", "")
+    aq = await plugin_aq._load_player("89004")
+    check(
+        plugin_aq._aquarium_capacity(aq)
+        == plugin_aq.cfg["aquarium_capacity"] + sum(s["add"] for s in _slots),
+        f"买满 6 档 -> 容量 {plugin_aq._aquarium_capacity(aq)}",
+    )
+    out = await cmd(plugin_aq, ev_aq, "水族馆", "扩建", "")
+    check("扩到最大" in text_of(out), "买满之后再点扩建会明说已经最大")
+    # 缸满了会在视图里提示下一档（叫什么、加几位、多少钱）—— 拿一个还没买满的号看
+    notyet = make_plugin()
+    nyp = mod._default_player("89005")
+    nyp["aquarium_slots"] = ["精致缸"]          # 只扩建过一档，还有下一档可买
+    nyp["aquarium"] = [
+        mod._new_instance("carp", 1.0) for _ in range(notyet._aquarium_capacity(nyp))
+    ]
+    check(
+        "缸满了" in notyet._aquarium_view(nyp)
+        and notyet.aquarium_slots[1]["name"] in notyet._aquarium_view(nyp),
+        "缸满时视图提示下一档叫什么、加几位、多少钱",
+    )
+
     # --- 商店批量买 ---
     plugin3 = make_plugin()
     ev3 = FakeEvent("89003")
@@ -1764,20 +1835,20 @@ async def main():
     p["gold"] = 100000
     p["total_caught"] = mod._level_threshold(2)   # 蚯蚓要 2 级
     await plugin3._save_player(p)
-    await cmd(plugin3, ev3, "商店", "买", "蚯蚓", "3")
+    await cmd(plugin3, ev3, "鱼饵", "买", "蚯蚓", "3")
     p = await plugin3._load_player("89003")
     check(p["baits"].get("worm") == 3, f"买 3 个蚯蚓 -> {p['baits']}")
-    await cmd(plugin3, ev3, "商店", "买", "蚯蚓")
+    await cmd(plugin3, ev3, "鱼饵", "买", "蚯蚓")
     p = await plugin3._load_player("89003")
     check(p["baits"].get("worm") == 4, "不写数量时只买 1 个")
     check(p["equipped_bait"] == "worm", "买饵自动装备")
 
-    await cmd(plugin3, ev3, "商店", "买", "高级饲料", "5")
+    await cmd(plugin3, ev3, "道具", "买", "高级饲料", "5")
     p = await plugin3._load_player("89003")
     check(p["items"].get("feed_premium") == 5, f"买 5 个道具 -> {p['items']}")
 
     gold_before = p["gold"]
-    out = await cmd(plugin3, ev3, "商店", "买", "仙露", "999")
+    out = await cmd(plugin3, ev3, "道具", "买", "仙露", "999")
     p = await plugin3._load_player("89003")
     check(p["gold"] == gold_before, "金币不足时不扣款")
     check("金币不足" in text_of(out), "金币不足有提示")
@@ -1792,7 +1863,7 @@ async def main():
     await gate._save_player(gp)
 
     # --- 低等级：商店只上架已解锁的饵，未解锁的整条不出现 ---
-    out = await cmd(gate, ev_g, "商店", "", "")
+    out = await cmd(gate, ev_g, "鱼饵", "", "")
     body = text_of(out)
     check("面包屑" in body, "1 级能买到的饵正常上架（面包屑）")
     check(
@@ -1812,7 +1883,7 @@ async def main():
     check("陆续上架" in body, "鱼竿列表也有模糊提示")
 
     # --- 直接点名买：必须明确拒绝（不能静默失败、不能假装不存在）---
-    out = await cmd(gate, ev_g, "商店", "买", "秘制饵", "")
+    out = await cmd(gate, ev_g, "鱼饵", "买", "秘制饵", "")
     body = text_of(out)
     check(
         "🔒" in body and "34 级" in body and "34" in body,
@@ -1828,7 +1899,7 @@ async def main():
 
     # --- 等级够了但缺鱼竿：拒绝理由要说清是缺竿 ---
     await give_level(gate, "89010", 20)
-    out = await cmd(gate, ev_g, "商店", "买", "玉米粒", "")
+    out = await cmd(gate, ev_g, "鱼饵", "买", "玉米粒", "")
     body = text_of(out)
     check(
         "🔒" in body and "溪流竿" in body,
@@ -1840,12 +1911,12 @@ async def main():
     gp = await gate._load_player("89010")
     gp["rods"] = ["bamboo", "stream"]       # 拿到溪流竿
     await gate._save_player(gp)
-    out = await cmd(gate, ev_g, "商店", "", "")
+    out = await cmd(gate, ev_g, "鱼饵", "", "")
     body = text_of(out)
     check("玉米粒" in body, "拿到溪流竿 + 10 级后，玉米粒重新上架")
     check("秘制饵" not in body, "还没解锁的更高级饵依旧不显示")
 
-    out = await cmd(gate, ev_g, "商店", "买", "玉米粒", "2")
+    out = await cmd(gate, ev_g, "鱼饵", "买", "玉米粒", "2")
     gp = await gate._load_player("89010")
     check(gp["baits"].get("corn") == 2, f"解锁后能正常购买 -> {gp['baits'].get('corn')} 个")
 
@@ -1898,6 +1969,106 @@ async def main():
         and not legacy._unlock_shortage(lp, legacy.baits["oldbait"]),
         "旧格式条目在 1 级新号眼里也是可买的",
     )
+
+    # =====================================================================
+    print("\n[6m] 商店拆成三家：鱼竿店 / 道具店 / 鱼饵店（v1.18.13）")
+
+    split = make_plugin()
+    ev_sp = FakeEvent("89060")
+    spp = mod._default_player("89060")
+    spp["gold"] = 5000
+    spp["total_caught"] = mod._level_threshold(10)
+    await split._save_player(spp)
+
+    # --- 老写法「商店」只回一句指路，三家店的名字都点到 ---
+    out = await cmd(split, ev_sp, "商店", "", "")
+    body = text_of(out)
+    check(
+        "拆成三家" in body and "鱼竿" in body and "道具" in body and "鱼饵" in body,
+        f"/钓鱼 商店 已拆成三家（逐条指路）-> {body.splitlines()[0]}",
+    )
+    check(
+        "商店没有" not in body and "不认识" not in body,
+        "老写法不会被当成「不认识的指令」",
+    )
+    # 玩家接着写「商店 买 蚯蚓」时，直接告诉他新写法
+    out = await cmd(split, ev_sp, "商店", "买", "蚯蚓", "")
+    check(
+        "/钓鱼 鱼饵 买 蚯蚓" in text_of(out) or "鱼饵 买" in text_of(out),
+        f"老写法带参数时给出对应的新命令 -> {[l for l in text_of(out).splitlines() if '👉' in l][:1]}",
+    )
+    out = await cmd(split, ev_sp, "商店", "扩容", "")
+    check(
+        "扩建背包" in text_of(out),
+        f"「商店 扩容」→ 指到 /钓鱼 扩建背包 -> {[l for l in text_of(out).splitlines() if '👉' in l][:1]}",
+    )
+
+    # --- 两家店各看各的货架，不混在一起 ---
+    out = await cmd(split, ev_sp, "鱼饵", "", "")
+    bait_body = text_of(out)
+    check(
+        "鱼饵店" in bait_body and "面包屑" in bait_body,
+        f"鱼饵店只列鱼饵 -> {bait_body.splitlines()[0]}",
+    )
+    check(
+        "高级饲料" not in bait_body and "洗髓丹" not in bait_body,
+        "鱼饵店里不出现道具（货架分开了）",
+    )
+    out = await cmd(split, ev_sp, "道具", "", "")
+    item_body = text_of(out)
+    check(
+        "道具店" in item_body and "高级饲料" in item_body,
+        f"道具店只列道具 -> {item_body.splitlines()[0]}",
+    )
+    check(
+        "面包屑" not in item_body and "蚯蚓" not in item_body,
+        "道具店里不出现鱼饵",
+    )
+
+    # --- 买错店：明确说清该去哪家，而不是「没这个货」 ---
+    out = await cmd(split, ev_sp, "道具", "买", "蚯蚓", "")
+    check(
+        "鱼饵" in text_of(out) and "/钓鱼 鱼饵 买" in text_of(out),
+        f"道具店里买鱼饵 -> 指到鱼饵店 -> {text_of(out).splitlines()[0]}",
+    )
+    out = await cmd(split, ev_sp, "鱼饵", "买", "高级饲料", "")
+    check(
+        "道具" in text_of(out) and "/钓鱼 道具 买" in text_of(out),
+        f"鱼饵店里买道具 -> 指到道具店 -> {text_of(out).splitlines()[0]}",
+    )
+    out = await cmd(split, ev_sp, "鱼饵", "买", "碳素竿", "")
+    check(
+        "鱼竿" in text_of(out) and "/钓鱼 鱼竿 买" in text_of(out),
+        f"在鱼饵店里写鱼竿 -> 指到鱼竿店 -> {text_of(out).splitlines()[0]}",
+    )
+    spp = await split._load_player("89060")
+    check(spp["gold"] == 5000, "买错店时不扣钱（只给指路）")
+
+    # --- 三家店都认「买」，智能买也照旧 ---
+    await cmd(split, ev_sp, "鱼饵", "买", "蚯蚓", "2")
+    await cmd(split, ev_sp, "道具", "买", "高级饲料", "1")
+    await cmd(split, ev_sp, "鱼竿", "买", "碳素竿", "")
+    spp = await split._load_player("89060")
+    check(
+        spp["baits"].get("worm") == 2 and spp["items"].get("feed_premium") == 1,
+        f"两家店各买各的 -> 饵 {spp['baits'].get('worm')}／道具 {spp['items'].get('feed_premium')}",
+    )
+    check("carbon" in (spp.get("rods") or []), "鱼竿店照旧能买竿")
+    gold_after = spp["gold"]
+    await cmd(split, ev_sp, "买", "红虫", "2")          # 智能买：自动认鱼饵店
+    await cmd(split, ev_sp, "买", "育灵水", "1")        # 智能买：自动认道具店
+    spp = await split._load_player("89060")
+    check(
+        spp["baits"].get("bloodworm") == 2 and spp["items"].get("growth_tonic") == 1,
+        "「/钓鱼 买 <名字>」照旧自动认店（鱼饵 / 道具 / 鱼竿）",
+    )
+    check(spp["gold"] < gold_after, f"智能买照常扣钱 -> {spp['gold']}")
+
+    # --- 每家店的用法说明各写各的 ---
+    out = await cmd(split, ev_sp, "鱼饵", "随便写", "")
+    check("/钓鱼 鱼饵 买" in text_of(out), "鱼饵店用法说明指向鱼饵店")
+    out = await cmd(split, ev_sp, "道具", "随便写", "")
+    check("/钓鱼 道具 买" in text_of(out), "道具店用法说明指向道具店")
 
     # =====================================================================
     print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
@@ -2044,7 +2215,7 @@ async def main():
     )
     body = text_of(out)
     check(
-        "商店" not in body and "换个更对口的饵" not in body,
+        "鱼饵店" not in body and "道具店" not in body and "换个更对口的饵" not in body,
         f"空竿文案不再带「去哪儿买饵」的教程尾巴 -> {body.splitlines()[-1][:30]}",
     )
 
@@ -3463,10 +3634,205 @@ async def main():
     check("过去了" in text_of(out) or "没什么" in text_of(out), "过期插曲不会卡住玩家")
 
     # =====================================================================
+    print("\n[10m2] 连载剧情：事件互相接得上 + 选项位置随机（v1.18.13）")
+
+    # --- 内容表自检：每一话都成形、旗标写得进、id 不重复 ---
+    check(
+        len(mod.STORY_CHAINS) >= 4,
+        f"连载有 {len(mod.STORY_CHAINS)} 条线（每条 3 话）",
+    )
+    _ep_ids: list[str] = []
+    _bad_ep: list[str] = []
+    for _chain in mod.STORY_CHAINS:
+        for _i, _ep in enumerate(_chain["episodes"]):
+            _ep_ids.append(_ep["id"])
+            if len(_ep.get("choices") or []) != 2:
+                _bad_ep.append(f"{_ep['id']} 选项数")
+            if not str(_ep.get("text") or _ep.get("text_when") or "").strip():
+                _bad_ep.append(f"{_ep['id']} 没开场白")
+            for _c in _ep.get("choices") or []:
+                for _k in ("label", "text", "good", "idle"):
+                    if not str(_c.get(_k) or "").strip():
+                        _bad_ep.append(f"{_ep['id']}/{_c.get('label')} 缺 {_k}")
+    check(not _bad_ep, f"{len(_ep_ids)} 话都成形（问题：{_bad_ep[:3] or '无'}）")
+    check(
+        len(set(_ep_ids)) == len(_ep_ids) and all(e in mod.EVENT_BY_ID for e in _ep_ids),
+        "每一话都登记进了事件表（id = 线名#话数）",
+    )
+    check(
+        all(
+            str(e.get("chain") or "") in mod.CHAIN_BY_ID
+            for e in mod.EVENT_BY_ID.values()
+            if e.get("chain")
+        ),
+        "每一话都能找到它所属的那条线",
+    )
+    # 「所有事件都连起来」：后续插曲必须有 require，否则就成了孤立事件
+    _followups = [e for e in mod.RANDOM_EVENTS if e.get("require")]
+    check(
+        len(_followups) >= 4
+        and all(isinstance(e["require"], dict) and e["require"] for e in _followups),
+        f"{len(_followups)} 条「后续」插曲都挂在前面某次选择的结果上",
+    )
+    check(
+        all(e.get("once") for e in _followups),
+        "后续插曲都只演一次（once），不会一直重复",
+    )
+
+    # --- 选项位置随机：同一条插曲多掷几次，顺序必须变过 ---
+    order_plugin = make_plugin(dict(_CFG, story_shuffle_choices=True))
+    _orders = {
+        tuple(order_plugin._event_order(mod.EVENT_BY_ID["ripple"]))
+        for _ in range(40)
+    }
+    check(
+        _orders == {(0, 1), (1, 0)},
+        f"两个选项的位置每次都打乱 -> 掷 40 次出现过 {sorted(_orders)}",
+    )
+    no_shuffle = make_plugin(dict(_CFG, story_shuffle_choices=False))
+    check(
+        tuple(no_shuffle._event_order(mod.EVENT_BY_ID["ripple"])) == (0, 1),
+        "关掉 story_shuffle_choices 就按内容表里的原顺序",
+    )
+    # 存下来的顺序决定「事件 1」到底选了哪个选项
+    check(
+        order_plugin._event_order_indices(mod.EVENT_BY_ID["ripple"], [1, 0]) == [1, 0]
+        and order_plugin._event_order_indices(mod.EVENT_BY_ID["ripple"], []) == [0, 1]
+        and order_plugin._event_order_indices(mod.EVENT_BY_ID["ripple"], [0, 0]) == [0, 1],
+        "显示顺序坏了就退回自然顺序（不会串选项）",
+    )
+
+    # --- 走一遍完整的连载：第 1 话 → 第 2 话 → 第 3 话 → 收尾 ---
+    chain_cfg = dict(_CFG)
+    chain_cfg["story_chance"] = 1.0
+    chain_cfg["story_chain_chance"] = 1.0     # 只开连载，不演一次性插曲
+    chain_cfg["story_chain_gap"] = 0          # 测试里不等竿数
+    chain_cfg["easter_egg_chance"] = 0.0
+    chain_cfg["item_drop_chance"] = 0.0
+    # 固定成《老钓客》那条线，方便断言
+    chain_cfg["location_hook_factors"] = "novice:1.0"
+    chain_plugin = make_plugin(chain_cfg)
+    ev_c = FakeEvent("89131")
+    chain_id = "old_angler"
+    cp = mod._default_player("89131")
+    cp["story"] = {
+        "arc": "", "ep": 0, "flags": {}, "since": 0,
+        "seen": [], "done": [], "last": "",
+    }
+    await chain_plugin._save_player(cp)
+    # 直接把「下次演哪一段」抽出来看（触发落点随机，但线是固定的）
+    cp["story"]["arc"] = chain_id
+    cp["story"]["ep"] = 0
+    cp["story"]["since"] = 0
+    nxt = chain_plugin._next_story_event(cp)
+    check(
+        nxt is not None and nxt["id"] == f"{chain_id}#1",
+        f"正在连载时接着演下一话 -> {nxt and nxt['id']}",
+    )
+    # 第 1 话选「借他蚯蚓」：应记下旗标 + 前情提要
+    ep1 = mod.EVENT_BY_ID[f"{chain_id}#1"]
+    cp["event"] = {"id": ep1["id"], "ts": int(time.time()), "order": [0, 1]}
+    cp["story"]["arc"] = chain_id
+    cp["story"]["ep"] = 1
+    await chain_plugin._save_player(cp)
+    await cmd(chain_plugin, ev_c, "事件", "1")
+    cp = await chain_plugin._load_player("89131")
+    check(
+        cp["story"]["flags"].get("angler_trust") is True
+        and cp["story"]["flags"].get("met_angler") is True,
+        f"选项里的 set 记进了旗标 -> {cp['story']['flags']}",
+    )
+    check(
+        bool(cp["story"]["last"]),
+        f"记下了「上次：…」给下一话当前情提要 -> {cp['story']['last'][:24]}",
+    )
+    # 第 2 话的开场白会因为你借过蚯蚓而变（text_when）
+    ep2 = mod.EVENT_BY_ID[f"{chain_id}#2"]
+    _recap = chain_plugin._event_recap(ep2, {"story": dict(cp["story"])})
+    check(
+        "第 2/" in _recap and "上次" in _recap,
+        f"第 2 话会带前情提要 -> {_recap[:40]}",
+    )
+    check(
+        "信我" in str(ep2.get("text_when", {}).get("angler_trust") or ""),
+        "第 2 话的开场白按旗标换成了「他信你」的那一版",
+    )
+    # 演完最后一话 → 这条线收尾，不会再从头演
+    last_ep = mod.EVENT_BY_ID[f"{chain_id}#3"]
+    cp["event"] = {"id": last_ep["id"], "ts": int(time.time()), "order": [0, 1]}
+    cp["story"]["arc"] = chain_id
+    cp["story"]["ep"] = 3
+    await chain_plugin._save_player(cp)
+    await cmd(chain_plugin, ev_c, "事件", "1")
+    cp = await chain_plugin._load_player("89131")
+    check(
+        chain_id in cp["story"]["done"] and not cp["story"]["arc"],
+        f"演完最后一话这条线收尾 -> done={cp['story']['done']}",
+    )
+
+    # --- 后续插曲：没做过前因就撞不见，做过才会出现 ---
+    gate_plugin = make_plugin(dict(_CFG, story_chain_chance=0.0))
+    follower = mod.EVENT_BY_ID["cat_returns"]
+    check(
+        not gate_plugin._event_available(follower, {"flags": {}, "seen": [], "done": []}),
+        "没喂过猫就撞不见「猫叼着东西回来」",
+    )
+    check(
+        gate_plugin._event_available(
+            follower, {"flags": {"fed_cat": True}, "seen": [], "done": []}
+        ),
+        "喂过猫之后它才会回来（事件之间真的连上了）",
+    )
+    check(
+        not gate_plugin._event_available(
+            follower,
+            {"flags": {"fed_cat": True}, "seen": ["cat_returns"], "done": []},
+        ),
+        "演过一次的后续插曲不再重复（once）",
+    )
+    # 老存档没有 story 字段也不炸，且会自动补齐
+    legacy_story, _ = mod._repair_player({"gold": 1, "total_caught": 3}, "89132")
+    check(
+        isinstance(legacy_story.get("story"), dict)
+        and legacy_story["story"]["flags"] == {}
+        and legacy_story["story"]["since"] == 0,
+        "老存档补齐 story 字段（缺字段不会让连载崩掉）",
+    )
+    # 事件里的 order 也要能存能读
+    roundtrip, _ = mod._repair_player(
+        {"gold": 1, "event": {"id": "ripple", "ts": 5, "order": [1, 0]}}, "89133"
+    )
+    check(
+        roundtrip["event"] == {"id": "ripple", "ts": 5, "order": [1, 0]},
+        f"选项顺序跟着存档一起往返 -> {roundtrip['event']}",
+    )
+    broken_order, _ = mod._repair_player(
+        {"gold": 1, "event": {"id": "ripple", "ts": 5, "order": "坏了"}}, "89134"
+    )
+    check(
+        broken_order["event"]["order"] == [],
+        "坏掉的顺序读档时清空（运行时退回自然顺序）",
+    )
+    # 内容表里删掉的事件不会把玩家卡住
+    gone, _ = mod._repair_player(
+        {"gold": 1, "event": {"id": "这个事件不存在", "ts": 5}}, "89135"
+    )
+    check(gone.get("event") is None, "内容表里没有的事件读档时直接丢掉")
+    # 连载状态指向一条已删除的线时也要自愈
+    stray, _ = mod._repair_player(
+        {"gold": 1, "story": {"arc": "不存在的线", "ep": 2}}, "89136"
+    )
+    check(
+        stray["story"]["arc"] == "" and stray["story"]["ep"] == 0,
+        "连载线被删掉后进度自愈（不会卡在演不下去的线上）",
+    )
+
+    # =====================================================================
     print("\n[10n] 存档字段守卫：新增状态必须能存能读")
     plugin = make_plugin()
     fresh = mod._default_player("89500")
-    fresh["event"] = {"id": "ripple", "ts": int(time.time())}
+    # 插曲状态现在多带一个 order（选项显示顺序，v1.18.13）：必须一起活下来
+    fresh["event"] = {"id": "ripple", "ts": int(time.time()), "order": [1, 0]}
     fresh["order_next_ts"] = int(time.time()) + 600
     fresh["orders"] = [
         {"fish_id": mod.FISH_POOL[0]["id"], "need": 2, "have": 0,
@@ -5238,7 +5604,10 @@ async def main():
     for args, kw in [
         (("帮助", "1", ""), "帮助 1/"),
         (("背包", "", ""), "背包"),
-        (("商店", "", ""), "商店"),
+        # v1.18.13：商店拆成三家，老写法只回一句指路
+        (("商店", "", ""), "商店拆成三家"),
+        (("鱼饵", "", ""), "鱼饵店"),
+        (("道具", "", ""), "道具店"),
         (("图鉴", "", ""), "图鉴"),
         (("图鉴", "详", ""), "图鉴"),
         (("档案", "", ""), "档案"),
@@ -5296,7 +5665,8 @@ async def main():
     await plugin._save_player(p)
     for args in (
         ("背包", "", ""), ("图鉴", "", ""), ("档案", "", ""), ("水族馆", "", ""),
-        ("商店", "", ""), ("钓点", "", ""), ("鱼竿", "", ""), ("杂物", "", ""),
+        ("商店", "", ""), ("鱼饵", "", ""), ("道具", "", ""),
+        ("钓点", "", ""), ("鱼竿", "", ""), ("杂物", "", ""),
         ("订单", "", ""), ("体力", "", ""),
     ):
         out = await cmd(plugin, ev, *args)
@@ -5310,7 +5680,7 @@ async def main():
 
     # ---- 14.1 内置写法总表：自检 + 与真实分派链的一致性 ----
     kw = mod.SUBCOMMAND_KEYWORDS
-    check(len(kw) == 26, f"子命令总表 {len(kw)} 行")
+    check(len(kw) == 29, f"子命令总表 {len(kw)} 行（v1.18.13 商店拆成鱼竿/道具/鱼饵，外加「买」）")
     check(all(name in words for name, words in kw.items()), "每一行都含自己的规范名")
     _seen: dict[str, int] = {}
     for _words in kw.values():
@@ -5372,9 +5742,9 @@ async def main():
         f"全角竖线/逗号/顿号都认 -> {sorted(_m)}",
     )
     _m, _p = mod.CALC._build_command_aliases(
-        "# 注释行\n\n背包|仓库\n   \n商店|铺子", kw
+        "# 注释行\n\n背包|仓库\n   \n商店|杂货铺", kw
     )
-    check(_m == {"仓库": "背包", "铺子": "商店"} and not _p, f"注释与空行被忽略 -> {_m}")
+    check(_m == {"仓库": "背包", "杂货铺": "商店"} and not _p, f"注释与空行被忽略 -> {_m}")
     _m, _p = mod.CALC._build_command_aliases("背包|包,bag", kw)
     check(_m == {} and not _p, "写内置写法 = 静默忽略（本来就有效，不报警）")
     _m, _p = mod.CALC._build_command_aliases("商店|背包", kw)
@@ -5384,6 +5754,13 @@ async def main():
     )
     _m, _p = mod.CALC._build_command_aliases("背包|道具", kw)
     check(_m == {} and _p and "道具" in _p[0], f"别名抢占别的内置写法 -> 跳过：{_p[:1]}")
+    # v1.18.13：老配置里的 `商店|鱼饵,道具,shop,买` 现在必须整行被挡掉，
+    # 否则 `买` 会被改成「商店」的别名，玩家 /钓鱼 买 蚯蚓 就买不到东西了
+    _m, _p = mod.CALC._build_command_aliases("商店|鱼饵,道具,shop,买", kw)
+    check(
+        "买" not in _m and not any(v == "商店" for v in _m.values()),
+        f"老配置里的商店别名单个别想抢走内置写法 -> {_m or '一个都没进'}",
+    )
     _m, _p = mod.CALC._build_command_aliases("钱包|钱袋", kw)
     check(_m == {} and _p and "不存在" in _p[0], f"目标子命令不存在 -> 跳过：{_p[:1]}")
     _m, _p = mod.CALC._build_command_aliases("背包|仓库\n商店|仓库", kw)
@@ -5594,7 +5971,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 110,
+        len(_schema) == 113,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -5603,7 +5980,9 @@ async def main():
         f" + v1.18.0 的 button_empty_scenes"
         f" + v1.18.7 的 reroll_daily_limit/quality_myth_chance"
         f" + v1.18.8 的 user_edited_keys"
-        f" + v1.18.10 的 multi_escape_mult；aquarium_bonus* 两项已在 v1.18.0 删掉）",
+        f" + v1.18.10 的 multi_escape_mult"
+        f" + v1.18.13 的 story_chain_chance/story_chain_gap/story_shuffle_choices；"
+        f"aquarium_bonus* 两项已在 v1.18.0 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -5611,7 +5990,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 107, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 110, f"其余 {len(_hidden)} 项全部 invisible")
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
@@ -6894,8 +7273,12 @@ async def main():
     check(
         sorted(mod.SCENE_PARENT)
         == sorted(["cast.hit", "cast.junk", "help.page", "location.list", "bag.list",
-                   "pull.hook", "story.prompt"]),
-        f"只有从老场景拆出来的 7 个场景有父场景 -> {sorted(mod.SCENE_PARENT)}",
+                   "pull.hook", "story.prompt",
+                   # v1.18.13：商店拆成三家，两家货架 / 两条用法说明 / 拆店提示
+                   # 都继承「共用按钮组」，所以老配置里给 shop.list 配的按钮照样生效
+                   "shop.bait_list", "shop.item_list",
+                   "shop.bait_usage", "shop.item_usage", "shop.moved"]),
+        f"有父场景的都是「从共用按钮组拆出来的」-> {sorted(mod.SCENE_PARENT)}",
     )
     _per_row_bad = [s for s in _scene_ids if not 1 <= mod.CALC.scene_rows_per_row(s) <= 5]
     check(not _per_row_bad, f"每行个数都在 1~5（坏的：{_per_row_bad}）")

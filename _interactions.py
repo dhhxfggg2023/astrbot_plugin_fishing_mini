@@ -264,23 +264,137 @@ class InteractionsMixin:
 
 
 
+    # -------------------------------------------------------------------------
+    # 小插曲 / 连载剧情（v1.18.13）
+    # -------------------------------------------------------------------------
+
+    def _story_state(self, player: dict[str, Any]) -> dict[str, Any]:
+        """拿到（并补全）玩家身上的剧情进度。
+
+        老存档、被扩展写坏过的存档都从这里过一遍，缺什么补什么 ——
+        这样后面读 `story["flags"]` 之类的地方不用到处判空。
+        """
+        story = player.get("story")
+        if not isinstance(story, dict):
+            story = {}
+            player["story"] = story
+        story.setdefault("arc", "")
+        story.setdefault("ep", 0)
+        if not isinstance(story.get("flags"), dict):
+            story["flags"] = {}
+        story.setdefault("since", 0)
+        if not isinstance(story.get("seen"), list):
+            story["seen"] = []
+        if not isinstance(story.get("done"), list):
+            story["done"] = []
+        story.setdefault("last", "")
+        return story
+
+    @staticmethod
+    def _event_available(event_def: dict[str, Any], story: dict[str, Any]) -> bool:
+        """这条插曲/这一话现在能不能出现。
+
+        * ``require``：旗标必须都对得上（前面选过什么，这里才演得下去）
+        * ``once``  ：演过一次就不再出现
+        * 连载演完的线不再从头演（``done``）
+        """
+        flags = story.get("flags") or {}
+        for key, want in (event_def.get("require") or {}).items():
+            if flags.get(str(key)) != want:
+                return False
+        event_id = str(event_def.get("id") or "")
+        if event_def.get("once") and event_id in (story.get("seen") or []):
+            return False
+        chain_id = str(event_def.get("chain") or "")
+        if chain_id and chain_id in (story.get("done") or []):
+            return False
+        return True
+
+    @staticmethod
+    def _weighted_pick(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """按 ``weight`` 权重抽一个（权重非正的条目视为 1）。"""
+        if not items:
+            return None
+        weights = [max(0.0001, _safe_number(e.get("weight"), 1.0)) for e in items]
+        total = sum(weights)
+        point = random.uniform(0, total)
+        acc = 0.0
+        for event_def, weight in zip(items, weights):
+            acc += weight
+            if point < acc:
+                return event_def
+        return items[-1]
+
+    def _next_story_event(self, player: dict[str, Any]) -> dict[str, Any] | None:
+        """这次该演哪一段：优先接着连载，否则开新线或挑一次性插曲。"""
+        story = self._story_state(player)
+        gap = max(0, _safe_int(self.cfg.get("story_chain_gap"), 6, 0))
+
+        # ---- 1) 正在连载：攒够竿数就演下一话（这就是「连续剧」的接续点）----
+        chain_id = str(story.get("arc") or "")
+        chain = CHAIN_BY_ID.get(chain_id)
+        if chain:
+            episodes = list(chain.get("episodes") or [])
+            ep = max(0, _safe_int(story.get("ep"), 0, 0))
+            if ep >= len(episodes):
+                # 上一话就是最后一话：这条线收尾，接着去找新的
+                if chain_id not in story["done"]:
+                    story["done"].append(chain_id)
+                story["arc"] = ""
+                story["ep"] = 0
+            elif _safe_int(story.get("since"), 0, 0) >= gap:
+                return episodes[ep]
+
+        # ---- 2) 开一条新连载，还是来一段一次性小插曲 ----
+        chain_chance = _clamp(
+            _safe_number(self.cfg.get("story_chain_chance"), 0.5), 0.0, 1.0
+        )
+        startable = [
+            c
+            for c in STORY_CHAINS
+            if isinstance(c, dict)
+            and c.get("episodes")
+            and str(c.get("id")) not in story["done"]
+            and str(c.get("id")) != str(story.get("arc") or "")
+        ]
+        if startable and random.random() < chain_chance:
+            picked = self._weighted_pick(startable)
+            if picked is not None:
+                episode = (picked.get("episodes") or [None])[0]
+                if isinstance(episode, dict):
+                    return episode
+
+        pool = [
+            e for e in RANDOM_EVENTS
+            if isinstance(e, dict) and self._event_available(e, story)
+        ]
+        return self._weighted_pick(pool)
+
+    def _event_order(self, event_def: dict[str, Any]) -> list[int]:
+        """选项的**显示顺序**（每次随机，免得某个选择永远待在 1 号位）。
+
+        返回的是「显示第 i 个 → 原始第几个选项」的映射，会跟着事件一起存进存档，
+        所以提示、按钮、`/钓鱼 事件 N` 三处看到的是同一个顺序。
+        """
+        count = len(event_def.get("choices") or [])
+        order = list(range(count))
+        if count > 1 and bool(self.cfg.get("story_shuffle_choices", True)):
+            random.shuffle(order)
+        return order
+
     def _maybe_start_event(self, player: dict[str, Any]) -> dict[str, Any] | None:
-        """偶尔触发一次小插曲（触发条件不对外说明）。"""
+        """偶尔触发一次小插曲 / 连载的下一话（触发条件不对外说明）。"""
         if player.get("event"):
             return None
+        story = self._story_state(player)
+        # 每抛一竿算一竿：连载两话之间要有间隔，不然像连播
+        story["since"] = max(0, _safe_int(story.get("since"), 0, 0)) + 1
         chance = _clamp(
             _safe_number(self.cfg.get("story_chance"), 0.06), 0.0, 1.0
         )
         if chance <= 0 or random.random() >= chance:
             return None
-        total = sum(e["weight"] for e in RANDOM_EVENTS)
-        point = random.uniform(0, total)
-        acc = 0.0
-        for event_def in RANDOM_EVENTS:
-            acc += event_def["weight"]
-            if point < acc:
-                return event_def
-        return RANDOM_EVENTS[-1]
+        return self._next_story_event(player)
 
     def _interaction_window(
         self, fish: dict[str, Any], weather: dict[str, Any] | None = None
@@ -493,15 +607,34 @@ class InteractionsMixin:
         """抛竿收尾：偶尔来一段小插曲（触发条件不对外说明）。
 
         钓鱼与「钓上杂物」两条路径都要走这里，所以单独抽出来，避免复制粘贴。
+
+        v1.18.13：这里同时负责**连载**的推进 ——
+        选中的如果是某条线的第 N 话，就把「正在连载这条线、已经演到第 N 话」
+        记进存档，下一次（隔几竿）自然接上第 N+1 话。
         """
         player = await self._load_player(user_id)
         story = self._maybe_start_event(player)
         if story is None:
+            await self._save_player(player)      # since 计数也要落盘
             return
-        player["event"] = {"id": story["id"], "ts": int(time.time())}
+        order = self._event_order(story)
+        player["event"] = {"id": story["id"], "ts": int(time.time()), "order": order}
+        chain_id = str(story.get("chain") or "")
+        if chain_id:
+            state = self._story_state(player)
+            state["arc"] = chain_id
+            state["ep"] = max(0, _safe_int(story.get("episode"), 1, 1))
+            state["since"] = 0
         self._recent_events[self._session_key(event)] = (user_id, time.time())
         await self._save_player(player)
-        text, _rows = self._event_prompt(story)
+        # 连载：先说一句「上次演到哪」，再抛这一话（单独一条消息，站长可单独配文案）
+        recap = self._event_recap(story, player)
+        if recap:
+            async for reply in self._say(event, recap, "story.recap"):
+                yield reply
+        text, _rows = self._event_prompt(
+            story, order, text=self._event_text(story, player)
+        )
         async for reply in self._say(event, text, "story.prompt"):
             yield reply
 
