@@ -4389,6 +4389,25 @@ async def main():
                 not again["imported"] and len(again["skipped"]) == 3,
                 f"重复导入不会写第二遍 -> imported={again['imported']} skipped={len(again['skipped'])}",
             )
+
+            # 面板要关得掉：legacy_clear 只清缓存，数据一行不动
+            res = await plugin_d.editor_api_config_save(
+                {"action": "legacy_clear", "payload": {}}
+            )
+            data = api_dict(res)
+            st_closed = json.loads(plugin_d.config["editor_status"])
+            check(
+                data.get("ok") is True and "收起" in str(data.get("message")),
+                f"legacy_clear 可收起面板 -> {data.get('message')}",
+            )
+            check(
+                st_closed.get("legacy") is None,
+                "收起后状态里的 legacy 变回 null（刷新页面不会又冒出来）",
+            )
+            check(
+                (await plugin_d.get_kv_data("player_L70001", None)) is not None,
+                "收起面板不动任何玩家数据（老数据与已导入的都在）",
+            )
         finally:
             legacy_mod.astrbot_db_path = real_db_path
 

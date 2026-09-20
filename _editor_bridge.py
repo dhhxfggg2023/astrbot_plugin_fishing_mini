@@ -1046,6 +1046,8 @@ class EditorBridgeMixin(EditorApiMixin):
             # 旧作用域找回（作者名改过之后老存档会落在别的 scope 里）
             "legacy_scan": self._editor_legacy_scan,
             "legacy_import": self._editor_legacy_import,
+            # 只是收起页面那块面板（+ 让插件忘掉缓存的扫描结果），不碰任何数据
+            "legacy_clear": self._editor_legacy_clear,
         }
         handler = handlers.get(str(action or "").strip())
         if handler is None:
@@ -1372,6 +1374,11 @@ class EditorBridgeMixin(EditorApiMixin):
             f"{detail}；导入前已存档：{res.get('snapshot') or '（无）'}"
             f"{res.get('index_note') or ''}"
         )
+
+    async def _editor_legacy_clear(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """收起「找回旧数据」面板：只清掉插件缓存的那份扫描结果，**数据一行都不动**。"""
+        self._editor_legacy_cache = None
+        return True, "已收起面板（老数据一行都没动）"
 
     # =====================================================================
     # 状态回写（插件 -> 页面：editor_status 配置项）

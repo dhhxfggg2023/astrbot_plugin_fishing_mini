@@ -126,7 +126,7 @@ const hookNames = [
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
-  "renderPlayerRow", "runLegacyAction",
+  "renderPlayerRow", "runLegacyAction", "closeLegacyPanel", "applyStatus",
   // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色；v1.15.1 加旧写法映射）
   "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES", "ITEM_EFFECT_HINT", "ITEM_EFFECT_ALIASES",
   "applyEffectKeys",
@@ -1847,6 +1847,36 @@ async function legacyRecovery() {
   check(html.indexOf("读库没成功") > 0 && html.indexOf("data_v4.db") > 0,
     "读库失败时面板写出原因（不静默失败）");
   check(html.indexOf("这一步是<b>只读</b>的") > 0, "并说明这一步是只读的、失败不影响游戏");
+
+  // 7) 关得掉：三种状态（有结果 / 读不到 / 只有提示）都带「✖ 关闭」
+  check(html.indexOf('data-act="p:legacyClose"') > 0, "读不到库的面板也有关闭按钮");
+  F.state.legacy = FAKE_LEGACY(false);
+  F.state.legacyMsg = "扫描到旧数据 —— …";
+  html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf('data-act="p:legacyClose"') >= 0
+    && html.split('data-act="p:legacyClose"').length - 1 >= 2,
+    "有结果 + 有提示时每条都给了关闭入口（不会「关不掉」）");
+
+  captured.calls = [];
+  const closed = await F.closeLegacyPanel();
+  const closePost = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const closeEnv = JSON.parse(closePost.body);
+  check(closePost.endpoint === "config" && closeEnv.action === "legacy_clear",
+    "关闭走 config 通道的 legacy_clear（只让插件忘掉缓存，不动数据）",
+    closePost.endpoint + " " + closeEnv.action);
+  check(closed.ok === true && F.state.legacy === null && F.state.legacyMsg === ""
+    && F.state.legacyConfirm === false,
+    "关闭后页面状态清干净", String(F.state.legacy) + "/" + F.state.legacyMsg);
+  html = F.renderPlayersTab(F.TAB_BY_ID.players);
+  check(html.indexOf('data-act="p:legacyClose"') < 0
+    && html.indexOf('data-act="p:legacyImport"') < 0
+    && html.indexOf("旧作用域里发现的玩家") < 0,
+    "面板整块消失（含玩家表）");
+  check(html.indexOf('data-act="p:legacyScan"') > 0, "「🔍 找回旧数据」按钮还在（想再看一眼随时点）");
+
+  // 8) 插件回写的状态里 legacy 为 null 时，不许把面板又变出来
+  F.applyStatus({ updated_at: 9, ok: true, legacy: null });
+  check(F.state.legacy === null, "状态里 legacy=null 不会让面板复活");
 
   if (F.state._reloadTimer) { clearTimeout(F.state._reloadTimer); }
   return Promise.resolve();

@@ -3561,6 +3561,23 @@ td.actions .btn + .btn { margin-left: 4px; }
     return { ok: !!res.accepted, message: res.message, detail: res.detail };
   }
 
+  /**
+   * 收起「找回旧数据」面板：清掉页面上的结果/提示，并让插件忘掉缓存的扫描结果
+   * （否则刷新一次页面它又冒出来）。**一个字节的玩家数据都不动。**
+   */
+  async function closeLegacyPanel() {
+    state.legacy = null;
+    state.legacyMsg = "";
+    state.legacyConfirm = false;
+    state.legacyBusy = false;
+    render();
+    var res = await sendCommand("legacy_clear", {});
+    return {
+      ok: !!(res && res.accepted),
+      message: (res && res.message) || ""
+    };
+  }
+
   function playerRowsNow() {
     return state.playersMode === "snapshot" ? (state.snapshotPlayers || []) : (state.playersList || []);
   }
@@ -3635,12 +3652,16 @@ td.actions .btn + .btn { margin-left: 4px; }
     html += '<button class="btn btn-sm" data-act="p:reload">↻ 刷新</button>';
     html += "</div>";
 
-    if (state.legacy && (state.legacy.scopes || []).length) {
+    // 「找回旧数据」的结果：整块都能关掉（✖ 关闭 = 收起面板 + 让插件忘掉这份缓存）
+    var legacyCloseBtn = '<button class="btn btn-sm btn-ghost" data-act="p:legacyClose"' +
+      ' title="收起这块面板（老数据一行都不动）">✖ 关闭</button>';
+    if (state.legacy) {
       var missAll = num(state.legacy.players_missing, 0);
-      html += '<div class="notice"><span class="notice-icon">🗂️</span><div>' +
-        "发现 <b>" + state.legacy.scopes.length + "</b> 个旧作用域里有这个插件的老数据" +
-        "（作者名改过时插件 id 会变，老存档就留在了旧作用域里）：" +
-        state.legacy.scopes.map(function (s) {
+      if ((state.legacy.scopes || []).length) {
+        html += '<div class="notice"><span class="notice-icon">🗂️</span><div>' +
+          "发现 <b>" + state.legacy.scopes.length + "</b> 个旧作用域里有这个插件的老数据" +
+          "（作者名改过时插件 id 会变，老存档就留在了旧作用域里）：" +
+          state.legacy.scopes.map(function (s) {
           var miss = num(s.missing, 0);
           var others = (s.other_keys || []).filter(function (k) { return k !== "player_index"; });
           return '<br />· <span class="mono">' + esc(s.scope_id) + "</span>　" +
@@ -3668,16 +3689,23 @@ td.actions .btn + .btn { margin-left: 4px; }
           : '<button class="btn btn-sm btn-primary" data-act="p:legacyImport">' +
             "⬇️ 把缺的玩家并进来" + (missAll ? "（" + missAll + " 名）" : "") + "</button>" +
             '<span class="hint faint">　只补当前作用域没有的玩家；导入前自动存一份档，旧作用域的数据一行都不动</span>') +
+        '<span class="spacer" style="margin-left:10px"></span>' + legacyCloseBtn +
         "</div></div></div>";
+      } else if (state.legacy.error) {
+        html += '<div class="notice"><span class="notice-icon">⛔</span><div>' +
+          "读库没成功：" + esc(text(state.legacy.error)) +
+          '<div class="hint faint">这一步是<b>只读</b>的，失败不影响游戏；' +
+          "多半是路径或权限问题（也可能是数据库正被占用，稍后再试）。</div>" +
+          '<div style="margin-top:6px">' + legacyCloseBtn + "</div></div></div>";
+      } else {
+        html += '<div class="notice"><span class="notice-icon">🗂️</span><div>' +
+          "没找到别的作用域里的老数据（当前只有这一个作用域在用）。" +
+          '<div style="margin-top:6px">' + legacyCloseBtn + "</div></div></div>";
+      }
     }
     if (state.legacyMsg) {
-      html += '<div class="notice"><span class="notice-icon">📋</span><div>' + esc(state.legacyMsg) + "</div></div>";
-    }
-    if (state.legacy && state.legacy.error) {
-      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' +
-        "读库没成功：" + esc(text(state.legacy.error)) +
-        '<div class="hint faint">这一步是<b>只读</b>的，失败不影响游戏；' +
-        "多半是路径或权限问题（也可能是数据库正被占用，稍后再试）。</div></div></div>";
+      html += '<div class="notice"><span class="notice-icon">📋</span><div>' + esc(state.legacyMsg) +
+        '<div style="margin-top:6px">' + legacyCloseBtn + "</div></div></div>";
     }
     if (state.legacy && (state.legacy.players || []).length) {
       html += '<div class="table-wrap" style="max-height:260px"><table class="grid wrap-cells" style="min-width:640px">' +
@@ -5827,6 +5855,13 @@ td.actions .btn + .btn { margin-left: 4px; }
         runLegacyAction("legacy_import").then(function (r) {
           if (r && r.ok) toast("ok", "导入完成", r.message || "");
           else toast("err", "导入没成功", (r && r.message) || "");
+        });
+        break;
+      case "p:legacyClose":
+        // 收起整块「找回旧数据」（含结果、提示、导入确认）；数据一行都不动
+        closeLegacyPanel().then(function (r) {
+          if (r && r.ok) toast("ok", "已收起面板", r.message || "老数据一行都没动");
+          else toast("warn", "面板已收起", ((r && r.message) || "") + "（刷新后可能还会出现）");
         });
         break;
       case "p:gold": {
