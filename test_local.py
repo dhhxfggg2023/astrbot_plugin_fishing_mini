@@ -6693,6 +6693,173 @@ async def main():
     )
 
     # =====================================================================
+    print("\n[10u] fish_defs 旧快照：新鱼要能补进老配置（v1.18.12）")
+    # 站长报的：「新的钓点怎么没把生物那些加上，游戏里面不显示」。
+    # fish_defs 与 location_defs 不一样：它是一整段多行**文本**，而且**非空就整体
+    # 接管鱼池** —— 通用内容合并只认 list，于是这份旧快照把新鱼全挡在外面，
+    # 三个新钓点成了空池（进得去、钓不到、图鉴也是空的）。
+
+    # --- 站长那种配置：老快照（少了 39 种新鱼）+ 大肥鱼没写新钓点 ---
+    _old_rows: list[str] = []
+    for _line in str(mod.DEFAULTS["fish_defs"]).splitlines():
+        if not _line.strip() or "|" not in _line:
+            continue
+        _fid = _line.split("|", 1)[0].strip()
+        if _fid.startswith(("starfall_", "voidsea_", "palace_")):
+            continue                       # 39 种新鱼：老快照里根本没有
+        if _fid == "big_fat_fish":
+            # 大肥鱼那行也退回旧版（官方 v1.18.8 才给它补上 3 个新钓点）
+            _parts = _line.split("|")
+            _parts[4] = ",".join(
+                tok for tok in _parts[4].split(",")
+                if tok.split(":")[0] not in ("starfall", "void_sea", "dragon_palace")
+            )
+            _line = "|".join(_parts)
+        _old_rows.append(_line)
+    check(
+        len(_old_rows) == 232,
+        f"先造出一份旧快照（232 种，正好是站长配置里的数量）-> {len(_old_rows)}",
+    )
+    # --- 先复现症状：关掉自动合并 = 站长那边的现状 ---
+    stale_cfg = dict(_CFG)
+    stale_cfg["fish_defs"] = "\n".join(_old_rows)
+    stale_cfg["content_auto_merge"] = False
+    stale_plugin = make_plugin(stale_cfg)
+    check(
+        len(mod.FISH_POOL) == 232,
+        f"旧快照整体接管鱼池（这就是他那边的情况）-> {len(mod.FISH_POOL)} 种",
+    )
+    check(
+        [loc["id"] for loc in stale_plugin.locations if not mod._location_pool(loc["id"])]
+        == ["starfall", "void_sea", "dragon_palace"],
+        "三个新钓点成了空池（进得去、一条鱼都没有）",
+    )
+    # 体检要能喊出来（不然只能对着「钓点里空空的」查半天）
+    _warned: list[str] = []
+    _orig_warning = mod.logger.warning
+    mod.logger.warning = lambda msg, *a, **k: _warned.append(str(msg))
+    try:
+        stale_plugin._warn_stale_config()
+    finally:
+        mod.logger.warning = _orig_warning
+    check(
+        any("旧版鱼池" in w and "39" in w for w in _warned),
+        f"这种情况会在日志里点名「少 39 种鱼」并列出空池的钓点 -> "
+        f"{[w[:70] for w in _warned if '鱼池' in w][:1]}",
+    )
+    check(
+        len(str(stale_plugin.cfg["fish_defs"]).splitlines()) == 232,
+        "关掉自动合并时保持站长原样（不偷偷改配置）",
+    )
+
+    # --- 修好之后：打开自动合并（默认）→ 自动补上缺的鱼 ---
+    fixed_cfg = dict(_CFG)
+    fixed_cfg["fish_defs"] = "\n".join(_old_rows)
+    fixed_plugin = make_plugin(fixed_cfg)
+    merged_rows = str(fixed_plugin.cfg["fish_defs"]).splitlines()
+    check(
+        len([x for x in merged_rows if "|" in x]) == 271,
+        f"升级时自动补上缺的 39 种鱼 -> {len([x for x in merged_rows if '|' in x])} 种",
+    )
+    check(
+        len(mod.FISH_POOL) == 271
+        and all(mod._location_pool(lid) for lid in ("starfall", "void_sea", "dragon_palace")),
+        "补完之后三个新钓点的鱼池都满了",
+    )
+    check(
+        len(mod._location_pool("starfall")) == 13
+        and len(mod._location_pool("void_sea")) == 14
+        and len(mod._location_pool("dragon_palace")) == 15,
+        f"鱼数与内置一致 -> 星陨湖 {len(mod._location_pool('starfall'))}"
+        f"／万水归墟 {len(mod._location_pool('void_sea'))}"
+        f"／龙宫 {len(mod._location_pool('dragon_palace'))}",
+    )
+    check(
+        any(f["id"] == "big_fat_fish" for f, _w in mod._location_pool("dragon_palace")),
+        "大肥鱼那行也被 CONTENT_ROW_FIXES 换成了带新钓点的版本",
+    )
+
+    # --- 只追加、不动站长自己的东西 ---
+    custom_cfg = dict(_CFG)
+    custom_cfg["fish_defs"] = (
+        "my_own_fish|我加的鱼|常见|999|novice:1.0|站长自己加的鱼\n"
+        + "\n".join(_old_rows)
+    )
+    custom_plugin = make_plugin(custom_cfg)
+    _custom_rows = str(custom_plugin.cfg["fish_defs"]).splitlines()
+    check(
+        _custom_rows[0].startswith("my_own_fish|"),
+        f"站长自己加的那一行还在最前面（顺序没被打乱）-> {_custom_rows[0][:22]}",
+    )
+    check(
+        len([x for x in _custom_rows if "|" in x]) == 272
+        and any(f["id"] == "my_own_fish" for f in mod.FISH_POOL),
+        f"自己加的鱼留在鱼池里，同时补上缺的 39 种 -> {len(mod.FISH_POOL)} 种",
+    )
+
+    # --- 幂等：再跑一次不会重复追加 ---
+    _before = str(custom_plugin.cfg["fish_defs"])
+    custom_plugin._merge_fish_defs()
+    check(
+        str(custom_plugin.cfg["fish_defs"]) == _before,
+        "再跑一次合并不会有任何改动（不会越补越长）",
+    )
+
+    # --- 手工配的小鱼池：一个字都不改 ---
+    # 判据是「配置里至少一半的行是官方鱼的 id」；只留几种鱼的自定义鱼池不符合，
+    # 官方新增内容不该把它淹没（[11b] 也钉着这条）。
+    handmade_cfg = dict(_CFG)
+    handmade_cfg["fish_defs"] = (
+        "good_fish|好鱼|常见|50|新手村:1.0|站长从头配的一套\n"
+        "bad_fish|缺分布|常见|50||没有分布的行要被跳过\n"
+    )
+    handmade_plugin = make_plugin(handmade_cfg)
+    check(
+        len(mod.FISH_POOL) == 1
+        and "good_fish" in mod.FISH_BY_ID
+        and len(str(handmade_plugin.cfg["fish_defs"]).splitlines()) == 2,
+        f"站长手工配的小鱼池不会被官方内容淹没 -> {len(mod.FISH_POOL)} 条",
+    )
+    _handmade_warned: list[str] = []
+    _orig_warning2 = mod.logger.warning
+    mod.logger.warning = lambda msg, *a, **k: _handmade_warned.append(str(msg))
+    try:
+        handmade_plugin._warn_stale_config()
+    finally:
+        mod.logger.warning = _orig_warning2
+    check(
+        not any("旧版鱼池" in w for w in _handmade_warned),
+        "手工鱼池也不会被体检误报成「旧版残留」",
+    )
+
+    # --- list 形态也认（编辑器里有人的配置存成了列表）---
+    list_cfg = dict(_CFG)
+    list_cfg["fish_defs"] = list(_old_rows)
+    list_plugin = make_plugin(list_cfg)
+    check(
+        isinstance(list_plugin.cfg["fish_defs"], list)
+        and len(list_plugin.cfg["fish_defs"]) == 271,
+        f"配置存成 list 时照样补齐并保持 list 形态 -> "
+        f"{type(list_plugin.cfg['fish_defs']).__name__} {len(list_plugin.cfg['fish_defs'])}",
+    )
+
+    # --- 空配置照旧走内置鱼池（不能被「补鱼」逻辑碰到）---
+    empty_defs_cfg = dict(_CFG)
+    empty_defs_cfg["fish_defs"] = ""
+    empty_plugin = make_plugin(empty_defs_cfg)
+    check(
+        len(mod.FISH_POOL) == 271 and not str(empty_plugin.cfg["fish_defs"]).strip(),
+        "fish_defs 留空 = 用内置鱼池（不会往配置里塞一大段文本）",
+    )
+
+    # 复位成默认配置，后面 [18] 的用例依赖默认鱼池
+    make_plugin()
+    check(
+        len(mod.FISH_POOL) == 271,
+        f"复位回默认鱼池 -> {len(mod.FISH_POOL)} 种",
+    )
+
+    # =====================================================================
     print("\n[18] 回复场景全覆盖：每条回复都能配按钮/文案 + 护栏断言（v1.12.0）")
 
     # --- (1) 场景表 ↔ 文案表 一一对应：少一个就说明有人新增回复忘了登记 ---

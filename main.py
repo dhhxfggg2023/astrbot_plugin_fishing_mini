@@ -4272,6 +4272,9 @@ class FishingPlugin(
             pass
         changed = False
         changed = self._apply_content_row_fixes() or changed
+        # fish_defs 是「一整段文本」且会整体接管鱼池，单独走一条追加逻辑
+        # （漏了它 = 新增的鱼永远进不了老配置，v1.18.8 的三个新钓点就是这么空掉的）
+        changed = self._merge_fish_defs() or changed
         for key in self.CONTENT_LIST_KEYS:
             default = DEFAULTS.get(key)
             if not isinstance(default, list) or not default:
@@ -4327,17 +4330,90 @@ class FishingPlugin(
                 continue
             key, old_line, new_line = str(fix[0]), str(fix[1]), str(fix[2])
             current = self.config.get(key)
-            if not isinstance(current, list) or old_line not in current:
+            # 两种存法都要认：location_defs 这类是 list，
+            # fish_defs 是「一整段多行文本」（v1.18.12 之前字符串直接被跳过，
+            # 所以鱼池里官方改过的行永远推不到老配置）
+            if isinstance(current, list):
+                lines = [str(x) for x in current]
+                join_with = None
+            elif isinstance(current, str):
+                lines = current.splitlines()
+                join_with = "\n"
+            else:
                 continue
-            if new_line in current:
+            if old_line not in lines or new_line in lines:
                 continue
-            row_id = old_line.split("|", 1)[0]
-            self.config[key] = [
-                new_line if str(line) == old_line else line for line in current
-            ]
+            lines = [new_line if line == old_line else line for line in lines]
+            self.config[key] = lines if join_with is None else join_with.join(lines)
             changed = True
+            row_id = old_line.split("|", 1)[0]
             logger.info(f"配置自动升级：{key} 的「{row_id}」按新版默认更新了效果")
         return changed
+
+    def _merge_fish_defs(self) -> bool:
+        """把新版默认鱼池里**还没有的鱼**补进站长的 `fish_defs`（只追加，不改老行）。
+
+        为什么单独写一条：`fish_defs` 和 location_defs/rod_defs 那几张表不一样 ——
+
+        1. 它是一整段多行**文本**（不是 list），通用合并只认 list，所以一直被跳过；
+        2. 它**非空就整体接管鱼池**（见 `_apply_fish_defs`）。
+
+        两条加起来就是一个很难自己发现的坑：站长配置里那份是某个旧版本的快照，
+        那以后官方新增的鱼**一条都进不来**。v1.18.8 的三个新钓点正是这么变成
+        **空池**的 —— 钓点本身靠 location_defs 的 list 合并补上了，鱼却卡在这里，
+        于是「钓点进得去、里面一条鱼都没有、图鉴也是空的」。
+
+        只按 id 追加缺的行：站长的行序、他改过的行、他自己加的鱼一律不动。
+
+        ⚠️ 只对「看起来就是官方鱼池的旧快照」下手：判据是配置里**至少一半的行**
+        是官方鱼的 id。手工写的小鱼池（只留几种鱼、自己从头配一套）**一个字都不改** ——
+        否则官方内容会直接淹没站长的自定义（`test_local.py` 的 [11b] 就钉着这条）。
+        """
+        default = DEFAULTS.get("fish_defs")
+        if not isinstance(default, str) or not default.strip():
+            return False
+        current = self.config.get("fish_defs")
+        if current is None or (isinstance(current, str) and not current.strip()):
+            # 空的/没配 → 走「内置鱼池」那条路，不需要补（内置已经是最新的）
+            return False
+        if not isinstance(current, (str, list)):
+            return False
+
+        is_list = isinstance(current, list)
+        items = [str(x) for x in current] if is_list else str(current).splitlines()
+        have = {
+            item.split("|", 1)[0].strip()
+            for item in items
+            if item.strip() and "|" in item
+        }
+        official_ids = {f["id"] for f in BUILTIN_FISH_POOL}
+        if len(have & official_ids) * 2 < len(official_ids):
+            # 手工鱼池：不动（官方新增的鱼不该淹没站长的自定义鱼池）
+            return False
+
+        rows = [
+            line.strip()
+            for line in default.splitlines()
+            if line.strip() and not line.strip().startswith("#") and "|" in line
+        ]
+        added = [
+            line for line in rows if line.split("|", 1)[0].strip() not in have
+        ]
+        if not added:
+            return False
+        if is_list:
+            self.config["fish_defs"] = list(current) + added
+        else:
+            self.config["fish_defs"] = (
+                str(current).rstrip("\n") + "\n" + "\n".join(added)
+            )
+
+        names = "、".join(line.split("|")[1] for line in added[:6] if "|" in line)
+        logger.info(
+            f"配置自动升级：fish_defs 补上 {len(added)} 种新版鱼"
+            f"（{names}{'…' if len(added) > 6 else ''}）"
+        )
+        return True
 
     def _warn_stale_config(self) -> None:
         """旧版配置残留体检。
@@ -4375,6 +4451,50 @@ class FishingPlugin(
                     f"缺少「{names}」；这 {len(stuck)} 种鱼将无法钓到"
                     f"（{'、'.join(stuck[:5])}），图鉴也集不齐。" + hint
                 )
+
+            # 鱼池快照是否落后：fish_defs 非空时它会**整体接管鱼池**，
+            # 于是「配置里那份还是旧快照」就等于**官方新增的鱼一种都没有** ——
+            # 空池的钓点表现是「进得去、钓不到任何东西、图鉴也是空的」（v1.18.12 修的）。
+            # 正常情况下 _merge_fish_defs 已经把缺的补上了，这里只在
+            # content_auto_merge=false（或补写盘失败）时才会喊人。
+            try:
+                raw_defs = _cfg_str(self.config, "fish_defs").strip()
+            except Exception:
+                raw_defs = ""
+            if raw_defs:
+                have = {
+                    line.split("|", 1)[0].strip()
+                    for line in raw_defs.splitlines()
+                    if line.strip() and "|" in line
+                }
+                # 只对「官方鱼池的旧快照」喊人；手工配的小鱼池是站长的自由，不啰嗦
+                official_ids = {f["id"] for f in BUILTIN_FISH_POOL}
+                is_snapshot = len(have & official_ids) * 2 >= len(official_ids)
+                # ⚠️ 要和**官方内置鱼池**比，不能和当前运行中的 FISH_POOL 比 ——
+                # fish_defs 已经接管了鱼池，拿它自己比自己永远是「一个都不缺」。
+                missing_fish = (
+                    [f for f in BUILTIN_FISH_POOL if f["id"] not in have]
+                    if is_snapshot
+                    else []
+                )
+                if missing_fish:
+                    empty_locs = [
+                        loc["name"]
+                        for loc in self.locations
+                        if not _location_pool(loc["id"])
+                    ]
+                    logger.warning(
+                        f"检测到旧版鱼池：配置里的 fish_defs 是旧快照，"
+                        f"比当前版本少 {len(missing_fish)} 种鱼"
+                        f"（{'、'.join(f['name'] for f in missing_fish[:5])}…）——"
+                        + (
+                            f"这些钓点会一条鱼都钓不到：{'、'.join(empty_locs)}。"
+                            if empty_locs
+                            else "这些鱼将无法钓到，图鉴也集不齐。"
+                        )
+                        + "　把 content_auto_merge 打开（默认就是开的）并重载插件即可自动补上。"
+                        + hint
+                    )
 
             # 价格/倍率是否还是旧值（钓点与鱼竿）
             default_locs = {

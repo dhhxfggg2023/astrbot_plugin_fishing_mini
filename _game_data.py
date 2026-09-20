@@ -754,5 +754,25 @@ CONTENT_ROW_FIXES: list[tuple[str, str, str]] = [
         "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神话」|quality_reroll=3",
         "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3",
     ),
+    # v1.18.12：隐藏生物「大肥鱼」的分布补上三个新钓点。
+    # 它是**每个钓点都塞一份**的那种彩蛋鱼，v1.18.8 加钓点时漏了这一行 ——
+    # 只要站长的 fish_defs 里那一行没被改过，这里就把新钓点补进去。
+    # （fish_defs 是一整段多行文本，字符串形态以前会被 _apply_content_row_fixes
+    #   直接跳过，v1.18.12 起按行替换也认。）
+    (
+        "fish_defs",
+        "big_fat_fish|大肥鱼|稀有|360|"
+        "novice:0.1579,bamboo:0.1579,canal:0.1579,lake:0.1579,reed:0.1579,"
+        "sea:0.1579,dock:0.1579,night:0.1579,mangrove:0.1579,swamp:0.1579,"
+        "cave:0.1579,ruins:0.1579,abyss:0.1579,trench:0.1579,glacier:0.1579,"
+        "aurora:0.1579|"
+        "原型据说是现实里的 DeepSeek 模型：问它什么都肯答，答得又稳又长，就是偶尔会想很久",
+        "big_fat_fish|大肥鱼|稀有|360|"
+        "novice:0.1579,bamboo:0.1579,canal:0.1579,lake:0.1579,reed:0.1579,"
+        "sea:0.1579,dock:0.1579,night:0.1579,mangrove:0.1579,swamp:0.1579,"
+        "cave:0.1579,ruins:0.1579,abyss:0.1579,trench:0.1579,glacier:0.1579,"
+        "aurora:0.1579,starfall:0.1579,void_sea:0.1579,dragon_palace:0.1579|"
+        "原型据说是现实里的 DeepSeek 模型：问它什么都肯答，答得又稳又长，就是偶尔会想很久",
+    ),
 ]
 
