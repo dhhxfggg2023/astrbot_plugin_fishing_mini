@@ -183,7 +183,7 @@ class CommandsMixin:
             gain = max(0.0, random.uniform(low, high))
             if gain > 0:
                 # 一次性手气：只作用于**下一竿**，用完即清（_calc._consume_luck）。
-                # 和锦鲤玉佩不叠加 —— 同时有时取较高的那个，这里照实说明。
+                # 和锦鲤玉佩**叠加**（来源不同、寿命不同），这里把合计写出来。
                 before = _safe_number(player.get("luck_charges"), 0.0)
                 player["luck_charges"] = _clamp(before + gain, 0.0, 2.0)
                 end = _safe_number(player["luck_charges"], 0.0)
@@ -194,11 +194,10 @@ class CommandsMixin:
                 )
                 hint = f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}"
                 if pendant > 0:
-                    # 不叠加：说清下一竿到底按哪个算，别让玩家以为会加在一起
-                    if end > pendant:
-                        hint += f"（一次性，比玉佩的 {pendant:.0%} 高，下一竿按 {end:.0%} 算）"
-                    else:
-                        hint += f"（一次性；玉佩的 {pendant:.0%} 更高，不叠加）"
+                    hint += (
+                        f"（玉佩 +{pendant:.0%} 叠加，下一竿共 +{end + pendant:.0%}，"
+                        f"之后回到 +{pendant:.0%}）"
+                    )
                 lines.append(hint)
         if "note" in reward and BOTTLE_NOTES:
             low, high = self._event_reward_range(reward["note"])

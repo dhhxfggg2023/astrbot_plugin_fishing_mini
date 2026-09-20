@@ -6577,9 +6577,11 @@ async def main():
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "非 buff 来源的手气仍是一竿即清")
 
-    # --- 站长报的 bug：插曲给的手气在玉佩生效期间不消失、还和玉佩叠加 ---
-    # 场景：先开玉佩（20 竿），再拿一次插曲手气；旧代码把两者都塞进 luck_charges，
-    # 玉佩没结束时那次「一竿即清」被跳过 → 手气挂了一整轮 buff 还叠着算。
+    # --- 两种手气：来源不同、寿命不同，**叠加**（v1.18.11 站长明确要求）---
+    # 历史：以前两者共用 luck_charges，玉佩生效期间那次「一竿即清」被跳过 →
+    # 插曲手气挂了一整轮 buff 还每竿叠着算（v1.18.5 的 bug）。
+    # v1.18.5 拆字段时顺手用 max() 把叠加也禁掉了 —— 属过度修正，
+    # 站长要的是「可以叠，只是一竿后事件那份就没了」。
     p5 = await plugin_j._load_player("96005")
     p5["items"]["lucky_jade"] = 1
     p5["baits"]["worm"] = 50
@@ -6594,8 +6596,8 @@ async def main():
         "插曲手气记在一次性储备里，玉佩的加成另算（两个字段分开）",
     )
     check(
-        abs(mod._effective_luck(p5) - 0.5) < 1e-9,
-        f"同时有时**取较高的那个**、不叠加 -> {mod._effective_luck(p5)}",
+        abs(mod._effective_luck(p5) - 0.80) < 1e-9,
+        f"两者同时有时**加起来**（0.5 + 0.30 = 0.80）-> {mod._effective_luck(p5)}",
     )
 
     before_casts = mod._safe_int(p5.get("buff_casts_left"), 0, 0)
@@ -6615,20 +6617,45 @@ async def main():
     check(
         mod._safe_number(p5.get("luck_charges"), 0) == 0
         and abs(mod._effective_luck(p5) - 0.30) < 1e-9,
-        f"再抛一竿也不会有「残留手气」-> {mod._effective_luck(p5)}",
+        f"第二竿起事件那份没了，只剩玉佩的 +30% -> {mod._effective_luck(p5)}",
+    )
+    # 一次性储备与玉佩**同时归零/失效**时的边界
+    check(
+        mod._effective_luck({"luck_charges": 0.4, "buff_casts_left": 0, "buff_quality": 0.3})
+        == 0.4,
+        "玉佩竿数用光后只剩一次性那份（buff_quality 残留也不参与）",
+    )
+    check(
+        mod._effective_luck({"luck_charges": 0.0, "buff_casts_left": 3, "buff_quality": 0.0})
+        == 0.0,
+        "只有竿数没有加成时手气为 0（异常存档不凭空给运气）",
     )
 
-    # 状态行照实写：玉佩 + 一次性各写各的（不再把两者混成一句）
+    # 状态行照实写：把「这一竿的合计」直接算给玩家看
     p5["luck_charges"] = 0.5
     line = plugin_j._buff_status_line(p5)
-    check("还剩" in line and "取较高" in line and "+50%" in line,
-        f"一次性更高时状态行写清「取较高的」-> {line}")
+    check(
+        "还剩" in line and "叠加" in line and "+50%" in line and "+80%" in line,
+        f"两者同时在时状态行写出这一竿的合计（0.5+0.3=80%）-> {line}",
+    )
     p5["luck_charges"] = 0.1
     line_low = plugin_j._buff_status_line(p5)
-    check("更低" in line_low and "不叠加" in line_low,
-        f"一次性更低时也说清不叠加（免得玩家以为加了）-> {line_low}")
+    check(
+        "叠加" in line_low and "+40%" in line_low,
+        f"一次性比玉佩小时也照样加起来（0.1+0.3=40%）-> {line_low}",
+    )
     p5["luck_charges"] = 0.0
     check("一次性" not in plugin_j._buff_status_line(p5), "只剩玉佩时不提一次性")
+
+    # 插曲给手气时的提示：也要说清是「叠加」，别让玩家以为被吞了
+    p6 = mod._default_player("96104")
+    p6["buff_casts_left"] = 5
+    p6["buff_quality"] = 0.30
+    hint = "\n".join(plugin_j._grant_event_reward(p6, {"luck": [0.5, 0.5]}))
+    check(
+        "叠加" in hint and "+80%" in hint and "回到 +30%" in hint,
+        f"插曲文案写明与玉佩叠加、一竿后回到玉佩的值 -> {[l for l in hint.splitlines() if '🔮' in l]}",
+    )
 
     # --- 老存档迁移：以前玉佩的加成写在 luck_charges 里 ---
     legacy_luck, _ = mod._repair_player(

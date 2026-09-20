@@ -52,13 +52,17 @@ def _on_lucky_token(
     * ``buff_quality`` + ``buff_casts_left`` = **持续型**（每次抛竿都加，竿数用光就没了）
     * ``luck_charges`` = **一次性**（下一竿生效，用完即清，插曲/彩蛋走这条）
 
+    两套**会叠加**（v1.18.11 站长明确要求：来源不同就该加在一起），
+    所以别自己去读 ``luck_charges`` 做合并 —— ``_calc._effective_luck`` 已经加好了。
+
     只写 ``buff_casts_left`` 不写 ``buff_quality`` 等于「竿数在、加成是 0」，
     玩家会看到「还剩 N 竿」却没效果。
     """
     casts = int(plugin.cfg.get("buff_cast_count") or 10)
     gain = min(LUCK_CAP, max(0.0, float(value)))
     if int(player.get("buff_casts_left") or 0) > 0:
-        # 不叠加：还在生效时只刷新竿数，数值保持原样（和内置道具一致）
+        # 「同一件道具」不叠加：还在生效时只刷新竿数，数值保持原样
+        # （和内置的锦鲤玉佩一致；一次性的 luck_charges 是另一回事，它会照常加上去）
         gain = max(gain, float(player.get("buff_quality") or 0.0))
     player["buff_quality"] = round(gain, 6)
     player["buff_casts_left"] = max(int(player.get("buff_casts_left") or 0), casts)

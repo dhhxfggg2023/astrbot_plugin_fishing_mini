@@ -219,8 +219,9 @@ class EngineMixin:
             rod = self._rod(player)
             weather = self._weather(player)
             fish = self._roll_species(bait_id, loc["id"], weather)
-            # 手气 = 一次性储备 + 玉佩这类「持续 N 竿」的加成，两者**不叠加，取较高的那个**；
-            # 本次抛竿读一次，收尾时消耗（见 _consume_luck）
+            # 手气 = 一次性储备 + 玉佩这类「持续 N 竿」的加成，两者**叠加**
+            # （来源不同、寿命不同，见 _calc._effective_luck）；
+            # 本次抛竿读一次，收尾时消耗（一次性清空 + 玉佩竿数 -1，见 _consume_luck）
             luck = _effective_luck(player)
             gear_luck = _safe_number(rod.get("luck_bonus"), 0.0)
             player["last_fish_time"] = int(now)

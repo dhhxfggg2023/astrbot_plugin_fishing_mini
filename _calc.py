@@ -874,9 +874,10 @@ def _default_player(user_id: str) -> dict[str, Any]:
         "milestones": [],
         # 各鱼种品质的最佳渔获记录（长期目标）
         "best_records": {},
-        # 一次性手气储备（插曲 / 彩蛋 / 扩展）：下一竿生效，**一竿即清**
+        # 一次性手气储备（插曲 / 彩蛋 / 扩展）：下一竿生效，**一竿即清**；
+        # 和玉佩那种持续型 buff **叠加**（来源不同），见 _effective_luck
         "luck_charges": 0.0,
-        # 持续型手气（锦鲤玉佩）：buff_casts_left > 0 时每竿都加这么多；两者不叠加，取较高的
+        # 持续型手气（锦鲤玉佩）：buff_casts_left > 0 时每竿都加这么多
         "buff_casts_left": 0,
         "buff_quality": 0.0,
     }
@@ -890,13 +891,24 @@ def _default_player(user_id: str) -> dict[str, Any]:
 def _effective_luck(player: dict[str, Any]) -> float:
     """本次抛竿实际吃到的手气加成。
 
-    两套来源**不叠加，取较高的那个**：
+    **两种不同来源的手气，叠加**（站长 v1.18.11 明确要求）：
 
     * ``luck_charges``：一次性储备（随机插曲 / 彩蛋 / 扩展给的「下一竿手气」）
-    * ``buff_quality``：持续型 buff（锦鲤玉佩），只在 ``buff_casts_left > 0`` 时生效
+      —— 只作用于**这一竿**，抛完即清（见 ``_consume_luck``）
+    * ``buff_quality``：持续型 buff（锦鲤玉佩），只在 ``buff_casts_left > 0`` 时生效，
+      剩下的每一竿都加这么多
 
-    以前两者共用 ``luck_charges``：玉佩生效期间那次「一竿即清」被跳过，插曲给的手气
-    就一直挂着不消失、还叠在玉佩上（站长报的 bug）——v1.18.5 拆成两个字段并取较高值。
+    它们唯一的区别是**寿命**，不是种类，所以该加起来：拿到插曲手气的那一竿 =
+    一次性 + 玉佩，之后的竿回到只有玉佩。
+
+    ⚠️ 上限：这里只做单项钳制（各 0~5），最终吃进掷骰时还会在
+    ``_roll_quality_mult`` 里与鱼饵/鱼竿/天气的手气**一起**钳到 0~1，
+    所以叠起来不会把品质分布顶穿。
+
+    历史坑（v1.18.5 → v1.18.11）：这两样以前共用 ``luck_charges`` 一个字段，
+    于是玉佩生效期间「一竿即清」被跳过，插曲给的手气挂着不消失、还每竿都叠上去。
+    当时的修法是拆字段 + ``max()`` 取较高值（顺带把叠加也一起禁掉了，属于过度修正）。
+    现在寿命已经由两个字段各管各的，叠加不会再产生残留 —— 该加回去。
     """
     once = _clamp(_safe_number(player.get("luck_charges"), 0.0), 0.0, 5.0)
     casts = _safe_int(player.get("buff_casts_left"), 0, 0)
@@ -905,11 +917,11 @@ def _effective_luck(player: dict[str, Any]) -> float:
         if casts > 0
         else 0.0
     )
-    return max(once, buff)
+    return once + buff
 
 
 def _consume_luck(player: dict[str, Any]) -> None:
-    """抛竿收尾时消耗手气（连钓整批算一次）。
+    """抛竿收尾时消耗手气（连钓里每竿各调一次，见 ``_engine``）。
 
     * 一次性储备 **一竿即清**（不管玉佩在不在生效）
     * 持续型 buff 的剩余竿数 -1；减到 0 时把加成一起清掉，别留个空 buff
@@ -1840,8 +1852,9 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         # --- 钓手手气（两套东西，别混在一起）---
         #   luck_charges    = 一次性储备（随机插曲 / 彩蛋 / 扩展给的「下一竿手气」）：**一竿即清**
         #   buff_quality    = 锦鲤玉佩这类「持续 N 竿」的每竿加成，只在 buff_casts_left > 0 时生效
+        # 两者**叠加**（来源不同、寿命不同，见 _effective_luck）。
         # 以前两者共用 luck_charges：玉佩生效期间那次「一竿即清」被跳过，于是插曲给的手气
-        # 一直挂着不消失、还叠在玉佩上（站长报的 bug）—— v1.18.5 拆成两个字段。
+        # 一直挂着不消失、还每竿都叠在玉佩上（站长报的 bug）—— v1.18.5 拆成两个字段。
         player["luck_charges"] = _clamp(
             _safe_number(raw.get("luck_charges"), 0.0), 0.0, 5.0
         )
