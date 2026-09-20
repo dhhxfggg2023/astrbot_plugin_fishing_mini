@@ -28,7 +28,7 @@
    由「品质加成倍率 quality_mult」决定，影响售价倍率。
    投喂饲料不会改变它（饲料只加个体数值），
    但「锦鲤玉佩」可以提高掷出好个体的概率——所以个体是可以养出来的。
-   **神话**是例外：自然上钩永远掷不到（quality_weights 里权重 0），
+   **神品**是例外：自然上钩永远掷不到（quality_weights 里权重 0），
    只能靠洗髓丹洗出来（概率 quality_myth_chance，默认每次重掷 0.25%）；
    同一条鱼每天最多吃 reroll_daily_limit 颗（默认 3），吃满当天会「厌恶」。
 
@@ -278,11 +278,14 @@ DEFAULTS: dict[str, Any] = {
     "perfect_escape_factor": 0.3,
     "edge_escape_factor": 1.6,
     "rarity_escape_chance": "传说:0.30,神话:0.42",
+    # 连钓里要拉线的鱼：不弹拉线，按「逃脱率 × 这个系数」一次判定。
+    # 1.0 = 旧行为（连钓里这些鱼几乎不会跑，比单竿还稳）；默认 2.5 才像个游戏
+    "multi_escape_mult": 2.5,
     "feed_max_uses": 10,
     "quality_weights": [44, 28, 16, 9, 3, 0],
     # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复；0 = 不限）
     "reroll_daily_limit": 3,
-    # 洗髓丹洗出「神话」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
+    # 洗髓丹洗出「神品」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
     # 所以只能靠洗髓丹拿到，自然上钩永远不出（quality_weights 最后一位是 0）
     "quality_myth_chance": 0.0025,
     "rarity_display_names": ["常见", "少见", "稀有", "传说", "神话"],
@@ -385,7 +388,7 @@ DEFAULTS: dict[str, Any] = {
         "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
         "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
         "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
-        "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神话」|quality_reroll=3",
+        "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3",
         "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
         "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
     ],

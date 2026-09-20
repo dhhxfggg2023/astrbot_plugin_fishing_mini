@@ -170,10 +170,18 @@ class EngineMixin:
             outcome, drop = self._roll_cast_outcome(
                 bait_id, bait_id != "none" or total_cost > 0, cast_loc.get("id")
             )
-            # 扣饵：默认「空竿不扣饵」（consume_bait_on_empty=false），
-            # 只有真的中鱼 / 钩上带了杂物才消耗 1 个；想恢复旧规则就把该配置设为 true。
-            if bait_id != "none" and (
-                bool(cfg.get("consume_bait_on_empty")) or outcome != "nothing"
+            # 扣饵：中鱼 / 钩上杂物照扣；空竿看是哪种空竿 ——
+            # 「没咬钩 / 鱼不开口」不扣（consume_bait_on_empty=false 的默认语义），
+            # 但「咬了一口又吐掉」是真被咬走了，照扣（不然那句「白搭了」就是假话）
+            cast_factor = self._location_hook_factor(cast_loc.get("id"))
+            miss_scene, miss_tip, miss_eaten = _miss_flavor(
+                bait_id, self._bait_label(bait_id), cast_loc, cast_factor
+            )
+            if _bait_consumed(
+                bait_id=bait_id,
+                bait_eaten=outcome != "fish" and miss_eaten,
+                got_something=outcome != "nothing",
+                every_cast=bool(cfg.get("consume_bait_on_empty")),
             ):
                 baits = player.setdefault("baits", {})
                 baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - 1)
@@ -193,22 +201,11 @@ class EngineMixin:
                     async for reply in self._maybe_trigger_story(event, user_id):
                         yield reply
                     return
-                if bait_id == "none":
-                    scene = "cast.miss_none"
-                    tip = "🪝 空钩在水里漂了半天，鱼碰了碰就游走了"
-                else:
-                    scene = "cast.miss_bait"
-                    tip = f"🎣 咬了一口又吐掉了——{self._bait_label(bait_id)} 白搭了"
-                # 深水钓点本来就难：空竿时点一句，别让玩家以为是自己的问题
-                # （只描述现象，不带「去哪儿买什么」的教程尾巴）
-                factor = self._location_hook_factor(cast_loc.get("id"))
-                if factor is not None and factor < 0.75:
-                    scene = "cast.miss_deep"
-                    tip = f"🌊 {cast_loc['emoji']}{cast_loc['name']} 水太深了，鱼不太愿意开口"
+                # 空竿的三种说法与扣饵规则由 _miss_flavor / _bait_consumed 统一决定
                 async for _r in self._say(
                     event,
-                    tip,
-                    scene,
+                    miss_tip,
+                    miss_scene,
                     values={
                         "鱼饵": self._bait_label(bait_id),
                         "钓点": f"{cast_loc.get('emoji', '')}{cast_loc.get('name', '')}",
@@ -460,9 +457,10 @@ class EngineMixin:
                 + _safe_number(rod.get("luck_bonus"), 0.0)
                 + _safe_number((weather or {}).get("luck"), 0.0)
             )
-            # 手气：连钓当成一次「抛竿」，整批共用；一次性储备与玉佩加成都不叠加
-            luck = _effective_luck(player)
-            _consume_luck(player)
+            # 手气：**每一竿各自结算、各自消耗**（v1.18.9 修的）。
+            # 以前整批只消耗 1 竿的玉佩额度 —— 连钓 15 次只掉 1 次 buff，站长报的就是这个。
+            # 一次性储备（插曲/彩蛋给的那种）仍然只作用于**第 1 竿**，用完即清。
+            buff_before = _safe_int(player.get("buff_casts_left"), 0, 0)
 
             lines = [f"🎣 连钓 {planned} 次"]
             if truncated:
@@ -471,9 +469,16 @@ class EngineMixin:
                     f"（体力与鱼饵也只扣 {planned} 份）"
                 )
             stats = {"fish": 0, "item": 0, "nothing": 0, "escaped": 0}
+            # 空竿里「没咬钩」的那几种（饵还在）；被鱼咬掉的照扣，和单竿同一套规则
+            nobite = 0
             gained = 0
+            cast_factor = self._location_hook_factor(loc.get("id"))
 
             for index in range(1, planned + 1):
+                # 每一竿都按「当前手气」结算，并按同一规则消耗：
+                # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
+                luck = _effective_luck(player)
+                _consume_luck(player)
                 outcome, drop = self._roll_cast_outcome(
                     bait_id,
                     bait_id != "none" or unit_cost > 0,
@@ -487,21 +492,29 @@ class EngineMixin:
                     continue
                 if outcome != "fish":
                     stats["nothing"] += 1
-                    lines.append(f"{index}. 💨 空竿")
+                    # 和单竿完全同一套说法（以前这里只写「💨 空竿」，
+                    # 看着像连钓的鱼从来不吃饵）
+                    _m_scene, miss_tip, miss_eaten = _miss_flavor(
+                        bait_id, self._bait_label(bait_id), loc, cast_factor
+                    )
+                    if not miss_eaten:
+                        nobite += 1
+                    lines.append(f"{index}. {miss_tip}")
                     continue
 
                 fish = self._roll_species(bait_id, loc["id"], weather)
                 spec = self._interaction_window(fish, weather)
                 if spec is not None:
-                    # 不弹拉线：按逃脱率一次性判定（过了就算稳稳钓上来）
-                    escape = _clamp(
-                        _safe_number(spec.get("escape"), 0.0), 0.0, 0.95
-                    )
+                    # 不弹拉线：按「逃脱率 × 没亲自拉线的惩罚」一次性判定
+                    # （惩罚系数 multi_escape_mult，默认 2.5 —— 不然连钓里的
+                    #   传说鱼几乎不会跑，比单竿还稳）
+                    escape = _multi_escape_chance(spec, cfg)
                     if random.random() < escape:
                         stats["escaped"] += 1
                         lines.append(
                             f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
-                            f"（{self._rarity_name(fish['rarity'])}）"
+                            f"（{self._rarity_name(fish['rarity'])}，"
+                            f"连钓不拉线，逃脱率 {escape:.0%}）"
                         )
                         continue
 
@@ -535,14 +548,15 @@ class EngineMixin:
                 )
 
             # --- 统一结算：成就 / 里程碑 / 存档 / 排行榜 ---
-            # 扣饵：默认只按「有结果」的竿数扣（空竿不耗饵）；
-            # consume_bait_on_empty=true 时恢复「每竿都扣」的旧规则。
-            consumed = (
-                planned
-                if bool(cfg.get("consume_bait_on_empty"))
-                else planned - stats["nothing"]
-            )
-            if bait_id != "none" and consumed > 0:
+            # 扣饵：中鱼 / 杂物 / 被鱼咬掉的空竿都扣；只有「没咬钩」的空竿不扣
+            # （consume_bait_on_empty=true 时恢复「每竿都扣」的旧规则）。
+            if bait_id == "none":
+                consumed = 0
+            elif bool(cfg.get("consume_bait_on_empty")):
+                consumed = planned
+            else:
+                consumed = planned - nobite
+            if consumed > 0:
                 baits = player.setdefault("baits", {})
                 baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - consumed)
             new_ach = self._check_achievements(player)
@@ -561,7 +575,7 @@ class EngineMixin:
             if bait_id != "none" and consumed != planned:
                 lines.append(
                     f"{self._bait_label(bait_id)} 本次 -{consumed}"
-                    f"（空竿不耗饵：本可扣 {planned}）"
+                    f"（没咬钩的空竿不耗饵：本可扣 {planned}）"
                 )
             tail = f"🧮 渔获估值 {_fmt_gold(gained)} 金"
             if limited:
@@ -570,6 +584,14 @@ class EngineMixin:
                     f"{_refresh_stamina(player, cfg)}/{cap}"
                 )
             lines.append(tail)
+            # 玉佩：本批消耗了几竿、还剩几竿（以前这里什么都不写，玩家只能自己数）
+            if buff_before > 0:
+                left_now = _safe_int(player.get("buff_casts_left"), 0, 0)
+                used_now = max(0, buff_before - left_now)
+                lines.append(
+                    f"🎐 锦鲤玉佩：本批 -{used_now} 竿"
+                    + (f"　还剩 {left_now} 竿" if left_now > 0 else "　（用完了）")
+                )
 
             async for _r in self._say_msg(event, "cast.multi_summary", event.plain_result("\n".join(lines))):
                 yield _r

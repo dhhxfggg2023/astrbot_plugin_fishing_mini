@@ -2499,6 +2499,10 @@ async def main():
     fish_cfg = dict(_CFG)
     fish_cfg["bait_hook_rates"] = "worm:1.0"
     fish_cfg["consume_bait_on_empty"] = False
+    # 关掉拉线互动：否则万一抽到要拉线的鱼，这一竿会停在「等你拉」上，
+    # 饵要等拉线时才扣，断言就会随机变红（偶发过一次）
+    fish_cfg["interactive_rarities"] = ""
+    fish_cfg["rarity_escape_chance"] = ""
     fp = make_plugin(fish_cfg)
     pf = await fp._load_player("89103")
     pf["baits"] = {"worm": 3}
@@ -2526,6 +2530,72 @@ async def main():
     check(
         "空竿不耗饵" in body,
         f"连钓结果里说明实扣饵数 -> {[l for l in body.splitlines() if '空竿不耗' in l][:1]}",
+    )
+
+    # --- 连钓要按竿数消耗锦鲤玉佩（站长报的：连钓只消耗一次）---
+    print("\n[6k] 连钓的玉佩消耗：钓几竿就掉几竿额度")
+    buff_cfg = dict(_CFG, easter_egg_chance=0.0, interactive_rarities="",
+                    rarity_escape_chance="")
+    bp = make_plugin(buff_cfg)
+    pb = await bp._load_player("89110")
+    pb["baits"] = {"worm": 50}
+    pb["equipped_bait"] = "worm"
+    pb["buff_casts_left"] = 5
+    pb["buff_quality"] = 0.30
+    pb["stamina"] = 50
+    await bp._save_player(pb)
+    out = await cmd(bp, FakeEvent("89110"), "3", "", "")
+    body = text_of(out)
+    pb = await bp._load_player("89110")
+    check(
+        mod._safe_int(pb.get("buff_casts_left"), -1, 0) == 2,
+        f"连钓 3 次 → 玉佩额度 5 掉到 2（以前只掉 1）-> {pb.get('buff_casts_left')}",
+    )
+    check(
+        abs(mod._safe_number(pb.get("buff_quality"), 0) - 0.30) < 1e-9,
+        f"额度没用完时加成还在 -> {pb.get('buff_quality')}",
+    )
+    check(
+        "本批 -3 竿" in body and "还剩 2 竿" in body,
+        f"结果里写明本批消耗了几竿 -> {[l for l in body.splitlines() if '锦鲤玉佩' in l][:1]}",
+    )
+
+    # 额度不够整批时：用完就停，加成一起清掉
+    pb["buff_casts_left"] = 2
+    pb["buff_quality"] = 0.30
+    await bp._save_player(pb)
+    out = await cmd(bp, FakeEvent("89110"), "5", "", "")
+    body = text_of(out)
+    pb = await bp._load_player("89110")
+    check(
+        mod._safe_int(pb.get("buff_casts_left"), -1, 0) == 0
+        and mod._safe_number(pb.get("buff_quality"), -1) == 0,
+        f"额度只有 2 却连钓 5 次 → 归零并清掉加成 -> {pb.get('buff_casts_left')}/{pb.get('buff_quality')}",
+    )
+    check(
+        "本批 -2 竿" in body and "用完了" in body,
+        f"结果里说明这批只吃到 2 竿、且已用完 -> {[l for l in body.splitlines() if '锦鲤玉佩' in l][:1]}",
+    )
+
+    # 没有玉佩时不显示那一行（不占版面）
+    pb["buff_casts_left"] = 0
+    pb["buff_quality"] = 0.0
+    await bp._save_player(pb)
+    out = await cmd(bp, FakeEvent("89110"), "2", "", "")
+    check(
+        "锦鲤玉佩" not in text_of(out),
+        "没有玉佩时连钓结果里不显示玉佩那一行",
+    )
+
+    # 一次性手气（插曲/彩蛋）：整批里只作用于第 1 竿，且用完即清
+    pb["luck_charges"] = 0.5
+    pb["buff_casts_left"] = 0
+    await bp._save_player(pb)
+    await cmd(bp, FakeEvent("89110"), "3", "", "")
+    pb = await bp._load_player("89110")
+    check(
+        mod._safe_number(pb.get("luck_charges"), -1) == 0,
+        f"连钓结束后一次性手气也清空（只给第 1 竿）-> {pb.get('luck_charges')}",
     )
 
     # --- 钓费与体力不受该开关影响 ---
@@ -2563,6 +2633,223 @@ async def main():
             lo <= hit <= hi,
             f"{bait_id}@{loc_id} 上鱼率 {hit:.3f}（期望 {lo}~{hi}）",
         )
+
+    # =====================================================================
+    print("\n[6l] 连钓的鱼真的会跑 + 空竿说法统一 + 咬掉的饵照扣（v1.18.10）")
+    # 站长报的：「连钓的鱼居然不会跑……连钓最多有鱼没咬饵」。
+    # 病根有两个：连钓直接用鱼种标称逃脱率（单竿里手慢必跑，连钓却几乎不跑），
+    # 而且连钓的空竿只写「💨 空竿」（单竿写「咬了一口又吐掉了——蚯蚓 白搭了」），
+    # 于是同一个游戏里两套说法、两套概率。这里把两条都钉住。
+
+    # --- 1) 空竿的三种说法：单竿与连钓现在共用这一份 ---
+    loc_probe = {"id": "novice", "name": "新手池塘", "emoji": "🪣"}
+    _sc, _tip, _eaten = mod._miss_flavor("none", "空钩", loc_probe, 1.0)
+    check(
+        _sc == "cast.miss_none" and not _eaten and "空钩" in _tip,
+        f"空钩下竿：鱼碰了碰就游走，谈不上丢饵 -> {_sc}／{_tip}",
+    )
+    _sc, _tip, _eaten = mod._miss_flavor("worm", "🪱蚯蚓", loc_probe, 0.60)
+    check(
+        _sc == "cast.miss_deep" and not _eaten and "水太深" in _tip
+        and "新手池塘" in _tip,
+        f"深水空竿：鱼不开口，饵还在 -> {_sc}／{_tip}",
+    )
+    _sc, _tip, _eaten = mod._miss_flavor("worm", "🪱蚯蚓", loc_probe, 1.0)
+    check(
+        _sc == "cast.miss_bait" and _eaten and "白搭了" in _tip
+        and "🪱蚯蚓" in _tip,
+        f"「咬了一口又吐掉」= 这一竿的饵真被鱼咬走了 -> {_sc}／{_tip}",
+    )
+    check(
+        mod._miss_flavor("worm", "🪱蚯蚓", loc_probe, None)[2] is True,
+        "不套用钓点系数（内部采样 loc_id=None）时按「咬掉了」算："
+        "配置里没写的钓点一律回退 1.0，本来就几乎不会空竿",
+    )
+
+    # --- 2) 扣饵真值表：文案写「白搭了」就必须真扣 ---
+    for _kw, _want, _why in (
+        (dict(bait_id="none", bait_eaten=True, got_something=True, every_cast=True),
+         False, "空钩不扣饵"),
+        (dict(bait_id="worm", bait_eaten=False, got_something=False, every_cast=False),
+         False, "没咬钩的空竿不扣（默认语义不变）"),
+        (dict(bait_id="worm", bait_eaten=True, got_something=False, every_cast=False),
+         True, "被鱼咬掉的空竿照扣"),
+        (dict(bait_id="worm", bait_eaten=False, got_something=True, every_cast=False),
+         True, "中鱼／钩上杂物照扣"),
+        (dict(bait_id="worm", bait_eaten=False, got_something=False, every_cast=True),
+         True, "开关打开时恢复「每竿都扣」"),
+    ):
+        check(mod._bait_consumed(**_kw) is _want, f"扣饵规则：{_why}")
+
+    # --- 3) 连钓逃脱率 = 鱼种逃脱率 × 系数（默认 2.5，封顶 95%）---
+    esc_cfg_probe = dict(_CFG)
+    _e30 = mod._multi_escape_chance({"escape": 0.30}, esc_cfg_probe)
+    _e42 = mod._multi_escape_chance({"escape": 0.42}, esc_cfg_probe)
+    check(
+        abs(_e30 - 0.75) < 1e-9,
+        f"传说标称 30% → 连钓判定 75%（×2.5）-> {_e30:.2%}",
+    )
+    check(
+        abs(_e42 - 0.95) < 1e-9,
+        f"神话标称 42% × 2.5 = 105% → 封顶 95%（连钓里也不存在必跑）-> {_e42:.2%}",
+    )
+    check(
+        abs(mod._multi_escape_chance(
+            {"escape": 0.30}, dict(esc_cfg_probe, multi_escape_mult=1.0)
+        ) - 0.30) < 1e-9,
+        "系数填 1.0 = 旧行为（连钓按标称逃脱率，站长想还原就填这个）",
+    )
+    check(
+        mod._multi_escape_chance(
+            {"escape": 0.30}, dict(esc_cfg_probe, multi_escape_mult=0)
+        ) == 0.0,
+        "系数填 0 = 连钓里这些鱼永远不跑",
+    )
+    check(
+        mod._multi_escape_chance({}, esc_cfg_probe) == 0.0,
+        "鱼种本身没写逃脱率时，连钓里不会凭空跑鱼",
+    )
+    check(
+        abs(mod._multi_escape_chance({"escape": 0.30}, {}) - 0.75) < 1e-9,
+        "配置里缺这一项时按默认 2.5 兜底（老配置升级后自动变狠）",
+    )
+    check(
+        abs(mod._multi_escape_chance(
+            {"escape": 0.30}, dict(esc_cfg_probe, multi_escape_mult=999)
+        ) - 0.95) < 1e-9,
+        "系数被填成 999 也不会超过 95%（封顶在函数里）",
+    )
+
+    # --- 4) 实测：同一批 20 竿，改系数前后跑掉的条数明显不同 ---
+    # 常见鱼的 diff = 0 → 单竿口径的逃脱率 = 品质逃脱率 × 0.75 = 0.40 × 0.75 = 30%，
+    # 连钓再 × 2.5 = 75%。天气关掉，否则天气的 escape_mult 会让这个数每局都变。
+    real_esc_cfg = dict(_CFG)
+    real_esc_cfg["interactive_rarities"] = "常见"
+    real_esc_cfg["rarity_escape_chance"] = "常见:0.40"
+    real_esc_cfg["rarity_spawn_weights"] = "常见:100,少见:0,稀有:0,传说:0,神话:0"
+    real_esc_cfg["enable_weather"] = False
+    real_esc_cfg["easter_egg_chance"] = 0.0
+    real_esc_cfg["story_chance"] = 0.0
+    real_esc_cfg["multi_cast_max"] = 20
+    real_esc_plugin = make_plugin(real_esc_cfg)
+    p_esc = mod._default_player("89120")
+    p_esc["gold"] = 1000
+    p_esc["equipped_bait"] = "worm"
+    p_esc["baits"] = {"worm": 40}
+    await real_esc_plugin._save_player(p_esc)
+    out = await cmd(real_esc_plugin, FakeEvent("89120"), "20", "", "")
+    body = text_of(out)
+    ran = body.count("跑了")
+    check(
+        "逃脱率 75%" in body,
+        f"跑掉的每一条都写出连钓实际用的逃脱率 -> "
+        f"{[l for l in body.splitlines() if '跑了' in l][:1]}",
+    )
+    check(
+        9 <= ran <= 20,
+        f"连钓 20 竿跑掉 {ran} 条（默认 75%，期望 15；旧行为只有 6 条左右）",
+    )
+    check(
+        "跑掉" in body and "条" in body,
+        f"汇总行里也报跑掉几条 -> "
+        f"{[l for l in body.splitlines() if l.startswith('——') or '上鱼' in l][:1]}",
+    )
+    check(
+        not real_esc_plugin._pending_pulls,
+        "连钓照旧不注册拉线互动：只是判定变狠，没有偷偷变成单竿",
+    )
+
+    old_esc_plugin = make_plugin(dict(real_esc_cfg, multi_escape_mult=1.0))
+    # 换一个玩家号：存档是全局共享的，同号会带着上一批的背包与金币跑
+    p_old = mod._default_player("89125")
+    p_old["gold"] = 1000
+    p_old["equipped_bait"] = "worm"
+    p_old["baits"] = {"worm": 40}
+    await old_esc_plugin._save_player(p_old)
+    out = await cmd(old_esc_plugin, FakeEvent("89125"), "20", "", "")
+    body_old = text_of(out)
+    ran_old = body_old.count("跑了")
+    check(
+        "逃脱率 30%" in body_old,
+        f"系数填 1.0 时用标称逃脱率（30%）-> "
+        f"{[l for l in body_old.splitlines() if '跑了' in l][:1]}",
+    )
+    check(
+        ran_old <= 12,
+        f"系数 1.0 = 旧行为：20 竿只跑 {ran_old} 条（期望 6，明显比默认的 {ran} 条松）",
+    )
+
+    # --- 5) 空竿扣饵：单竿说「白搭了」就真扣，深水不开口就不扣 ---
+    nobite_cfg = dict(_CFG)
+    nobite_cfg["bait_hook_rates"] = "worm:0.0"
+    nobite_cfg["consume_bait_on_empty"] = False
+    # 新手池塘默认系数 1.0 = 必出鱼，一定要压到 1.0 以下才可能出现空竿；
+    # 0.9 仍 ≥ 0.75，所以空竿是「被鱼咬掉」的那种（要扣饵）
+    nobite_cfg["location_hook_factors"] = "novice:0.9"
+    nobite_plugin = make_plugin(nobite_cfg)
+    p_nb = await nobite_plugin._load_player("89121")
+    p_nb["baits"] = {"worm": 3}
+    await nobite_plugin._save_player(p_nb)
+    out = await cmd(nobite_plugin, FakeEvent("89121"), "蚯蚓", "", "")
+    body = text_of(out)
+    p_nb = await nobite_plugin._load_player("89121")
+    check("白搭了" in body, f"单竿空竿写清是被鱼咬掉的 -> {body.splitlines()[-1]}")
+    check(
+        p_nb["baits"]["worm"] == 2,
+        f"文案说「白搭了」，这一竿的饵就真扣了 -> {p_nb['baits']['worm']}",
+    )
+
+    deep_cfg = dict(nobite_cfg, location_hook_factors="novice:0.5")
+
+    # --- 6) 连钓的两种空竿：说法与扣饵必须和单竿一模一样 ---
+    # ⚠️ 顺序有讲究：钓点难度系数是存在**模块级全局** `LOCATION_HOOK_FACTORS` 里的
+    # （`_location_hook_factor` 读的是它，不是 self.cfg），每次造插件都会把它刷成
+    # 那份配置。所以在造出 deep_plugin（novice:0.5）之前，必须先用 nobite_plugin
+    # 把「咬掉」这一组跑完，否则连钓会按 0.5 判成「鱼不开口」——
+    # 饵一个不扣、文案也对不上（这次就是这么红的）。
+    p_nb["baits"] = {"worm": 5}
+    p_nb["equipped_bait"] = "worm"
+    await nobite_plugin._save_player(p_nb)
+    out = await cmd(nobite_plugin, FakeEvent("89121"), "5", "", "")
+    body = text_of(out)
+    p_nb = await nobite_plugin._load_player("89121")
+    check(
+        body.count("白搭了") == 5,
+        f"连钓 5 竿全是「咬了一口又吐掉」，和单竿同一套说法（以前只写「💨 空竿」）"
+        f"-> 命中 {body.count('白搭了')} 次",
+    )
+    check(
+        p_nb["baits"]["worm"] == 0,
+        f"连钓里被鱼咬掉的饵一样照扣（以前这批一个都不扣）-> {p_nb['baits']['worm']}",
+    )
+
+    deep_plugin = make_plugin(deep_cfg)
+    p_dp = await deep_plugin._load_player("89122")
+    p_dp["baits"] = {"worm": 3}
+    await deep_plugin._save_player(p_dp)
+    out = await cmd(deep_plugin, FakeEvent("89122"), "蚯蚓", "", "")
+    body = text_of(out)
+    p_dp = await deep_plugin._load_player("89122")
+    check("水太深" in body, f"深水空竿：鱼不开口 -> {body.splitlines()[-1]}")
+    check(
+        p_dp["baits"]["worm"] == 3,
+        f"没咬钩的空竿一个饵都不扣 -> {p_dp['baits']['worm']}",
+    )
+
+    p_dp["baits"] = {"worm": 5}
+    p_dp["equipped_bait"] = "worm"
+    await deep_plugin._save_player(p_dp)
+    out = await cmd(deep_plugin, FakeEvent("89122"), "5", "", "")
+    body = text_of(out)
+    p_dp = await deep_plugin._load_player("89122")
+    check(
+        body.count("水太深") == 5,
+        f"深水连钓 5 竿全是「鱼不开口」-> 命中 {body.count('水太深')} 次",
+    )
+    check(
+        p_dp["baits"]["worm"] == 5 and "本可扣 5" in body,
+        f"深水连钓一个饵都不扣，并说明本可扣几份 -> {p_dp['baits']['worm']}",
+    )
 
     print("\n[10j] 彩蛋事件 / 里程碑 / 最佳渔获纪录")
     plugin6 = make_plugin()
@@ -5307,7 +5594,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 109,
+        len(_schema) == 110,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -5315,7 +5602,8 @@ async def main():
         f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden"
         f" + v1.18.0 的 button_empty_scenes"
         f" + v1.18.7 的 reroll_daily_limit/quality_myth_chance"
-        f" + v1.18.8 的 user_edited_keys；aquarium_bonus* 两项已在 v1.18.0 删掉）",
+        f" + v1.18.8 的 user_edited_keys"
+        f" + v1.18.10 的 multi_escape_mult；aquarium_bonus* 两项已在 v1.18.0 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -5323,7 +5611,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 106, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 107, f"其余 {len(_hidden)} 项全部 invisible")
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
@@ -5704,8 +5992,8 @@ async def main():
         "锦鲤玉佩 buff_quality=0.30（对钓手生效）",
     )
 
-    # --- 个体品质新增「神话」：只能洗髓丹洗出来（v1.18.7）---
-    print("\n[10r] 神话个体品质：自然洗不出、只能洗髓丹洗、每条鱼每天 3 颗")
+    # --- 个体品质最高档：只能洗髓丹洗出来（v1.18.7 加档、v1.18.8 起叫「神品」）---
+    print("\n[10r] 神品个体品质：自然洗不出、只能洗髓丹洗、每条鱼每天 3 颗")
     check(
         mod.QUALITY_ORDER[-1] == "神品" and len(mod.QUALITY_TIERS) == 6,
         f"个体品质 6 档，最高是神品（和鱼种稀有度分两套名字）-> {mod.QUALITY_ORDER}",
@@ -5737,7 +6025,7 @@ async def main():
         f"5.5 倍率落在神品档且不被截断 -> {myth_inst['quality']} {myth_inst['quality_mult']}",
     )
 
-    # 洗髓丹：概率拉到 1 = 必出神话（验证「洗得出来」这条链路）
+    # 洗髓丹：概率拉到 1 = 必出神品（验证「洗得出来」这条链路）
     cfg_myth = dict(cfg_r, quality_myth_chance=1.0, easter_egg_chance=0.0)
     plugin_m = make_plugin(cfg_myth)
     p_m = await plugin_m._load_player("96006")
@@ -5864,6 +6152,19 @@ async def main():
         "|1200|" in str(plugin_fix.cfg["item_defs"][0])
         and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 1200,
         "老配置里那行没被改过 → 自动升级成新价（CONTENT_ROW_FIXES）",
+    )
+    # v1.18.10：个体品质最后一档改名「神品」，说明里那个「神话」指的其实是它 ——
+    # 已经在 v1.18.7 那版说明上的老配置也要跟着换（CONTENT_ROW_FIXES 允许多级链）
+    fix_cfg2 = dict(cfg_r)
+    fix_cfg2["item_defs"] = [
+        "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "极小概率直接洗出「神话」|quality_reroll=3"
+    ]
+    plugin_fix2 = make_plugin(fix_cfg2)
+    _row2 = str(plugin_fix2.cfg["item_defs"][0])
+    check(
+        "「神品」" in _row2 and "神话" not in _row2,
+        f"v1.18.7 那版说明里的「神话」也升级成「神品」-> {_row2}",
     )
 
     # --- 品质名和鱼种稀有度分开：两套名字不能撞名（站长就是嫌撞名尴尬）---
@@ -6477,7 +6778,11 @@ async def main():
     check(_wrapped_count + _say_count >= 145, f"带场景的回复出口 {_wrapped_count + _say_count} 处（≥145）")
     _src_all = "".join(
         (PLUGIN_DIR / f).read_text(encoding="utf-8")
-        for f in ("main.py", "_engine.py", "_commands.py", "_interactions.py", "_views.py")
+        # _calc.py 也要扫：空竿的三种说法（cast.miss_none/miss_deep/miss_bait）在
+        # v1.18.10 之后由 _miss_flavor 统一决定，单竿与连钓都只是拿它的返回值，
+        # 字面量只在 _calc.py 里出现一次。
+        for f in ("main.py", "_engine.py", "_commands.py", "_interactions.py",
+                  "_views.py", "_calc.py")
     )
     _dead = [s for s in _scene_ids if f'"{s}"' not in _src_all]
     check(not _dead, f"没有「登记了却没人用」的死场景（{_dead}）")

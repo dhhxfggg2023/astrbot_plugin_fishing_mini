@@ -168,6 +168,12 @@
     "type": "string",
     "default": "传说:0.30,神话:0.42"
   },
+  "multi_escape_mult": {
+    "invisible": true,
+    "description": "连钓里要拉线的鱼（默认 传说/神话）：连钓不弹拉线，按「鱼种逃脱率 × 这个系数」一次判定。推荐 2.5（传说 30% → 75%、神话 42% → 95%）；1.0 = 旧行为（连钓里这些鱼几乎不跑，比单竿还稳）；0 = 连钓里永远不跑",
+    "type": "float",
+    "default": 2.5
+  },
   "feed_max_uses": {
     "invisible": true,
     "description": "同一条鱼最多投喂次数",
@@ -406,7 +412,7 @@
       "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
       "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
       "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
-      "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神话」|quality_reroll=3",
+      "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3",
       "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
       "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20"
     ]
@@ -564,7 +570,7 @@
   },
   "consume_bait_on_empty": {
     "invisible": true,
-    "description": "空竿（没中鱼、也没钩上杂物）是否照样消耗 1 个鱼饵。false = 空竿不扣饵（默认）；true = 每次下竿都扣，不看有没有结果",
+    "description": "空竿要不要扣饵。1 = 每竿都扣 1 个饵（旧规则）；0（默认）= **没咬钩 / 鱼不开口**的空竿不扣，但被鱼咬掉的那种（「咬了一口又吐掉了」）照扣 —— 文案说了「白搭了」就得真扣，单竿与连钓同一套规则",
     "type": "bool",
     "default": false
   },

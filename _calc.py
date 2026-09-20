@@ -1378,6 +1378,60 @@ def _quality_ceil() -> float:
 # 洗髓丹：每条鱼每天能吃几颗（吃满了当天就「厌恶」，第二天恢复）
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 空竿：单竿与连钓**共用同一套**说法与扣饵规则（v1.18.10）
+# ---------------------------------------------------------------------------
+
+def _miss_flavor(
+    bait_id: str, bait_label: str, loc: dict[str, Any], factor: float | None
+) -> tuple[str, str, bool]:
+    """空竿的三种说法。返回 ``(场景键, 文案, 这一竿的饵是不是被鱼咬掉了)``。
+
+    * 空钩：鱼碰了碰就游走 —— 谈不上丢饵
+    * 深水（钓点系数 < 0.75）：鱼不开口，饵还在
+    * 其余：**咬了一口又吐掉** —— 文案说「白搭了」，那就得真扣（见 ``_bait_consumed``）
+
+    以前连钓路径只写「💨 空竿」，站长看着像「连钓的鱼从来不吃饵」，
+    所以这里把两种路径的说法合并成一份。
+    """
+    if bait_id == "none":
+        return "cast.miss_none", "🪝 空钩在水里漂了半天，鱼碰了碰就游走了", False
+    if factor is not None and factor < 0.75:
+        name = f"{loc.get('emoji', '')}{loc.get('name', '')}"
+        return "cast.miss_deep", f"🌊 {name} 水太深了，鱼不太愿意开口", False
+    return "cast.miss_bait", f"🎣 咬了一口又吐掉了——{bait_label} 白搭了", True
+
+
+def _bait_consumed(
+    *, bait_id: str, bait_eaten: bool, got_something: bool, every_cast: bool
+) -> bool:
+    """这一竿要不要扣饵。
+
+    * ``every_cast``（配置 ``consume_bait_on_empty``）= 每竿都扣（旧规则）
+    * 中鱼 / 钩上杂物 = 照扣
+    * 空竿：**被鱼咬掉的那一种照扣**（文案都写「白搭了」了），
+      只有「没咬钩 / 鱼不开口」才不扣
+    """
+    if bait_id == "none":
+        return False
+    return bool(every_cast) or bool(got_something) or bool(bait_eaten)
+
+
+def _multi_escape_chance(spec: dict[str, Any], cfg: dict[str, Any]) -> float:
+    """连钓里这条要拉线的鱼「跑掉」的概率。
+
+    连钓不弹拉线（一次判定），如果直接用鱼种的标称逃脱率，就等于
+    **「不拉线也几乎不会跑」** —— 单竿里玩家手慢/超时是必跑的，于是连钓变成
+    「传说鱼也不会跑」的刷分捷径（站长报的就是这个）。
+
+    所以这里乘一个「没亲自拉线」的惩罚系数 ``multi_escape_mult``（默认 2.5，
+    1.0 = 恢复旧行为，0 = 连钓里这些鱼永远不跑），上限 0.95。
+    """
+    base = _clamp(_safe_number((spec or {}).get("escape"), 0.0), 0.0, 1.0)
+    mult = _clamp(_safe_number((cfg or {}).get("multi_escape_mult"), 2.5), 0.0, 10.0)
+    return _clamp(base * mult, 0.0, 0.95)
+
+
 def _reroll_daily_cap(cfg: dict[str, Any]) -> int:
     """每条鱼每天最多吃几颗洗髓丹（``reroll_daily_limit``，0 = 不限）。"""
     return max(0, _safe_int((cfg or {}).get("reroll_daily_limit"), 3, 0))

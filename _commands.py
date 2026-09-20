@@ -2228,7 +2228,7 @@ class CommandsMixin:
                     return
                 rolls = max(1, min(50, int(round(_safe_number(effects.get("quality_reroll"), 1.0)))))
                 weights = list(self.cfg.get("quality_weights") or [])
-                # 神话：只能在洗髓时靠这个概率命中（自然上钩的权重是 0）
+                # 神品：只能在洗髓时靠这个概率命中（自然上钩的权重是 0）
                 myth_chance = _clamp(
                     _safe_number(self.cfg.get("quality_myth_chance"), 0.0025), 0.0, 1.0
                 )
@@ -2258,7 +2258,7 @@ class CommandsMixin:
                         if myth_chance > 0 and random.random() < myth_chance:
                             best = max(best, random.uniform(myth_low, myth_high))
                             hit_myth = True
-                            break          # 出了神话就不用再掷了
+                            break          # 出了神品就不用再掷了
                         best = max(best, _roll_quality_mult(weights))
                     items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                     used += 1
