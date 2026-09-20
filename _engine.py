@@ -227,7 +227,8 @@ class EngineMixin:
             player["last_fish_time"] = int(now)
             await self._save_player(player)
 
-            spec = self._interaction_window(fish, weather)
+            # 鱼竿的「拉线手感」（高阶竿：窗口更长 / 更不容易跑）在这里生效
+            spec = self._apply_rod_pull_bonus(self._interaction_window(fish, weather), rod)
             # 变异只在上钩瞬间掷一次；命中后普通鱼也会变成「惊喜」
             variant = self._roll_variant()
             weather_luck = _safe_number((weather or {}).get("luck"), 0.0)
@@ -509,7 +510,10 @@ class EngineMixin:
                     continue
 
                 fish = self._roll_species(bait_id, loc["id"], weather)
-                spec = self._interaction_window(fish, weather)
+                # 连钓不拉线，但鱼竿的拉线手感照样算进去（口径与单竿一致）
+                spec = self._apply_rod_pull_bonus(
+                    self._interaction_window(fish, weather), rod
+                )
                 if spec is not None:
                     # 不弹拉线：按「逃脱率 × 没亲自拉线的惩罚」一次性判定
                     # （惩罚系数 multi_escape_mult，默认 2.5 —— 不然连钓里的

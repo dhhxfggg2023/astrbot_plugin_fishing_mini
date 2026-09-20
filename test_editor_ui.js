@@ -657,9 +657,19 @@ async function channelHelpers() {
     && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
     "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",
     serialized.fish_defs.split("\n").length);
-  check(Array.isArray(serialized.rod_defs) && serialized.rod_defs.length === 6,
-    "rod_defs 是 6 条字符串数组", serialized.rod_defs.length);
-  check(serialized.rod_defs[1].split("|").length === 8, "鱼竿序列化成 8 段");
+  check(Array.isArray(serialized.rod_defs)
+    && serialized.rod_defs.length === T.state.data.rods.length,
+    "rod_defs 的行数 = 当前表格行数（这里是 " + T.state.data.rods.length + " 行）",
+    serialized.rod_defs.length);
+  check(serialized.rod_defs[1].split("|").length === 8,
+    "老鱼竿序列化成 8 段（没有拉线手感就不补那两段，免得噪音）");
+  const rodWithFeel = serialized.rod_defs.filter(function (r) {
+    return r.split("|").length === 10;
+  });
+  check(rodWithFeel.length === 2
+    && rodWithFeel[0].indexOf("|0.15|1") > 0,
+    "带拉线手感的鱼竿序列化成 10 段（窗口加成 / 逃脱率系数）",
+    rodWithFeel.join(" ／ "));
   check(serialized.bait_defs[1].split("|").length === 10, "鱼饵序列化成 10 段");
   check(serialized.fish_defs.split("\n")[0].indexOf("|") > 0, "鱼行用竖线分隔");
   // 往返：解析 -> 序列化 -> 再解析，关键字段不漂

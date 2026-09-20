@@ -396,6 +396,31 @@ class InteractionsMixin:
             return None
         return self._next_story_event(player)
 
+    def _apply_rod_pull_bonus(
+        self, spec: dict[str, Any] | None, rod: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """把鱼竿的「拉线手感」加成应用到窗口与逃脱率上（v1.18.15）。
+
+        高阶竿（龙纹鲤竿 / 归墟竿）卖的不是纯数值，而是**手感**：
+        窗口更长、更不容易跑 —— 这样后期升级不会直接把鱼价再推高一档，
+        而是让「拉线」这条玩法在后期更有分量（也顺带压住了收益膨胀）。
+
+        拉线（单竿）与连钓的一次判定都走这里，两条路径口径一致。
+        """
+        if not spec or not isinstance(rod, dict):
+            return spec
+        window_bonus = _safe_number(rod.get("window_bonus"), 0.0)
+        escape_factor = _safe_number(rod.get("escape_factor"), 1.0)
+        if window_bonus:
+            spec["window"] = max(
+                1.0, _safe_number(spec.get("window"), 0.0) * (1.0 + window_bonus)
+            )
+        if escape_factor != 1.0:
+            spec["escape"] = _clamp(
+                _safe_number(spec.get("escape"), 0.0) * escape_factor, 0.0, 0.95
+            )
+        return spec
+
     def _interaction_window(
         self, fish: dict[str, Any], weather: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:

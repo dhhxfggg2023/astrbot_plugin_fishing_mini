@@ -239,7 +239,7 @@ async def main():
     )
 
     plugin = make_plugin(cfg)
-    check(len(plugin.rods) == 6, f"鱼竿 {len(plugin.rods)} 种")
+    check(len(plugin.rods) == 8, f"鱼竿 {len(plugin.rods)} 种（v1.18.15 加了龙纹鲤竿/归墟竿）")
     check(len(plugin.locations) == 19, f"钓点 {len(plugin.locations)} 个（v1.18.8 加了星陨湖/万水归墟/龙宫）")
     check(
         len(plugin.backpack_upgrades) == 7,
@@ -2184,6 +2184,186 @@ async def main():
     )
 
     # =====================================================================
+    print("\n[6o] 后期新竿新饵：拉线手感 + 专精大物（v1.18.15）")
+
+    late_plugin = make_plugin()
+    # --- 两档新竿解析到位（格式在描述后面多了两段：窗口加成 / 逃脱率系数）---
+    koi = late_plugin.rod_by_id.get("koi_dragon") or {}
+    void_rod = late_plugin.rod_by_id.get("void_rod") or {}
+    check(
+        koi.get("unlock_level") == 56 and koi.get("price") == 300000
+        and void_rod.get("unlock_level") == 62 and void_rod.get("price") == 1200000,
+        f"两档后期竿的门槛与价格 -> 龙纹鲤竿 {koi.get('unlock_level')} 级/"
+        f"{koi.get('price')}、归墟竿 {void_rod.get('unlock_level')} 级/{void_rod.get('price')}",
+    )
+    check(
+        abs(float(koi.get("window_bonus", 0)) - 0.15) < 1e-9
+        and abs(float(void_rod.get("escape_factor", 1)) - 0.90) < 1e-9,
+        f"拉线手感两列解析出来了 -> 窗口+{koi.get('window_bonus')}"
+        f"／逃脱率×{void_rod.get('escape_factor')}",
+    )
+    check(
+        all(
+            "window_bonus" in r and "escape_factor" in r
+            for r in late_plugin.rods
+        )
+        and all(r["window_bonus"] == 0 for r in late_plugin.rods if r["id"] == "bamboo"),
+        "老竿没有这两项加成时也补成默认值（0 / 1），显示与计算都不用判空",
+    )
+    check(
+        "拉线窗口+15%" in late_plugin._rod_pull_text(koi)
+        and "逃脱率-10%" in late_plugin._rod_pull_text(void_rod)
+        and late_plugin._rod_pull_text(late_plugin.rod_by_id["bamboo"]) == "",
+        "拉线手感的展示文案（没有加成的竿不占版面）",
+    )
+
+    # --- 手感真的作用到窗口与逃脱率上 ---
+    # ⚠️ 窗口是**随机**的（每次 _interaction_window 都重掷），所以必须在同一份 spec 上
+    # 比「应用前 / 应用后」，不能两次调用各掷一次（第一版就是这么写错的：3.0 → 6.6）
+    probe_fish = {"rarity": "传说", "diff": 0.5, "drift": 0.0}
+    base_spec = late_plugin._interaction_window(probe_fish, None)
+    koi_spec = late_plugin._apply_rod_pull_bonus(dict(base_spec), koi)
+    void_spec = late_plugin._apply_rod_pull_bonus(dict(base_spec), void_rod)
+    check(
+        abs(koi_spec["window"] / base_spec["window"] - 1.15) < 1e-9,
+        f"龙纹鲤竿把拉线窗口拉长 15% -> {base_spec['window']:.2f}s → {koi_spec['window']:.2f}s",
+    )
+    check(
+        abs(void_spec["escape"] / base_spec["escape"] - 0.90) < 1e-9,
+        f"归墟竿把逃脱率打九折 -> {base_spec['escape']:.3f} → {void_spec['escape']:.3f}",
+    )
+    check(
+        abs(void_spec["window"] / base_spec["window"] - 1.10) < 1e-9,
+        f"归墟竿的窗口也 +10% -> {void_spec['window']:.2f}s",
+    )
+    check(
+        late_plugin._apply_rod_pull_bonus(None, koi) is None
+        and abs(
+            late_plugin._apply_rod_pull_bonus(
+                {"window": 4.0, "escape": 0.5}, {"window_bonus": 0, "escape_factor": 1}
+            )["escape"] - 0.5
+        ) < 1e-9,
+        "没有互动（spec=None）/ 没有手感的竿都原样返回（不会把窗口算坏）",
+    )
+    # 连钓的一次判定也要吃到（口径与单竿一致）
+    check(
+        abs(
+            mod._multi_escape_chance(void_spec, late_plugin.cfg)
+            / mod._multi_escape_chance(base_spec, late_plugin.cfg) - 0.90
+        ) < 0.05 or mod._multi_escape_chance(void_spec, late_plugin.cfg) >= 0.94,
+        f"连钓路线也按同一份 spec 判定 -> {mod._multi_escape_chance(base_spec, late_plugin.cfg):.2f}"
+        f" → {mod._multi_escape_chance(void_spec, late_plugin.cfg):.2f}",
+    )
+
+    # --- 两档新饵：专精大物（常见/少见压低，传说/神话抬高）---
+    abyss_bait = late_plugin.baits.get("abyss_bait") or {}
+    dragon_bait = late_plugin.baits.get("dragon_bait") or {}
+    check(
+        abyss_bait.get("unlock_level") == 50 and abyss_bait.get("need_rod") == "mythic"
+        and dragon_bait.get("unlock_level") == 62
+        and dragon_bait.get("need_rod") == "void_rod",
+        f"两档新饵的门槛与前置鱼竿 -> 深渊饵 {abyss_bait.get('unlock_level')} 级"
+        f"／龙涎 {dragon_bait.get('unlock_level')} 级（需 {dragon_bait.get('need_rod')}）",
+    )
+    check(
+        abyss_bait.get("rarity_mult", {}).get("常见") == 0.5
+        and abyss_bait.get("rarity_mult", {}).get("神话") == 10.0
+        and dragon_bait.get("rarity_mult", {}).get("常见") == 0.3
+        and dragon_bait.get("rarity_mult", {}).get("神话") == 14.0,
+        "专精权重：常见被压到 0.5/0.3，神话抬到 10/14（用哪款饵第一次成为取舍）",
+    )
+    # ⚠️ 测试用的 _CFG 只手写了 8 款饵的咬钩率（为了确定性），所以这里要拿**出厂配置**看
+    _bait_default_plugin = make_plugin(load_schema_config("bait_hook_new"))
+    check(
+        mod.DEFAULTS["bait_hook_rates"].endswith("abyss_bait:1.0,dragon_bait:1.0")
+        and abs(mod._safe_number(
+            _bait_default_plugin.bait_hook_map.get("abyss_bait"), -1) - 1.0) < 1e-9
+        and abs(mod._safe_number(
+            _bait_default_plugin.bait_hook_map.get("dragon_bait"), -1) - 1.0) < 1e-9,
+        "新饵的咬钩率进了出厂配置（老配置靠合并补键，不会漏）-> "
+        f"{_bait_default_plugin.bait_hook_map.get('abyss_bait')}/"
+        f"{_bait_default_plugin.bait_hook_map.get('dragon_bait')}",
+    )
+    # 抽样：龙涎在龙宫出的神话鱼明显比秘制饵多
+    def _myth_share(bait_id: str, n: int = 4000) -> float:
+        hits = sum(
+            1 for _ in range(n)
+            if late_plugin._roll_species(bait_id, "dragon_palace", None)["rarity"] == "神话"
+        )
+        return hits / n
+
+    share_secret = _myth_share("secret")
+    share_dragon = _myth_share("dragon_bait")
+    check(
+        share_dragon > share_secret * 1.2,
+        f"龙涎比秘制饵更容易出神话 -> {share_secret:.1%} → {share_dragon:.1%}",
+    )
+    # 但代价是常见鱼变少（否则它就成了纯上位替代，没有取舍）
+    def _common_share(bait_id: str, n: int = 4000) -> float:
+        hits = sum(
+            1 for _ in range(n)
+            if late_plugin._roll_species(bait_id, "dragon_palace", None)["rarity"] == "常见"
+        )
+        return hits / n
+
+    check(
+        _common_share("dragon_bait") < _common_share("secret"),
+        f"代价：常见鱼更少了 -> {_common_share('secret'):.1%} → {_common_share('dragon_bait'):.1%}",
+    )
+
+    # --- 挂机封顶提到 10 万：贵鱼的缸才吃得到（不再是 5000 一刀切）---
+    pond_plugin = make_plugin()
+    pond_player = mod._default_player("89080")
+    _big_fish = mod._new_instance("kun", 1.0, value_override=300000)
+    _now = int(time.time())
+    # ⚠️ 收益按**每条鱼自己在缸里的时间**算（v1.18.0 的防刷改动）：
+    # 只写 pond_last_ts 是不够的，实例上必须有 tank_since，否则它算「刚入缸」= 0 收益
+    _big_fish["tank_since"] = _now - 12 * 3600
+    pond_player["aquarium"] = [_big_fish]
+    pond_player["pond_last_ts"] = _now - 12 * 3600
+    pond_player["gold"] = 0
+    info = mod._pond_income(pond_player, pond_plugin.cfg, _now)
+    # 0.02/h × 30 万馆藏 × 12 小时 = 72000：旧封顶 5000 会把它砍到 5000（14 倍差距）
+    check(
+        info["income"] == 72000,
+        f"30 万馆藏挂满 12 小时 -> {info['income']}（旧封顶 5000 只给 5000）",
+    )
+    check(
+        pond_plugin.cfg["pond_income_cap_coins"] == 100000,
+        f"封顶值 -> {pond_plugin.cfg['pond_income_cap_coins']}",
+    )
+    # 更贵的馆藏才吃得到封顶
+    _huge_fish = mod._new_instance("kun", 1.0, value_override=600000)
+    _huge_fish["tank_since"] = _now - 12 * 3600
+    pond_player["aquarium"] = [_huge_fish]
+    info_huge = mod._pond_income(pond_player, pond_plugin.cfg, _now)
+    check(
+        info_huge["income"] == 100000,
+        f"60 万馆藏挂满 12 小时吃到封顶 -> {info_huge['income']}",
+    )
+    # 老配置里那档 5000 会被官方修正推到 10 万（只有站长没动过时才推）
+    check(
+        mod.DEFAULTS_VALUE_FIXES.get("pond_income_cap_coins") == ((5000, 100000),),
+        "官方改过的挂机封顶登记在 DEFAULTS_VALUE_FIXES（老配置自动升级，站长改过的不动）",
+    )
+    _fix_plugin = make_plugin()
+    _fix_plugin.config["pond_income_cap_coins"] = 5000
+    _fix_plugin.config["config_fingerprint"] = "旧指纹"
+    await _fix_plugin._sync_defaults()
+    check(
+        int(_fix_plugin.config["pond_income_cap_coins"]) == 100000,
+        f"老配置里那个 5000 会被推到 10 万 -> {_fix_plugin.config['pond_income_cap_coins']}",
+    )
+    _fix_plugin2 = make_plugin()
+    _fix_plugin2.config["pond_income_cap_coins"] = 7777
+    _fix_plugin2.config["config_fingerprint"] = "旧指纹"
+    await _fix_plugin2._sync_defaults()
+    check(
+        int(_fix_plugin2.config["pond_income_cap_coins"]) == 7777,
+        f"站长自己填过的封顶值一个字不动 -> {_fix_plugin2.config['pond_income_cap_coins']}",
+    )
+
+    # =====================================================================
     print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
 
     real_curve = dict(mod.LEVEL_CURVE)
@@ -2419,10 +2599,12 @@ async def main():
         "tank_seconds" not in p["inventory"][0],
         "实例里不再有累计展出时长字段（只留 tank_since 给收益计时用）",
     )
-    # ② 补偿措施：挂机收益提高了（每小时 1.5% -> 2%，单次封顶 3000 -> 5000）
+    # ② 补偿措施：挂机收益提高了
+    #    （v1.18.0 每小时 1.5% -> 2%、封顶 3000 -> 5000；v1.18.15 封顶提到 10 万，
+    #     因为 5000 在 30 级以后等于零：龙宫一竿就 3000+ 金）
     check(
         abs(float(plugin4.cfg["pond_income_per_hour"]) - 0.02) < 1e-9
-        and int(plugin4.cfg["pond_income_cap_coins"]) == 5000,
+        and int(plugin4.cfg["pond_income_cap_coins"]) == 100000,
         f"挂机收益已提高：{plugin4.cfg['pond_income_per_hour']}/h、封顶 "
         f"{plugin4.cfg['pond_income_cap_coins']}",
     )
@@ -6203,13 +6385,13 @@ async def main():
     _cfg3["content_auto_merge"] = True
     _plugin3b = make_plugin(dict(_cfg3))
     check(
-        len(_plugin3b.rods) == 6,
+        len(_plugin3b.rods) == len(mod.DEFAULTS["rod_defs"]),
         f"开着增量合并时官方鱼竿会被补回来（{len(_plugin3b.rods)} 种，站长自写的仍在）",
     )
     make_plugin()
     _fish_default = len(str(mod.DEFAULTS["fish_defs"]).splitlines())
     check(
-        len(mod.FISH_POOL) == _fish_default and len(mod.RODS) == 6,
+        len(mod.FISH_POOL) == _fish_default and len(mod.RODS) == 8,
         f"复位后鱼池/鱼竿恢复默认（{len(mod.FISH_POOL)} 条鱼 / {len(mod.RODS)} 种竿）",
     )
 

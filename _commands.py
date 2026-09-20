@@ -736,7 +736,8 @@ class CommandsMixin:
                 lines = [
                     f"🎣 买到 {rod['emoji']}{rod['name']}！已自动装备",
                     f"　价值+{rod['value_bonus']:.0%}　手气{_luck_stars(rod['luck_bonus'], 0.2)}"
-                    f"　💰 {_fmt_gold(player['gold'])}",
+                    + self._rod_pull_text(rod)
+                    + f"　💰 {_fmt_gold(player['gold'])}",
                 ]
                 saved = await self._save_with_notices(player, lines)
                 async for _r in self._say_msg(event, "rod.bought", event.plain_result("\n".join(lines))):
@@ -775,6 +776,7 @@ class CommandsMixin:
                 lines.append(
                     f"{here}{rod['emoji']}{rod['name']}　{tag}　"
                     f"价值+{rod['value_bonus']:.0%}　手气{_luck_stars(rod['luck_bonus'], 0.2)}"
+                    + self._rod_pull_text(rod)
                 )
             if hidden:
                 lines.append("🔒 还有更多鱼竿，等级更高之后会陆续上架")

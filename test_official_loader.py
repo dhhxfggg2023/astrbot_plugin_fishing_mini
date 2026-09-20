@@ -1,4 +1,4 @@
-"""使用 AstrBot 自身的加载器校验插件（不属于插件运行时代码，可随时删除）。
+﻿"""使用 AstrBot 自身的加载器校验插件（不属于插件运行时代码，可随时删除）。
 
 本脚本直接调用 AstrBot 内部的静态方法，验证：
 1. metadata.yaml 能通过 AstrBot 的官方校验（作者必须是字符串等）
@@ -125,7 +125,7 @@ try:
 
     # 每个配置项都必须能被代码正确解析
     plugin = mod.FishingPlugin(context=FakeCtx(), config=dict(cfg))
-    check(len(plugin.baits) == 8, f"鱼饵解析 {len(plugin.baits)} 种")
+    check(len(plugin.baits) == 10, f"鱼饵解析 {len(plugin.baits)} 种（v1.18.15 加了深渊饵/龙涎）")
     check(len(plugin.items) == 7, f"道具解析 {len(plugin.items)} 种")
     check(
         len(plugin.aquarium_slots) == 6,

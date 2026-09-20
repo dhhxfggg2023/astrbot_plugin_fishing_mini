@@ -565,6 +565,23 @@ class ViewsMixin:
         lines.append("💡 /钓鱼 道具 买 <名字> [数量]　（也可以直接 /钓鱼 买 <名字>）")
         return "\n".join(lines)
 
+    def _rod_pull_text(self, rod: dict[str, Any]) -> str:
+        """鱼竿的「拉线手感」一行尾巴（没有加成时返回空串）。
+
+        高阶竿（龙纹鲤竿 / 归墟竿）卖的是手感而不是纯数值，得让玩家看得见：
+        ``　拉线窗口+15%`` / ``　不易脱钩``。
+        """
+        parts: list[str] = []
+        window_bonus = _safe_number(rod.get("window_bonus"), 0.0)
+        escape_factor = _safe_number(rod.get("escape_factor"), 1.0)
+        if window_bonus:
+            parts.append(f"拉线窗口+{window_bonus:.0%}")
+        if escape_factor < 1.0:
+            parts.append(f"逃脱率-{1.0 - escape_factor:.0%}")
+        elif escape_factor > 1.0:
+            parts.append(f"逃脱率+{escape_factor - 1.0:.0%}")
+        return ("　" + "　".join(parts)) if parts else ""
+
     def _help_pages(self) -> list[tuple[str, list[str]]]:
         """帮助分页内容：(标题, 行列表)。每页都尽量短，避免刷屏。"""
         cfg = self.cfg
@@ -595,6 +612,7 @@ class ViewsMixin:
         rod_lines = [
             f"　{rod['emoji']}{rod['name']}　{_fmt_gold(rod['price'])}金"
             f"　价值+{rod['value_bonus']:.0%}　手气{_luck_stars(rod['luck_bonus'], 0.2)}"
+            + self._rod_pull_text(rod)
             + (f"　需{rod['unlock_level']}级" if rod.get("unlock_level", 1) > 1 else "")
             for rod in sorted(self.rods, key=lambda r: _safe_int(r.get("price"), 0, 0))
         ]

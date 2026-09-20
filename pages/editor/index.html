@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8" />
@@ -1409,7 +1409,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     rods: {
       configKey: "rod_defs",
       configType: "list",
-      /* id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述 */
+      /* id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述[|拉线窗口加成|逃脱率系数] */
       parse: function (line) {
         var p = splitLine(line);
         if (p.length < 6 || !p[0] || !p[1]) return null;
@@ -1418,13 +1418,20 @@ table.grid td.actions .btn { vertical-align: middle; }
           id: p[0], name: p[1], emoji: text(p[2]), price: toNum(p[3]),
           value_bonus: toNum(p[4]), luck_bonus: toNum(p[5]),
           unlock_level: hasLevel ? toNum(p[6]) : 1,
-          desc: hasLevel ? text(p[7]) : text(p[6])
+          desc: hasLevel ? text(p[7]) : text(p[6]),
+          /* 后两段是 v1.18.15 的「拉线手感」：省略 = 没有加成（老配置照样读） */
+          window_bonus: p.length > 8 ? toNum(p[8]) : 0,
+          escape_factor: p.length > 9 ? toNum(p[9]) : 1
         };
       },
       serialize: function (r) {
-        return [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.price, 0)),
+        var base = [cell(r.id), cell(r.name), cell(r.emoji), cell(num(r.price, 0)),
                 cell(num(r.value_bonus, 0)), cell(num(r.luck_bonus, 0)),
-                cell(Math.max(1, num(r.unlock_level, 1))), cell(r.desc)].join(SEP);
+                cell(Math.max(1, num(r.unlock_level, 1))), cell(r.desc)];
+        var wb = num(r.window_bonus, 0), ef = num(r.escape_factor, 1);
+        /* 只在真的填了才补那两段，免得把老行写成 `…||0|1` 这种噪音 */
+        if (wb !== 0 || ef !== 1) base.push(cell(num(wb, 0)), cell(num(ef, 1)));
+        return base.join(SEP);
       }
     },
     baits: {
@@ -2181,12 +2188,14 @@ table.grid td.actions .btn { vertical-align: middle; }
         { id: "big_fat_fish", name: "大肥鱼", rarity: "稀有", value: 120,   dist: "*:0.15",                              flavor: "深海里最肥的一条，哪儿都可能出现" }
       ],
       rods: [
-        { id: "bamboo",    emoji: "🎋", name: "竹竿",   price: 0,     value_bonus: 0.00, luck_bonus: 0.00, unlock_level: 1,  desc: "村口杂货铺送的，能用" },
-        { id: "carbon",    emoji: "🎣", name: "碳素竿", price: 400,   value_bonus: 0.05, luck_bonus: 0.03, unlock_level: 4,  desc: "轻巧顺手，新手进阶首选" },
-        { id: "stream",    emoji: "🪝", name: "溪流竿", price: 1600,  value_bonus: 0.09, luck_bonus: 0.05, unlock_level: 9,  desc: "韧性好，适合溪流与湖泊" },
-        { id: "dragon",    emoji: "🐉", name: "龙纹竿", price: 5400,  value_bonus: 0.17, luck_bonus: 0.11, unlock_level: 16, desc: "竿身刻龙，专治大鱼" },
-        { id: "starlight", emoji: "✨", name: "星辉竿", price: 11000, value_bonus: 0.23, luck_bonus: 0.16, unlock_level: 26, desc: "夜里会泛微光，深海也用得上" },
-        { id: "mythic",    emoji: "🌈", name: "神话竿", price: 22000, value_bonus: 0.30, luck_bonus: 0.22, unlock_level: 38, desc: "传说钓具，据说能引来神话之鱼" }
+        { id: "bamboo",    emoji: "🎋", name: "竹竿",   price: 0,     value_bonus: 0.00, luck_bonus: 0.00, unlock_level: 1,  desc: "村口杂货铺送的，能用", window_bonus: 0, escape_factor: 1 },
+        { id: "carbon",    emoji: "🎣", name: "碳素竿", price: 400,   value_bonus: 0.05, luck_bonus: 0.03, unlock_level: 4,  desc: "轻巧顺手，新手进阶首选", window_bonus: 0, escape_factor: 1 },
+        { id: "stream",    emoji: "🪝", name: "溪流竿", price: 1600,  value_bonus: 0.09, luck_bonus: 0.05, unlock_level: 9,  desc: "韧性好，适合溪流与湖泊", window_bonus: 0, escape_factor: 1 },
+        { id: "dragon",    emoji: "🐉", name: "龙纹竿", price: 5400,  value_bonus: 0.17, luck_bonus: 0.11, unlock_level: 16, desc: "竿身刻龙，专治大鱼", window_bonus: 0, escape_factor: 1 },
+        { id: "starlight", emoji: "✨", name: "星辉竿", price: 11000, value_bonus: 0.23, luck_bonus: 0.16, unlock_level: 26, desc: "夜里会泛微光，深海也用得上", window_bonus: 0, escape_factor: 1 },
+        { id: "mythic",    emoji: "🌈", name: "神话竿", price: 22000, value_bonus: 0.30, luck_bonus: 0.22, unlock_level: 38, desc: "传说钓具，据说能引来神话之鱼", window_bonus: 0, escape_factor: 1 },
+        { id: "koi_dragon", emoji: "🐲", name: "龙纹鲤竿", price: 300000, value_bonus: 0.33, luck_bonus: 0.26, unlock_level: 56, desc: "竿身缠着一条活鲤纹，握上去就知道什么叫稳", window_bonus: 0.15, escape_factor: 1.0 },
+        { id: "void_rod",  emoji: "🕳️", name: "归墟竿", price: 1200000, value_bonus: 0.36, luck_bonus: 0.30, unlock_level: 62, desc: "竿梢细得几乎看不见，鱼线却再也挣不断", window_bonus: 0.10, escape_factor: 0.90 }
       ],
       baits: [
         { id: "none",      emoji: "🪝", name: "空钩",     price: 0,  bundle: 0,  luck: 0.00, unlock_level: 1,  required_rod: "",          desc: "什么也不挂，全凭本事（免费）" },
@@ -2196,7 +2205,9 @@ table.grid td.actions .btn { vertical-align: middle; }
         { id: "corn",      emoji: "🌽", name: "玉米粒",   price: 6,  bundle: 5,  luck: 0.30, unlock_level: 9,  required_rod: "stream",    desc: "素饵之王，草鱼克星" },
         { id: "shrimp",    emoji: "🦐", name: "虾饵",     price: 12, bundle: 3,  luck: 0.40, unlock_level: 15, required_rod: "dragon",    desc: "肉食鱼最爱，稀有度明显上升" },
         { id: "livebait",  emoji: "🐟", name: "活饵小鱼", price: 22, bundle: 2,  luck: 0.52, unlock_level: 22, required_rod: "starlight", desc: "活蹦乱跳，专勾大鱼" },
-        { id: "secret",    emoji: "🍯", name: "秘制饵",   price: 45, bundle: 1,  luck: 0.68, unlock_level: 34, required_rod: "mythic",    desc: "祖传配方，闻着就不一样" }
+        { id: "secret",    emoji: "🍯", name: "秘制饵",   price: 45, bundle: 1,  luck: 0.68, unlock_level: 34, required_rod: "mythic",    desc: "祖传配方，闻着就不一样" },
+        { id: "abyss_bait", emoji: "🕳️", name: "深渊饵",  price: 120, bundle: 1, luck: 0.72, unlock_level: 50, required_rod: "mythic",    desc: "常见鱼不爱吃，专招大物" },
+        { id: "dragon_bait", emoji: "🐉", name: "龙涎",   price: 300, bundle: 1, luck: 0.78, unlock_level: 62, required_rod: "void_rod",  desc: "寻常鱼闻了不敢靠近，神话鱼的偏爱" }
       ],
       items: [
         { id: "feed_basic",   emoji: "🌾", name: "普通饲料", price: 20,  effects: "meat=2;spirit=1",                          desc: "喂鱼：肉+2、灵+1（永久）" },
@@ -2492,7 +2503,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       hint: "价值加成直接决定每竿收益；解锁等级控制上架",
       keyField: "id",
       filterKey: "unlock_level",
-      filterOptions: ["1", "4", "9", "16", "26", "38"],
+      filterOptions: ["1", "4", "9", "16", "26", "38", "56", "62"],
       filterLabel: "解锁等级",
       sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueAsc", "按价格（低→高）"], ["valueDesc", "按价格（高→低）"]],
       columns: [
@@ -2503,10 +2514,12 @@ table.grid td.actions .btn { vertical-align: middle; }
         { key: "value_bonus",  label: "价值加成", type: "number", w: "104px", num: true, step: 0.01, pct: true },
         { key: "luck_bonus",   label: "幸运加成", type: "number", w: "104px", num: true, step: 0.01, pct: true },
         { key: "unlock_level", label: "解锁等级", type: "number", w: "92px", num: true, step: 1 },
-        { key: "desc",         label: "说明",     type: "text" }
+        { key: "desc",         label: "说明",     type: "text" },
+        { key: "window_bonus", label: "拉线窗口", type: "number", w: "96px", num: true, step: 0.05, pct: true },
+        { key: "escape_factor", label: "逃脱率×", type: "number", w: "96px", num: true, step: 0.05 }
       ],
       makeRow: function () {
-        return { id: "new_rod_" + rand(100, 999), emoji: "🎣", name: "新鱼竿", price: 1000, value_bonus: 0.1, luck_bonus: 0.05, unlock_level: 1, desc: "" };
+        return { id: "new_rod_" + rand(100, 999), emoji: "🎣", name: "新鱼竿", price: 1000, value_bonus: 0.1, luck_bonus: 0.05, unlock_level: 1, desc: "", window_bonus: 0, escape_factor: 1 };
       }
     },
     {

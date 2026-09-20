@@ -317,13 +317,20 @@ DEFAULTS: dict[str, Any] = {
     # 隐藏生物（大肥鱼）能不能被点单；默认能 = v1.14.0 之前的行为
     "order_include_hidden": True,
     # 鱼竿：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级）
+    # 后两段（可选）是**拉线手感**：拉线窗口加成 / 逃脱率系数（见 _calc._parse_rod_defs）
+    # v1.18.15 加了两档后期竿：不堆数值，改卖「手感 + 收金币」——
+    # 价值加成只 +0.03，但窗口更长、更不容易跑，让拉线在后期有分量。
     "rod_defs": [
         "bamboo|竹竿|🎋|0|0.00|0.00|1|村口杂货铺送的，能用",
         "carbon|碳素竿|🎣|400|0.05|0.03|4|轻巧顺手，新手进阶首选",
         "stream|溪流竿|🪝|1600|0.09|0.05|9|韧性好，适合溪流与湖泊",
         "dragon|龙纹竿|🐉|5400|0.17|0.11|16|竿身刻龙，专治大鱼",
         "starlight|星辉竿|✨|11000|0.23|0.16|26|夜里会泛微光，深海也用得上",
-        "mythic|神话竿|🌈|22000|0.30|0.22|38|传说钓具，据说能引来神话之鱼"
+        "mythic|神话竿|🌈|22000|0.30|0.22|38|传说钓具，据说能引来神话之鱼",
+        "koi_dragon|龙纹鲤竿|🐲|300000|0.33|0.26|56|"
+        "竿身缠着一条活鲤纹，握上去就知道什么叫稳|0.15|1.00",
+        "void_rod|归墟竿|🕳️|1200000|0.36|0.30|62|"
+        "竿梢细得几乎看不见，鱼线却再也挣不断|0.10|0.90",
     ],
     # 钓点定义由 LOCATIONS 生成（见文件下方 _location_def_lines()），此处留空占位
     "location_defs": [],
@@ -356,7 +363,7 @@ DEFAULTS: dict[str, Any] = {
     "location_codex_gate": 0.8,
     # 空竿是否也消耗鱼饵：false = 空竿不扣饵（默认）
     "consume_bait_on_empty": False,
-    "bait_hook_rates": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0",
+    "bait_hook_rates": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0",
     "content_auto_merge": True,     # 旧配置自动合并新版内容（钓点/鱼饵/鱼竿/道具）
     "button_mode": "自动",          # QQ 官方按钮发送形态：自动/markdown/text/关闭
     "data_status": "",              # 插件回写的状态面板（人看）
@@ -378,10 +385,14 @@ DEFAULTS: dict[str, Any] = {
     "codex_bonus_per_rarity": [0.03, 0.05, 0.08, 0.12, 0.2],
     # 挂机收益（水族馆的核心玩法）：每条鱼按**各自在缸里的时间**产出（v1.18.0）。
     # 原来的「取出/卖出 ×1.2 展出加成」已经去掉，补偿就是把这几个数值提高：
-    #   每小时 1.5% -> 2%、单次封顶 3000 -> 5000 金币
+    #   每小时 1.5% -> 2%
+    # v1.18.15：单次封顶 5000 -> 10 万。5000 那个数字在 30 级以后等于零
+    #（龙宫一竿就 3000+ 金，攒满 12 小时才 5000），整套养鱼玩法直接失去意义；
+    # 现在改成「馆藏越值钱，挂机越多」，同时 10 万/次 ≈ 终局 30 竿，只是补充不是捷径
+    #（站长要的是「越往后越慢」，所以仍然保留封顶，不让挂机替代主动钓鱼）。
     "pond_income_per_hour": 0.02,
     "pond_income_cap_hours": 12,
-    "pond_income_cap_coins": 5000,
+    "pond_income_cap_coins": 100000,
     # 水族馆装饰：同时可摆几个、每个耐久多少小时（到点自动失效）
     "decoration_slots": 3,
     "decoration_hours": 72,
@@ -404,6 +415,13 @@ DEFAULTS: dict[str, Any] = {
         "shrimp|虾饵|🦐|12|3|0.40|1,1.8,2.6,3.6,4.6|15|dragon|肉食鱼最爱，稀有度明显上升",
         "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|22|starlight|活蹦乱跳，专勾大鱼",
         "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|34|mythic|祖传配方，闻着就不一样",
+        # v1.18.15 的两款后期饵：不拼「整体更好」，改拼**专精**——
+        # 常见/少见的权重往下压，换传说/神话成倍往上翻，
+        # 于是「用哪款饵」第一次真的变成取舍（想刷图鉴/卖钱就别用它）。
+        "abyss_bait|深渊饵|🕳️|120|1|0.72|0.5,1.0,3.0,7.0,10.0|50|mythic|"
+        "深海里捞上来的东西，腥得吓人，专招大物",
+        "dragon_bait|龙涎|🐉|300|1|0.78|0.3,0.8,2.0,6.0,14.0|62|void_rod|"
+        "龙宫檐下凝的一滴，寻常鱼闻了不敢靠近",
     ],
     # 道具：id|名称|emoji|单价|说明|效果（效果键见 _parse_effects）
     #   meat/spirit/sheen/value_up = 喂鱼（一次性，永久加成）
@@ -574,6 +592,9 @@ DEFAULTS_VALUE_FIXES: dict[str, tuple[tuple[Any, Any], ...]] = {
             "凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢,精品:1.35-1.8:💎,珍品:1.8-2.5:🏆,绝品:2.5-4.0:👑,神品:4.0-6.0:🔱",
         ),
     ),
+    # v1.18.15：挂机单次封顶 5000 -> 10 万（5000 在 30 级以后等于零，整套养鱼玩法失去意义）。
+    # 只在站长没动过这个值时替换 —— 他自己填过别的数就照他的来。
+    "pond_income_cap_coins": ((5000, 100000),),
 }
 
 
@@ -1823,22 +1844,36 @@ for _loc_id, _pool in ROSTER_WEIGHTS.items():
 RODS: list[dict[str, Any]] = [
     {"id": "bamboo", "name": "竹竿", "emoji": "🎋", "price": 0,
      "value_bonus": 0.00, "luck_bonus": 0.00, "unlock_level": 1,
+     "window_bonus": 0.0, "escape_factor": 1.0,
      "desc": "村口杂货铺送的，能用"},
     {"id": "carbon", "name": "碳素竿", "emoji": "🎣", "price": 400,
      "value_bonus": 0.05, "luck_bonus": 0.03, "unlock_level": 4,
+     "window_bonus": 0.0, "escape_factor": 1.0,
      "desc": "轻巧顺手，新手进阶首选"},
     {"id": "stream", "name": "溪流竿", "emoji": "🪝", "price": 1600,
      "value_bonus": 0.09, "luck_bonus": 0.05, "unlock_level": 9,
+     "window_bonus": 0.0, "escape_factor": 1.0,
      "desc": "韧性好，适合溪流与湖泊"},
     {"id": "dragon", "name": "龙纹竿", "emoji": "🐉", "price": 5400,
      "value_bonus": 0.17, "luck_bonus": 0.11, "unlock_level": 16,
+     "window_bonus": 0.0, "escape_factor": 1.0,
      "desc": "竿身刻龙，专治大鱼"},
     {"id": "starlight", "name": "星辉竿", "emoji": "✨", "price": 11000,
      "value_bonus": 0.23, "luck_bonus": 0.16, "unlock_level": 26,
+     "window_bonus": 0.0, "escape_factor": 1.0,
      "desc": "夜里会泛微光，深海也用得上"},
     {"id": "mythic", "name": "神话竿", "emoji": "🌈", "price": 22000,
      "value_bonus": 0.30, "luck_bonus": 0.22, "unlock_level": 38,
+     "window_bonus": 0.0, "escape_factor": 1.0,
      "desc": "传说钓具，据说能引来神话之鱼"},
+    {"id": "koi_dragon", "name": "龙纹鲤竿", "emoji": "🐲", "price": 300000,
+     "value_bonus": 0.33, "luck_bonus": 0.26, "unlock_level": 56,
+     "window_bonus": 0.15, "escape_factor": 1.0,
+     "desc": "竿身缠着一条活鲤纹，握上去就知道什么叫稳"},
+    {"id": "void_rod", "name": "归墟竿", "emoji": "🕳️", "price": 1200000,
+     "value_bonus": 0.36, "luck_bonus": 0.30, "unlock_level": 62,
+     "window_bonus": 0.10, "escape_factor": 0.90,
+     "desc": "竿梢细得几乎看不见，鱼线却再也挣不断"},
 ]
 ROD_BY_ID: dict[str, dict[str, Any]] = {rod["id"]: rod for rod in RODS}
 DEFAULT_ROD = "bamboo"

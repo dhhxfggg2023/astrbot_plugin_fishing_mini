@@ -733,6 +733,11 @@ def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
     新格式（8 段）：``id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述``
     旧格式（7 段）：``id|名称|emoji|价格|价值加成|幸运加成|描述`` —— 没有解锁等级，
     一律视为 1 级（向后兼容：老配置不会因为格式不同而把鱼竿锁死）。
+
+    v1.18.15 起可再加两段**拉线手感**（高阶竿专用，省略 = 没有加成）：
+        ``…|描述|拉线窗口加成|逃脱率系数``
+        拉线窗口加成：0.15 = 窗口变长 15%（更好拉）
+        逃脱率系数  ：0.90 = 逃脱率打九折（不容易跑）
     """
     rods: list[dict[str, Any]] = []
     entries = raw if isinstance(raw, list) else DEFAULTS["rod_defs"]
@@ -758,13 +763,20 @@ def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
                 "luck_bonus": _clamp(_safe_number(parts[5], 0.0), 0.0, 2.0),
                 "unlock_level": unlock,
                 "desc": desc,
+                # 拉线手感（可选列）：窗口加成 0~2、逃脱率系数 0.2~1（>1 = 更容易跑）
+                "window_bonus": _clamp(_safe_number(parts[8], 0.0), 0.0, 2.0)
+                if len(parts) > 8
+                else 0.0,
+                "escape_factor": _clamp(_safe_number(parts[9], 1.0), 0.2, 1.0)
+                if len(parts) > 9
+                else 1.0,
             }
         )
     if not rods:
         rods = [
             {"id": "bamboo", "name": "竹竿", "emoji": "🎋", "price": 0,
              "value_bonus": 0.0, "luck_bonus": 0.0, "unlock_level": 1,
-             "desc": "备用的旧竿"}
+             "window_bonus": 0.0, "escape_factor": 1.0, "desc": "备用的旧竿"}
         ]
     # 确保有免费的入门竿
     if not any(r["price"] <= 0 for r in rods):
@@ -772,7 +784,7 @@ def _parse_rod_defs(raw: Any) -> list[dict[str, Any]]:
             0,
             {"id": "bamboo", "name": "竹竿", "emoji": "🎋", "price": 0,
              "value_bonus": 0.0, "luck_bonus": 0.0, "unlock_level": 1,
-             "desc": "备用的旧竿"},
+             "window_bonus": 0.0, "escape_factor": 1.0, "desc": "备用的旧竿"},
         )
     return rods
 
