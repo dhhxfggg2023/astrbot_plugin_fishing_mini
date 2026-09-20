@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import random
+import sys
 import time
 import uuid
 from datetime import datetime, timezone
@@ -117,19 +118,72 @@ def _inventory_value(fish_list: list[dict[str, Any]]) -> int:
     return sum(_instance_value(x) for x in fish_list)
 
 def _tank_display_seconds(instance: dict[str, Any], now: int | None = None) -> int:
-    """这条鱼**累计在缸里展出了多久**（秒）。纯函数，不改数据。
+    """这条鱼**这一轮**在缸里待了多久（秒）。纯函数，不改数据。
 
-    鱼放进缸里时 ``tank_since`` 记时间戳、拿出来时结清进 ``tank_seconds``，
-    所以「放进去一秒又拿出来」拿不到加成（v1.16.0 堵的就是这个）。
-    进过缸就至少记 1 秒：既让「放过的鱼」和「老存档里没这两个字段的鱼」区分开，
-    也顺便防系统时间被往回拨。
+    ``tank_since`` = 放进缸的时刻（0 = 没有记录：老存档、或手改进去的鱼）。
     """
     now = int(now if now is not None else time.time())
-    total = _safe_int(instance.get("tank_seconds"), 0, 0)
     since = _safe_int(instance.get("tank_since"), 0, 0)
-    if since > 0:
-        total += max(1, now - since)
-    return max(0, total)
+    if since <= 0:
+        return 0
+    return max(0, now - since)
+
+def _pond_income(
+    player: dict[str, Any], cfg: dict[str, Any], now: int | None = None
+) -> dict[str, Any]:
+    """鱼塘（水族馆）挂机收益：**每条鱼按各自待在缸里的时间**产出。
+
+    ⚠️ 这里修的是「空缸攒时间、领之前把鱼塞进去」那个漏洞（v1.17.0）：
+    以前是「**当前**馆藏估值 × 距上次领取小时数」，所以可以让缸空着攒满 12 小时，
+    领之前再放一条贵鱼进去按满额结算（那条鱼其实只待了一瞬）。
+    现在每条鱼只算 ``max(它进缸的时刻, 上次结算时刻) → 现在`` 这一段，
+    空缸期间谁也不产出；一直养在缸里的鱼照旧拿满（和升级前一样）。
+
+    返回 ``{income, hours, value, counted, pending}``：
+    ``hours`` = 计入的最大时长（文案用）、``value`` = 当前馆藏估值、
+    ``counted`` = 真产出过的鱼数、``pending`` = 刚放进去还没产出的鱼数。
+    """
+    now = int(now if now is not None else time.time())
+    last = _safe_int(player.get("pond_last_ts"), 0, 0)
+    if last <= 0:
+        last = now
+    cap_hours = max(0.0, _safe_number(cfg.get("pond_income_cap_hours"), 12.0))
+    rate = max(0.0, _safe_number(cfg.get("pond_income_per_hour"), 0.02))
+    cap_coins = _safe_int(cfg.get("pond_income_cap_coins"), 5000, 0)
+    bonus = 1.0 + _decoration_bonus(player, now=now)
+
+    raw = 0.0
+    hours = 0.0
+    total = 0
+    counted = 0
+    tank = [x for x in (player.get("aquarium") or []) if isinstance(x, dict)]
+    for instance in tank:
+        value = _instance_value(instance)
+        total += value
+        since = _safe_int(instance.get("tank_since"), 0, 0)
+        if since <= 0:
+            # ⚠️ 没有入缸时间 = **不产出**。故意不留「没计时就放行」的兜底：
+            # 那种兜底会让任何绕过「放入」直接写进缸里的鱼白拿收益（单测里撞见过）。
+            # 老存档里已经在缸里的鱼，由读档时的 `_migrate_tank_clocks()` 一次性补时间。
+            continue
+        start = max(since, last)
+        span = now - start
+        if span <= 0 or value <= 0 or rate <= 0:
+            continue
+        used = min(span / 3600.0, cap_hours)
+        raw += value * rate * used
+        hours = max(hours, used)
+        counted += 1
+    income = int(raw * bonus)
+    if cap_coins > 0:          # 0 = 不封顶（给站长留的自由度）
+        income = min(income, cap_coins)
+    return {
+        "income": income,
+        "hours": hours,
+        "value": total,
+        "counted": counted,
+        "pending": len(tank) - counted,
+    }
 
 def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
     """解析鱼饵定义。返回 {bait_id: {...}}，一定包含 none（空钩）。
@@ -200,8 +254,8 @@ def _parse_bait_defs(raw: Any) -> dict[str, dict[str, Any]]:
     baits["none"]["need_rod"] = ""
     return baits
 
-#: 合法的效果键（v1.13.0 起由 ``_effects.EFFECTS`` 注册表在启动时同步过来；
-#: 这里保留历史白名单做默认值，单独导入 _calc 时行为逐字不变）
+#: 合法效果键的**兜底**默认值（单独导入 _calc 时用它，行为与历史版本逐字一致）。
+#: 真正生效的列表来自 `_effects.EFFECTS` 注册表 —— 见下面的 `_effect_allowed()`。
 EFFECT_ALLOWED: tuple[str, ...] = (
     "meat", "spirit", "sheen", "value_up",
     "decorate", "feed_bonus", "buff_quality", "heal",
@@ -210,18 +264,37 @@ EFFECT_ALLOWED: tuple[str, ...] = (
 EFFECT_ALIASES_EXT: dict[str, str] = {"quality_up": "buff_quality"}
 
 
+def _effect_allowed() -> tuple[str, ...]:
+    """当前合法的效果键：**优先直接问注册表**，拿不到才用本地兜底。
+
+    ⚠️ 为什么不在模块级缓存一份：main.py 会把 ``_calc`` 的全局复制进自己的命名空间
+    （方便调用点少写前缀），末尾的 ``_expose_globals_all()`` 又把它**推回** ``_calc``
+    —— 于是 `_effects.sync_to_calc()` 刚写好的白名单会被那份**旧副本覆盖**，
+    扩展注册的效果键（和新加的内置键）在真实运行时全都解析不出来，
+    而单测因为直接调 sync 反而看不到（v1.13.0 埋的坑，v1.17.0 才发现）。
+    直接读注册表就没有这个顺序问题了。
+    """
+    module = sys.modules.get("astrbot_fishing_effects")
+    table = getattr(module, "EFFECTS", None) if module is not None else None
+    if isinstance(table, dict) and table:
+        return tuple(table)
+    return EFFECT_ALLOWED
+
+
 def _parse_effects(text: str) -> dict[str, float]:
     """解析道具效果串：``meat=2;spirit=1;value_up=600``。
 
     支持的效果键分三类：
-    * 喂鱼（一次性、永久加成）：``meat`` / ``spirit`` / ``sheen`` / ``value_up``
+    * 养成（一次性、永久、作用在这条鱼身上）：``meat`` / ``spirit`` / ``sheen`` /
+      ``value_up`` / ``feed_bonus`` / ``quality_reroll``（重掷个体品质）
     * 水族馆装饰（耐久内持续加成挂机产出）：``decorate``
-    * 其他：``feed_bonus``（提升这条鱼的投喂上限）、``buff_quality``（钓手手气 buff）、``heal``
+    * 其他：``buff_quality``（钓手手气 buff）、``heal``（预留），以及扩展注册的键
 
+    合法的键以 ``_effects.EFFECTS`` 注册表为准（见 ``_effect_allowed``）。
     ``quality_up`` 是旧版写法，按 ``buff_quality`` 处理（老配置照常可用）。
     """
     effects: dict[str, float] = {}
-    allowed = EFFECT_ALLOWED
+    allowed = _effect_allowed()
     aliases = EFFECT_ALIASES_EXT
     for token in (text or "").split(";"):
         token = token.strip()
@@ -993,12 +1066,9 @@ def _new_instance(
         "feed_bonus": 0,      # 育灵水带来的额外投喂次数
         "live_bonus": 0,
         "locked": False,
-        # 水族馆展出加成是否已领取（每条鱼终生只能领一次，防止无限叠加）
-        "pond_claimed": False,
-        # 水族馆展出时间：tank_since = 这次放进缸的时刻（0 = 不在缸里），
-        # tank_seconds = 历次在缸时长累加。取出加成要「展出够久」才给（v1.16.0）
+        # 水族馆：这条鱼是什么时候放进缸的（0 = 不在缸里）。
+        # 挂机收益按「每条鱼各自在缸里的时间」算，就靠这个字段（v1.17.0）
         "tank_since": 0,
-        "tank_seconds": 0,
         "source": source,
         "ts": int(time.time()),
     }
@@ -1107,6 +1177,78 @@ def _decoration_hours_left(entry: dict[str, Any], now: int | None = None) -> flo
     return max(0.0, left / 3600.0)
 
 
+def _ensure_gear_mult(instance: dict[str, Any]) -> float:
+    """拿到这条鱼固化的「鱼竿 + 钓点 + 变异 + 图鉴」倍率。
+
+    老存档没存 ``gear_mult``：用「当前基础价 ÷ 不带装备的算法价」反推一次并写回。
+    ⚠️ 必须在**改动 attrs / 个体品质之前**调用，否则反推出来的倍率是错的
+    （这是修过的真实 bug：投喂时漏传 gear_mult，喂一次鱼就大幅掉价）。
+    """
+    raw = instance.get("gear_mult")
+    if _is_number(raw):
+        return _clamp(float(raw), 0.1, 50.0)
+    fish = FISH_BY_ID.get(instance.get("fish_id", ""))
+    old_base = _safe_int(instance.get("base_value"), 0, 0)
+    if fish is None or old_base <= 0:
+        return 1.0
+    attrs = instance.get("attrs") if isinstance(instance.get("attrs"), dict) else {}
+    variance = _clamp(
+        _safe_number(instance.get("value_variance"), 1.0),
+        VALUE_VARIANCE[0],
+        VALUE_VARIANCE[1],
+    )
+    pure = _compute_value(
+        _fish_value(fish),
+        {key: _safe_int(attrs.get(key), int(ATTR_PAR), 1) for key in ATTR_WEIGHTS},
+        _safe_number(instance.get("quality_mult"), 1.0),
+        variance,
+    )
+    gear = _clamp(old_base / max(1, pure), 0.1, 50.0)
+    instance["gear_mult"] = round(gear, 4)
+    return gear
+
+
+def _recalc_instance_value(
+    instance: dict[str, Any], attrs: dict[str, int], quality_mult: float, gear_mult: float
+) -> int:
+    """按给定参数重算基础价，**只涨不跌**，并刷新 ``value``。返回刷完的价值。
+
+    投喂（饲料）和洗髓丹（改个体品质）都走这里，算法只留一处。
+    """
+    fish = FISH_BY_ID.get(instance.get("fish_id", ""))
+    old_base = _safe_int(instance.get("base_value"), 0, 0)
+    if fish is not None:
+        variance = _clamp(
+            _safe_number(instance.get("value_variance"), 1.0),
+            VALUE_VARIANCE[0],
+            VALUE_VARIANCE[1],
+        )
+        new_base = _compute_value(
+            _fish_value(fish), attrs, quality_mult, variance, gear_mult
+        )
+        instance["base_value"] = max(old_base, new_base)
+    instance["value"] = _safe_int(
+        instance.get("base_value"), _instance_value(instance), 1
+    ) + _safe_int(instance.get("live_bonus"), 0, 0)
+    return _instance_value(instance)
+
+
+def _apply_quality(instance: dict[str, Any], quality_mult: float) -> tuple[str, int]:
+    """改这条鱼的**个体品质**并重算估值（只涨不跌）。返回 ``(新品质名, 新价值)``。
+
+    洗髓丹用。个体差异 / 装备倍率这些「上钩时固化」的东西一律保留，
+    所以洗髓只会让鱼更值钱，不会把别的加成洗掉。
+    """
+    gear = _ensure_gear_mult(instance)
+    quality_mult = _clamp(float(quality_mult), 0.5, 5.0)
+    instance["quality_mult"] = round(quality_mult, 4)
+    label, _emoji = _quality_label(quality_mult)
+    instance["quality"] = label
+    attrs = instance.get("attrs") if isinstance(instance.get("attrs"), dict) else {}
+    fixed = {key: _safe_int(attrs.get(key), int(ATTR_PAR), 1) for key in ATTR_WEIGHTS}
+    return label, _recalc_instance_value(instance, fixed, quality_mult, gear)
+
+
 def _apply_feed(instance: dict[str, Any], effects: dict[str, float]) -> tuple[dict[str, int], int]:
     """对一条鱼应用饲料效果。
 
@@ -1119,6 +1261,8 @@ def _apply_feed(instance: dict[str, Any], effects: dict[str, float]) -> tuple[di
     """
     attrs = instance.setdefault("attrs", {})
     before = {key: _safe_int(attrs.get(key), int(ATTR_PAR), 1) for key in ATTR_WEIGHTS}
+    # ⚠️ 装备倍率要在改 attrs 之前固化（老存档没有这个字段时靠旧价反推）
+    gear_mult = _ensure_gear_mult(instance)
     for key in ATTR_WEIGHTS:
         delta = int(round(_safe_number(effects.get(key), 0)))
         attrs[key] = int(_clamp(before[key] + delta, 1, 100))
@@ -1240,11 +1384,9 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "feed_bonus": int(_clamp(_safe_int(raw.get("feed_bonus"), 0, 0), 0, 20)),
         "live_bonus": live_bonus,
         "locked": bool(raw.get("locked")),
-        "pond_claimed": bool(raw.get("pond_claimed")),
-        # ⚠️ 这两个字段必须在这里列出来：_repair_instance 是白名单式重建，
-        # 漏掉就会在每次读档时把展出计时清空（= 「放进去再取出来」又能白拿加成）
+        # ⚠️ 必须列出来：_repair_instance 是白名单式重建，漏掉就等于每次读档把
+        # 「这条鱼在缸里待了多久」清零 -> 挂机收益又变成按当前估值白算（漏洞复活）
         "tank_since": max(0, _safe_int(raw.get("tank_since"), 0, 0)),
-        "tank_seconds": max(0, _safe_int(raw.get("tank_seconds"), 0, 0)),
         "source": raw.get("source")
         if isinstance(raw.get("source"), str)
         else "fishing",
@@ -2019,6 +2161,12 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("item.feed_full", "item", "这些栏位都喂满了", ""),
     ("item.feed_missing", "item", "饲料已经用完了", ""),
     ("item.feed_done", "item", "投喂结果", ""),
+    # 洗髓丹（quality_reroll）：和培育/投喂分开，文案与按钮都能单独配
+    ("item.reroll_no_fish", "item", "空缸不能洗髓", ""),
+    ("item.reroll_usage", "item", "洗髓用法说明", ""),
+    ("item.reroll_bad_slot", "item", "洗髓的栏位号不对", ""),
+    ("item.reroll_failed", "item", "洗髓没能用出去", ""),
+    ("item.reroll_done", "item", "洗髓结果", ""),
     # ---- 图鉴 ----
     ("collection.view", "collection", "图鉴总览", ""),
     ("collection.detail", "collection", "图鉴完整清单（分页）", ""),
@@ -2074,7 +2222,7 @@ for _scene_id, _parent in SCENE_PARENT.items():
 #: 每个场景一行最多摆几个按钮的**内置**默认值。默认值下与历史版本逐项一致：
 #: cast 有 5 个按钮 -> 3 + 2 两行；bag/location 各 3 个 -> 一行；pull 1 个 -> 一行。
 #: 键 "*" = 其余所有场景的默认值（配置项 button_layout 可以覆盖它们）
-BUILTIN_BUTTONS_PER_ROW: dict[str, int] = {"*": 3, "story": 1}
+BUILTIN_BUTTONS_PER_ROW: dict[str, int] = {"*": 4, "story": 1}
 
 #: 生效的「每行几个」（配置接管后就地更新；_views.py 读它排版）
 BUTTONS_PER_ROW: dict[str, int] = dict(BUILTIN_BUTTONS_PER_ROW)
@@ -2172,6 +2320,9 @@ BUTTON_COMMAND_WORDS: frozenset[str] = frozenset({
     "钓点", "地点", "地图", "map", "location",
     "鱼竿", "竿", "rod", "杂物", "漂流瓶", "收集品", "collect",
     "拉", "去", "前往", "go", "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
+    # v1.18.0 的短写法（按钮可以直接指向它们）
+    "放", "养", "取", "拿", "领", "收租", "喂", "洗", "洗髓",
+    "交", "交单", "交货", "购买", "装备", "换竿", "换鱼竿",
 })
 
 
@@ -2229,6 +2380,11 @@ def _apply_button_style_policy(
     }
 
 
+#: 站长自己配的「命令别名 / 自定义命令」里那些词：按钮也可以指向它们（原地更新）。
+#: 由 main 在应用配置时填进来 —— 不然站长给自定义命令配了按钮，会被这里当死按钮丢掉。
+BUTTON_COMMAND_EXTRA: set[str] = set()
+
+
 def _button_command_ok(data: str) -> bool:
     """这一行「点击后发送」是不是本插件认识的指令（防止出现点了没反应的死按钮）。"""
     text = str(data or "").strip()
@@ -2242,7 +2398,7 @@ def _button_command_ok(data: str) -> bool:
     head = rest.split()[0]
     if head.isdigit():          # /钓鱼 10 = 连钓 10 次
         return True
-    return head in BUTTON_COMMAND_WORDS
+    return head in BUTTON_COMMAND_WORDS or head in BUTTON_COMMAND_EXTRA
 
 
 def _parse_button_defs(

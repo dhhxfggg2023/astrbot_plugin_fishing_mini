@@ -104,6 +104,10 @@ CONTENT_TABLES: dict[str, type] = {
 #: 数值键的黑名单（后缀 / 前缀）—— 与 main 的「默认值同步」口径保持一致
 NUMBER_KEY_BAD_SUFFIXES: tuple[str, ...] = ("_defs", "_slots", "_upgrades")
 NUMBER_KEY_BAD_PREFIXES: tuple[str, ...] = ("data_", "backup_", "editor_")
+#: 例外：名字像内容表，但页面上就是「一行逗号分隔的文本」，该由 save_numbers 改
+NUMBER_KEY_ALLOW: frozenset[str] = frozenset(
+    {"aquarium_slots", "backpack_upgrades", "decoration_slots"},
+)
 
 #: 自动备份设置：页面字段名 -> 配置键 + 允许范围（None = 不限）
 AUTOBACKUP_KEYS: dict[str, tuple[str, int, int]] = {
@@ -228,16 +232,21 @@ def _log_debug(text: str) -> None:
 
 
 def number_whitelist() -> list[str]:
-    """可被 ``save_numbers`` 改写的配置键（从 DEFAULTS 里筛出来）。"""
+    """可被 ``save_numbers`` 改写的配置键（从 DEFAULTS 里筛出来）。
+
+    插件面板里的配置项全部隐藏了，所以这里的口径要尽量宽：
+    数值 / 布尔 / 字符串 / **列表**（页面按逗号分隔的文本提交）都能改，
+    只把内容表（``*_defs``）和数据管理项（``data_*`` / ``backup_*`` / ``editor_*``）挡在外面。
+    """
     keys: list[str] = []
     for key, value in _defaults_map().items():
         if not isinstance(key, str) or not key:
             continue
         if key.startswith(NUMBER_KEY_BAD_PREFIXES):
             continue
-        if key.endswith(NUMBER_KEY_BAD_SUFFIXES):
+        if key.endswith(NUMBER_KEY_BAD_SUFFIXES) and key not in NUMBER_KEY_ALLOW:
             continue
-        if isinstance(value, bool) or isinstance(value, (int, float, str)):
+        if isinstance(value, (bool, int, float, str, list)):
             keys.append(key)
     return sorted(keys)
 
@@ -281,6 +290,12 @@ def snapshot_view(items: list[dict[str, Any]], limit: int = 200) -> list[dict[st
     return view
 
 
+def _split_list_text(text: str) -> list[str]:
+    """``44,28,16`` / ``精致缸|1600,生态缸|5400`` -> 列表（兼容中文逗号、分号、换行）。"""
+    raw = str(text or "").replace("，", ",").replace("；", ",").replace(";", ",")
+    return [piece.strip() for piece in raw.replace("\n", ",").split(",") if piece.strip()]
+
+
 def _coerce_number(key: str, value: Any, default: Any) -> tuple[Any, str]:
     """按 DEFAULTS 里的类型校验一个数值配置。
 
@@ -303,6 +318,29 @@ def _coerce_number(key: str, value: Any, default: Any) -> tuple[Any, str]:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None, f"「{key}」需要数字"
         return float(value), ""
+    if isinstance(default, list):
+        # 列表型（品质权重 / 品质显示名 / 扩建价格 …）：页面按逗号分隔的文本提交，
+        # 这里拆成列表；列表里本来是数字的（例如 quality_weights）再转回数字，
+        # 否则读配置的地方 `sum(weights)` 会炸在字符串上。
+        pieces = value if isinstance(value, list) else _split_list_text(value)
+        if not pieces:
+            return None, f"「{key}」不能为空（用逗号分隔）"
+        if len(pieces) > 200:
+            return None, f"「{key}」条目太多（{len(pieces)} 个）"
+        want_number = bool(default) and all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) for x in default
+        )
+        if want_number:
+            numbers: list[float] = []
+            for piece in pieces:
+                try:
+                    numbers.append(float(str(piece).strip()))
+                except (TypeError, ValueError):
+                    return None, f"「{key}」每一项都要是数字（收到「{piece}」）"
+            if all(float(n).is_integer() for n in numbers):
+                return [int(n) for n in numbers], ""
+            return numbers, ""
+        return [str(x) for x in pieces], ""
     if isinstance(default, str):
         if not isinstance(value, str):
             return None, f"「{key}」需要字符串"
@@ -424,7 +462,13 @@ class EditorApiMixin:
 
     # ------------------------------------------------------------ GET scenes
     def _editor_default_buttons(self, scene: str) -> list[list[Any]]:
-        """某场景的**出厂**按钮（含继承：子场景没内置时用父场景的）。"""
+        """某场景的**出厂**按钮（含继承：子场景没内置时用父场景的）。
+
+        ``button_empty_scenes`` 里的场景返回空：页面别再把「出厂按钮」显示成
+        生效按钮，不然站长会以为没删掉。
+        """
+        if scene in BUTTON_EMPTY_SCENES:
+            return []
         items = _BUILTIN_BUTTONS.get(scene) or []
         if not items:
             parent = SCENE_PARENT.get(scene) or ""
@@ -517,6 +561,8 @@ class EditorApiMixin:
             ],
             "button_style_mode": str(self.config.get("button_style_mode") or "按按钮表"),
             "button_default_style": str(self.config.get("button_default_style") or "default"),
+            # 明确不要按钮的场景（逗号分隔）：页面用它显示「已关闭按钮」并提供一键恢复
+            "button_empty_scenes": str(self.config.get("button_empty_scenes") or ""),
             # 效果键清单：页面不再写死，改 _effects.EFFECTS 或加扩展都会自动出现
             "effect_keys": (fx.effect_table() if fx else []),
             "effect_hint": (fx.effect_hint() if fx else ""),
@@ -1055,7 +1101,9 @@ class EditorBridgeMixin(EditorApiMixin):
     #: 回复页能写的文本表（一行一条）
     REPLY_TEXT_KEYS: tuple[str, ...] = ("button_defs", "text_overrides", "button_layout")
     #: 回复页能写的单选设置（按钮样式全局设置，v1.13.0）
-    REPLY_SCALAR_KEYS: tuple[str, ...] = ("button_style_mode", "button_default_style")
+    REPLY_SCALAR_KEYS: tuple[str, ...] = (
+        "button_style_mode", "button_default_style", "button_empty_scenes",
+    )
 
     async def _editor_save_replies(self, payload: dict[str, Any]) -> tuple[bool, str]:
         """写回复相关的配置：三份文本表 + 两个按钮样式全局设置。
@@ -1099,7 +1147,7 @@ class EditorBridgeMixin(EditorApiMixin):
         if not changed:
             return False, (
                 "save_replies 只认 button_defs / text_overrides / button_layout / "
-                "button_style_mode / button_default_style"
+                "button_style_mode / button_default_style / button_empty_scenes"
             )
         try:
             self.config.update(changed)

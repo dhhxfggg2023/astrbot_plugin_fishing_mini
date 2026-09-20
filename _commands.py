@@ -105,40 +105,98 @@ class CommandsMixin:
             player.pop("event", None)
             lines = [f"　{choice['text']}"]
 
-            # 结算：奖励都很轻，不影响经济
-            good = random.random() < 0.65
+            # 结算：奖励都很轻，不影响经济。
+            # v1.17.0 起奖励支持**随机区间**（`"gold": [20, 60]`），并且两个选项都该有
+            # 自己的收益 —— 旧数据写死单个数字（`"gold": 40`）也照旧能用。
+            good_chance = _clamp(
+                _safe_number(choice.get("good_chance"), 0.65), 0.0, 1.0
+            )
+            good = random.random() < good_chance
+            reward = choice.get("reward") if isinstance(choice.get("reward"), dict) else {}
+            if not reward:                      # 兼容旧格式：奖励直接写在选项上
+                reward = {
+                    key: choice[key]
+                    for key in ("gold", "bait", "luck", "note")
+                    if choice.get(key) is not None
+                }
             if good:
                 lines.append(f"　{choice.get('good') or '……'}")
-                gold = _safe_int(choice.get("gold"), 0, 0)
-                if gold:
-                    player["gold"] = _safe_int(player.get("gold"), 0, 0) + gold
-                    lines.append(f"　💰 +{_fmt_gold(gold)}")
-                bait_count = _safe_int(choice.get("bait"), 0, 0)
-                if bait_count:
-                    bait_id = "worm"
-                    baits = player.setdefault("baits", {})
-                    baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + bait_count
-                    lines.append(f"　{self._bait_label(bait_id)} ×{bait_count}")
-                if choice.get("luck"):
-                    gain = _safe_number(choice["luck"], 0.0)
-                    player["luck_charges"] = _clamp(
-                        _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
-                    )
-                    lines.append(f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}")
-                if choice.get("note"):
-                    note = random.choice(BOTTLE_NOTES)
-                    notes = player.setdefault("bottle_notes", [])
-                    if note not in notes:
-                        notes.append(note)
-                        player["bottle_notes"] = notes[-30:]
-                    lines.append(f"　📜 你记下了一句：{note}")
+                lines.extend(self._grant_event_reward(player, reward))
             else:
                 lines.append(f"　{choice.get('idle') or '什么也没发生。'}")
+                # 空手也不是白来：给一点点安慰（站长要求「两个选项都要有随机收益」）
+                lines.extend(self._grant_event_reward(player, self._event_consolation(reward)))
 
             new_ach = self._check_achievements(player)
             saved = await self._save_player(player)
             async for _r in self._say_msg(event, "story.result", event.plain_result("\n".join(lines))):
                 yield _r
+
+    def _event_reward_range(self, value: Any) -> tuple[float, float]:
+        """把奖励写法统一成 ``(最小, 最大)``：数字 -> 定值，``[a, b]`` -> 区间。"""
+        if isinstance(value, (list, tuple)) and len(value) >= 2:
+            low = _safe_number(value[0], 0.0)
+            high = _safe_number(value[1], low)
+            return (low, max(low, high))
+        number = _safe_number(value, 0.0)
+        return (number, number)
+
+    def _event_consolation(self, reward: dict[str, Any]) -> dict[str, Any]:
+        """「没赶上好事」时的安慰奖：只给最小的那一份钱/饵，手气与纸条不给。
+
+        两头都有收益，玩家才不会永远只点同一个选项；但也不至于让空结果和白拿一样。
+        """
+        small: dict[str, Any] = {}
+        if "gold" in reward:
+            low, _high = self._event_reward_range(reward["gold"])
+            if low > 0:
+                small["gold"] = [max(1, low * 0.25), max(1, low * 0.5)]
+        if "bait" in reward:
+            low, _high = self._event_reward_range(reward["bait"])
+            if low >= 2:
+                small["bait"] = [1, 1]
+        return small
+
+    def _grant_event_reward(
+        self, player: dict[str, Any], reward: dict[str, Any]
+    ) -> list[str]:
+        """按奖励表发奖（区间内随机）。返回要显示的文案行。"""
+        lines: list[str] = []
+        if not reward:
+            return lines
+        if "gold" in reward:
+            low, high = self._event_reward_range(reward["gold"])
+            gold = int(round(random.uniform(low, high)))
+            if gold > 0:
+                player["gold"] = _safe_int(player.get("gold"), 0, 0) + gold
+                lines.append(f"　💰 +{_fmt_gold(gold)}")
+        if "bait" in reward:
+            low, high = self._event_reward_range(reward["bait"])
+            count = int(round(random.uniform(low, high)))
+            if count > 0:
+                bait_id = "worm"
+                baits = player.setdefault("baits", {})
+                baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + count
+                lines.append(f"　{self._bait_label(bait_id)} ×{count}")
+        if "luck" in reward:
+            low, high = self._event_reward_range(reward["luck"])
+            gain = max(0.0, random.uniform(low, high))
+            if gain > 0:
+                player["luck_charges"] = _clamp(
+                    _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
+                )
+                lines.append(f"　🔮 下一竿手气：{_luck_stars(gain, 0.3)}")
+        if "note" in reward and BOTTLE_NOTES:
+            low, high = self._event_reward_range(reward["note"])
+            chance = _clamp(random.uniform(min(low, high), max(low, high)), 0.0, 1.0)
+            if random.random() < chance:
+                note = random.choice(BOTTLE_NOTES)
+                notes = player.setdefault("bottle_notes", [])
+                if note not in notes:
+                    notes.append(note)
+                    player["bottle_notes"] = notes[-30:]
+                lines.append(f"　📜 你记下了一句：{note}")
+        return lines
 
     def _order_rarities(self, level: int) -> tuple[str, ...]:
         """按等级取当前可出现的订单品质。"""
@@ -1465,27 +1523,26 @@ class CommandsMixin:
                         yield _r
                     return
 
-                total_value = _inventory_value(aquarium)
+                result = _pond_income(player, self.cfg, now_ts)
+                total_value = int(result["value"])
                 if total_value <= 0:
                     async for _r in self._say_msg(event, "aquarium.income_empty", event.plain_result("🐠 水族馆是空的，鱼塘没有产出")):
                         yield _r
                     return
 
-                hours = min(
-                    (now_ts - last) / 3600.0,
-                    float(self.cfg["pond_income_cap_hours"]),
-                )
-                rate = float(self.cfg["pond_income_per_hour"])
-                cap_coins = int(self.cfg["pond_income_cap_coins"])
-                deco_bonus = _decoration_bonus(player, now=now_ts)
-                income = min(
-                    int(total_value * rate * hours * (1.0 + deco_bonus)), cap_coins
-                )
+                income = int(result["income"])
+                hours = float(result["hours"])
                 if income <= 0:
-                    wait_min = max(1, int(60 - (now_ts - last) / 60.0))
-                    async for _r in self._say_msg(event, "aquarium.income_wait", event.plain_result(
-                            f"⏳ 产出还不够，再等约 {wait_min} 分钟（每小时结算一次）"
-                        )):
+                    if int(result["pending"]) > 0 and int(result["counted"]) <= 0:
+                        # 鱼刚放进去：收益按「每条鱼在缸里的时间」算，所以它还没开始产出
+                        text = (
+                            "⏳ 刚放进去的鱼还没产出（收益按每条鱼在缸里的时间算）\n"
+                            "　养一会儿再来 /钓鱼 水族馆 领"
+                        )
+                    else:
+                        wait_min = max(1, int(60 - (now_ts - last) / 60.0))
+                        text = f"⏳ 产出还不够，再等约 {wait_min} 分钟"
+                    async for _r in self._say_msg(event, "aquarium.income_wait", event.plain_result(text)):
                         yield _r
                     return
 
@@ -1495,11 +1552,17 @@ class CommandsMixin:
                     _safe_int(player.get("pond_best_income"), 0, 0), income
                 )
                 player["gold"] = _safe_int(player.get("gold"), 0, 0) + income
-                cap_note = "（已达单次上限）" if income >= cap_coins else ""
+                cap_coins = int(self.cfg["pond_income_cap_coins"])
+                cap_note = "（已达单次上限）" if cap_coins > 0 and income >= cap_coins else ""
                 lines = [
                     f"🏞️ 鱼塘产出 +{_fmt_gold(income)} 金币{cap_note}",
-                    f"　挂机 {hours:.1f} 小时 · 馆藏估值 {_fmt_gold(total_value)}",
+                    f"　按 {hours:.1f} 小时计产 · 馆藏估值 {_fmt_gold(total_value)}",
                 ]
+                if int(result["pending"]) > 0:
+                    lines.append(
+                        f"　（{int(result['pending'])} 条刚放进去，这次还没产出）"
+                    )
+                deco_bonus = _decoration_bonus(player, now=now_ts)
                 if deco_bonus > 0:
                     lines.append(f"　🪸 装饰加成 +{deco_bonus:.0%}")
                 lines.append(f"💰 余额 {_fmt_gold(player['gold'])}")
@@ -1602,21 +1665,21 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
-                got: list[tuple[dict[str, Any], int, str]] = []
+                got: list[dict[str, Any]] = []
                 for idx in sorted(indices, reverse=True):
                     if not (1 <= idx <= len(aquarium)):
                         continue
                     instance = aquarium.pop(idx - 1)
-                    gain, why = self._claim_aquarium_bonus(instance)
+                    # 取出 = 停止计产：清掉入缸时间戳（收益按在缸时长算，见 _pond_income）
+                    instance["tank_since"] = 0
                     instance["source"] = "fishing"
                     inventory.append(instance)
-                    got.append((instance, gain, why))
+                    got.append(instance)
                 player["inventory"] = inventory
                 saved = await self._save_player(player)
-                total_gain = sum(g for _, g, _w in got)
-                lines = [f"🎣 取出 {len(got)} 条鱼（估值 +{_fmt_gold(total_gain)}）"]
-                for instance, gain, why in got[:5]:
-                    lines.append(f"　{_instance_line(instance)}" + self._tank_bonus_note(gain, why))
+                lines = [f"🎣 取出 {len(got)} 条鱼"]
+                for instance in got[:5]:
+                    lines.append(f"　{_instance_line(instance)}")
                 if len(got) > 5:
                     lines.append(f"　… 其余 {len(got) - 5} 条已放入背包")
                 lines.append(f"🧺 背包 {len(inventory)}/{_backpack_capacity(player, self.cfg)}")
@@ -1638,15 +1701,15 @@ class CommandsMixin:
                     return
                 discount = float(self.cfg["sell_discount"])
                 income = 0
-                sold: list[tuple[dict[str, Any], int, int, str]] = []
+                sold: list[tuple[dict[str, Any], int]] = []
                 for idx in sorted(indices, reverse=True):
                     if not (1 <= idx <= len(aquarium)):
                         continue
                     instance = aquarium.pop(idx - 1)
-                    gain, why = self._claim_aquarium_bonus(instance)
+                    instance["tank_since"] = 0        # 卖掉了 = 不再计产
                     price = max(1, int(_instance_value(instance) * discount))
                     income += price
-                    sold.append((instance, price, gain, why))
+                    sold.append((instance, price))
                 if not sold:
                     async for _r in self._say_msg(event, "aquarium.bad_slot", event.plain_result(f"🤔 没有有效的栏位号（1~{len(aquarium)}）")):
                         yield _r
@@ -1657,13 +1720,9 @@ class CommandsMixin:
                 )
                 await self._touch_leaderboard(player)
                 lines = [f"💵 卖出馆藏 {len(sold)} 条 → {_fmt_gold(income)} 金币"]
-                for instance, price, gain, why in sold[:5]:
-                    note = self._tank_bonus_note(gain, why)
-                    if gain:
-                        note = f"（含展出+{_fmt_gold(gain)}）"
+                for instance, price in sold[:5]:
                     lines.append(
                         f"　{_instance_line(instance, with_value=False)} → {_fmt_gold(price)}"
-                        + (f"　{note}" if note else "")
                     )
                 if len(sold) > 5:
                     lines.append(f"　… 其余 {len(sold) - 5} 条同上")
@@ -1673,22 +1732,17 @@ class CommandsMixin:
                     yield _r
                 return
 
-            _need_h = max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0))
             async for _r in self._say_msg(event, "aquarium.usage", event.plain_result(
                     "📖 水族馆用法\n"
                     "　/钓鱼 水族馆　　　　　　欣赏\n"
                     "　/钓鱼 水族馆 放 1　　　 从背包放入\n"
-                    "　/钓鱼 水族馆 取 1　　　 取回（估值+加成）\n"
-                    "　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n"
-                    "　/钓鱼 用 <道具> 1　　　投喂提升三维\n"
-                    "　/钓鱼 水族馆 领　　　　 领取每日收益\n"
+                    "　/钓鱼 水族馆 取 1　　　 取回\n"
+                    "　/钓鱼 水族馆 卖 1　　　 直接卖\n"
+                    "　/钓鱼 用 <道具> 1　　　投喂 / 洗髓 / 培育\n"
+                    "　/钓鱼 水族馆 领　　　　 领取挂机收益\n"
                     "　/钓鱼 水族馆 扩建　　　 花金币扩容\n"
-                    + (
-                        f"　⚠️ 展出加成要「在缸里待满 {_need_h:g} 小时」才有"
-                        "（放进去马上取出来不算；没待够可以放回去接着攒）\n"
-                        if _need_h > 0 else ""
-                    )
-                    + "　🙈 缸里的鱼之间会发生什么，自己观察"
+                    "　💤 养在缸里的鱼按「各自待了多久」产出金币，养得越久越多\n"
+                    "　🙈 缸里的鱼之间会发生什么，自己观察"
                 )):
                 yield _r
 
@@ -1723,9 +1777,10 @@ class CommandsMixin:
 
         * 温和的鱼**永远不会**主动伤害别人 —— 藤壶 / 海星 / 水母 / 海龟
           就算养得再肥，也只是被吃的命；
+        * **同类不相食**：会吃鱼的鱼也不会吃自己的同类（两条章鱼放一起是安全的）；
         * 狠角色只有比对手强才下得了嘴：小章鱼挨着一条养肥的大鱼时，
           既吃不动对方、也不会反过来被吃掉 —— 相安无事；
-        * 两个狠角色碰上，壮的吃弱的。
+        * 两个**不同种**的狠角色碰上，壮的吃弱的。
 
         返回 ``(要追加的文案, 是否改动了缸内内容, 这次被看破的鱼种 id)``。
         第三个值 = 当着玩家的面吃过鱼的「凶手」，调用方记进 ``hostiles_seen``：
@@ -1755,6 +1810,9 @@ class CommandsMixin:
                     if rival_idx is None:
                         continue
                     rival = aquarium[rival_idx]
+                    # 同类不相食：会吃鱼的鱼也不吃自己的同类（站长要求，也更符合直觉）
+                    if str(rival.get("fish_id") or "") == str(hunter.get("fish_id") or ""):
+                        continue
                     duel = _is_hostile(rival.get("fish_id", ""))
                     hunter_power = _fish_power(hunter)
                     rival_power = _fish_power(rival)
@@ -2104,9 +2162,17 @@ class CommandsMixin:
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                 gain = _safe_number(effects.get("buff_quality"), 0.0)
                 casts = int(self.cfg["buff_cast_count"])
-                player["luck_charges"] = _clamp(
-                    _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
-                )
+                active = _safe_int(player.get("buff_casts_left"), 0, 0) > 0
+                if active:
+                    # 同种道具的效果不叠加：还在生效就只把剩余竿数刷新回满，
+                    # 手气数值保持原样（不给玩家添提示，按站长要求静默处理）
+                    player["luck_charges"] = _clamp(
+                        _safe_number(player.get("luck_charges"), 0.0), 0.0, 2.0
+                    )
+                else:
+                    player["luck_charges"] = _clamp(
+                        _safe_number(player.get("luck_charges"), 0.0) + gain, 0.0, 2.0
+                    )
                 player["buff_casts_left"] = max(
                     _safe_int(player.get("buff_casts_left"), 0, 0), casts
                 )
@@ -2114,12 +2180,83 @@ class CommandsMixin:
                 lines = [
                     f"🎐 使用 {self._item_label(item_id)}",
                     f"　作用在你自己身上：接下来 {casts} 竿手气更好"
-                    f"（{_luck_stars(gain, 0.3)}）",
+                    f"（{_luck_stars(_safe_number(player.get('luck_charges'), 0.0), 0.3)}）",
                     "　（不是喂鱼，鱼的三维不会变）",
                 ]
                 if not saved:
                     lines.append("⚠️ 保存失败")
                 async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
+                    yield _r
+                return
+
+            # --- 洗髓丹（quality_reroll）：重掷这条鱼的个体品质，取更好的那次 ---
+            # 效果值和「重掷几次」同义：写 3 就是掷 3 次取最好（次数越多越容易出极品）
+            if _safe_number(effects.get("quality_reroll"), 0.0) > 0:
+                reroll_tank: list[dict[str, Any]] = player.get("aquarium") or []
+                if not reroll_tank:
+                    async for _r in self._say_msg(event, "item.reroll_no_fish", event.plain_result(
+                            "🐠 水族馆是空的，先把要洗的鱼放进去"
+                        )):
+                        yield _r
+                    return
+                if not (a3 or "").strip():
+                    async for _r in self._say_msg(event, "item.reroll_usage", event.plain_result(
+                            f"📖 /钓鱼 用 {item.get('name', item_id)} <水族馆栏位>\n"
+                            "　写上要洗髓的那条鱼的栏位号（1 2 3 / 1-3 都行）"
+                        )):
+                        yield _r
+                    return
+                picked = self._parse_indices(a3, reroll_tank)
+                if not picked:
+                    async for _r in self._say_msg(event, "item.reroll_bad_slot", event.plain_result(
+                            "🤔 栏位号不对，/钓鱼 水族馆 看看序号"
+                        )):
+                        yield _r
+                    return
+                rolls = max(1, min(50, int(round(_safe_number(effects.get("quality_reroll"), 1.0)))))
+                weights = list(self.cfg.get("quality_weights") or [])
+                lines = []
+                used = 0
+                best_gain = 0
+                for idx in picked:
+                    if _safe_int(items.get(item_id), 0, 0) <= 0:
+                        break
+                    instance = reroll_tank[idx - 1]
+                    before_mult = _safe_number(instance.get("quality_mult"), 1.0)
+                    before_label = str(instance.get("quality") or "")
+                    before_value = _instance_value(instance)
+                    best = before_mult
+                    for _ in range(rolls):
+                        best = max(best, _roll_quality_mult(weights))
+                    items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                    used += 1
+                    if best > before_mult + 1e-9:
+                        new_label, new_value = _apply_quality(instance, best)
+                        best_gain = max(best_gain, new_value - before_value)
+                        lines.append(
+                            f"　{idx}. {_fish_name(instance.get('fish_id', ''))} "
+                            f"{before_label} → {new_label}"
+                            f"（估值 {_fmt_gold(before_value)} → {_fmt_gold(new_value)}）"
+                        )
+                    else:
+                        lines.append(
+                            f"　{idx}. {_fish_name(instance.get('fish_id', ''))} "
+                            f"这颗丹没洗出更好的（保持 {before_label}）"
+                        )
+                if used <= 0:
+                    async for _r in self._say_msg(event, "item.reroll_failed", event.plain_result(
+                            "🔮 没能用出去\n" + "\n".join(lines or ["　（没有可用目标）"])
+                        )):
+                        yield _r
+                    return
+                saved = await self._save_player(player)
+                head = [
+                    f"🔮 {self._item_label(item_id)} ×{used}",
+                    f"　剩余道具 {_safe_int(items.get(item_id), 0, 0)}",
+                ]
+                if not saved:
+                    head.append("⚠️ 保存失败")
+                async for _r in self._say_msg(event, "item.reroll_done", event.plain_result("\n".join(head + lines[:6]))):
                     yield _r
                 return
 
@@ -2398,9 +2535,11 @@ class CommandsMixin:
             f"🎒 饵：{bait_text}",
             f"🧰 道具：{item_text}",
         ])
-        luck = _safe_number(player.get("luck_charges"), 0.0)
-        if luck > 0:
-            lines.append(f"🔮 手气储备 {_luck_stars(luck, 0.5)}")
+        buff = self._buff_status_line(player)
+        if buff:
+            lines.append(buff)
+        elif _safe_number(player.get("luck_charges"), 0.0) > 0:
+            lines.append(f"🔮 手气储备 {_luck_stars(player['luck_charges'], 0.5)}")
         async for _r in self._say_msg(event, "profile.view", event.plain_result("\n".join(lines))):
             yield _r
 

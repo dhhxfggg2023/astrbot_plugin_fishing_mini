@@ -131,6 +131,12 @@ TEXTS: dict[str, str] = {
     "item.breed_done": "{原文}",  # 动态文本
     "item.feed_no_fish": "🐠 水族馆是空的，先把鱼放进去养",
     "item.feed_usage": "{原文}",  # 动态文本
+    # 洗髓丹（v1.17.0 新增效果）：固定文案的两条可以直接整段改，动态的两条保留 {原文}
+    "item.reroll_no_fish": "🐠 水族馆是空的，先把要洗的鱼放进去",
+    "item.reroll_usage": "{原文}",  # 动态文本
+    "item.reroll_bad_slot": "🤔 栏位号不对，/钓鱼 水族馆 看看序号",
+    "item.reroll_failed": "{原文}",  # 动态文本
+    "item.reroll_done": "{原文}",  # 动态文本
     "sign.done": "{原文}",  # 动态文本
     "story.wrong_owner": "🙅 这是别人的动静，你插不上手\n　自己下竿的时候才会遇到属于你的小插曲",
     "orders.usage": "{原文}",  # 动态文本
@@ -310,13 +316,31 @@ def _placeholder_names(template: str) -> tuple[str, ...]:
 
 
 def needs_original(scene: str) -> bool:
-    """这个场景的模板是否**必须**保留 ``{原文}``。
+    """这个场景的模板是否**默认必须**保留 ``{原文}``。
 
     只有「文本由代码拼装、又没有别的具体占位符可用」的场景才必须保留：
-    ``bag.list|只有这句`` 会把整个背包列表吃掉，所以直接不生效；
+    ``bag.list|只有这句`` 会把整个背包列表吃掉，所以默认不生效
+    （想故意吃掉就写 ``!!`` 开头的整段替换，见 ``is_full_replace``）；
     而 ``cast.hit|🎣 恭喜 {鱼名}`` 有具体占位符可用，是站长的正当改写。
     """
     return scene in DYNAMIC and len(PLACEHOLDERS.get(scene, ("原文",))) <= 1
+
+
+#: 整段替换的开关前缀：模板以它开头 = 「我知道会丢掉动态内容，我就要自己写整段」
+FULL_REPLACE_PREFIX = "!!"
+
+
+def is_full_replace(template: str) -> bool:
+    """模板是不是「整段替换」（``!!`` 开头）。"""
+    return str(template or "").lstrip().startswith(FULL_REPLACE_PREFIX)
+
+
+def strip_full_replace(template: str) -> str:
+    """去掉「整段替换」前缀，返回真正的模板正文。"""
+    text = str(template or "").lstrip()
+    if text.startswith(FULL_REPLACE_PREFIX):
+        return text[len(FULL_REPLACE_PREFIX):].lstrip()
+    return text
 
 
 def bad_placeholders(scene: str, template: str) -> tuple[str, ...]:
@@ -366,11 +390,13 @@ def parse_overrides(raw: object, *, warn=None) -> dict[str, str]:
                 f"{'、'.join(PLACEHOLDERS.get(scene, ())) or '无'}）"
             )
             continue
-        if needs_original(scene) and "{原文}" not in template:
+        if needs_original(scene) and "{原文}" not in template \
+                and not is_full_replace(template):
             bad += 1
             first_bad = first_bad or text
             first_reason = first_reason or (
                 f"{scene} 的正文由插件按数据拼装，模板里必须保留 {{原文}}"
+                f"（或者用 !! 开头表示「整段替换、不要动态内容」）"
             )
             continue
         out[scene] = template
@@ -392,6 +418,8 @@ def render_scene(
     永远不会把 ``{占位符}`` 原文丢给玩家：
       1. 没有覆盖 / 覆盖为空 → 代码原文
       2. 动态文本的模板丢了 ``{原文}`` → 代码原文（当没写）
+         —— 除非模板以 ``!!`` 开头：那是站长明确要求的**整段替换**，
+         直接用他自己写的那段（动态内容被他主动放弃）
       3. 模板渲染异常（占位符没值、格式写坏）→ 代码原文
     """
     text = "" if original is None else str(original)
@@ -400,7 +428,11 @@ def render_scene(
     template = str(overrides.get(scene) or "")
     if not template:
         return text
-    if needs_original(scene) and "{原文}" not in template:
+    if is_full_replace(template):
+        template = strip_full_replace(template)
+        if not template:
+            return text
+    elif needs_original(scene) and "{原文}" not in template:
         return text
     data = {"原文": text}
     for key, value in (values or {}).items():

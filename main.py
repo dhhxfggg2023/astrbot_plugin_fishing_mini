@@ -249,6 +249,8 @@ DEFAULTS: dict[str, Any] = {
     "button_style_mode": "按按钮表",
     # 统一样式 / 按钮表里没写样式时的兜底（default=灰、primary=蓝，也可以写数字）
     "button_default_style": "default",
+    # 明确「就是不要按钮」的场景（逗号分隔场景名）：连「继承父场景」也断掉（v1.17.0）
+    "button_empty_scenes": "",
     "stamina_max": 20,
     "stamina_regen_seconds": 45,
     # 一次最多连钓几次（/钓鱼 <数字>），防止 /钓鱼 9999 之类把机器人卡住
@@ -259,9 +261,6 @@ DEFAULTS: dict[str, Any] = {
     "backpack_base": 30,
     "backpack_upgrades": ["15|400", "25|1100", "30|2700"],
     "aquarium_capacity": 8,
-    "aquarium_bonus": 1.2,
-    # 水族馆展出加成（取出/卖出时的加价）要求鱼在缸里展出满这么多小时（0 = 不要求）
-    "aquarium_bonus_min_hours": 1.0,
     "interactive_rarities": "传说,神话",
     "window_min": 4,
     "window_max": 8,
@@ -339,9 +338,12 @@ DEFAULTS: dict[str, Any] = {
     "backup_keep_manual": 0,
     "backup_dir": "",
     "codex_bonus_per_rarity": [0.03, 0.05, 0.08, 0.12, 0.2],
-    "pond_income_per_hour": 0.015,
+    # 挂机收益（水族馆的核心玩法）：每条鱼按**各自在缸里的时间**产出（v1.17.0）。
+    # 原来的「取出/卖出 ×1.2 展出加成」已经去掉，补偿就是把这几个数值提高：
+    #   每小时 1.5% -> 2%、单次封顶 3000 -> 5000 金币
+    "pond_income_per_hour": 0.02,
     "pond_income_cap_hours": 12,
-    "pond_income_cap_coins": 3000,
+    "pond_income_cap_coins": 5000,
     # 水族馆装饰：同时可摆几个、每个耐久多少小时（到点自动失效）
     "decoration_slots": 3,
     "decoration_hours": 72,
@@ -370,6 +372,7 @@ DEFAULTS: dict[str, Any] = {
         "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
         "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
         "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
+        "pill_quality|洗髓丹|🔮|500|重掷这条鱼的个体品质，取更好的那次（不影响三维）|quality_reroll=3",
         "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
         "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
     ],
@@ -757,6 +760,8 @@ BUTTONS: dict[str, list[tuple[str, str, int]]] = {}
 BUTTON_STYLE_MODE: str = "table"
 #: 「统一」时用的样式名；也是按钮表里没写样式时的兜底
 BUTTON_DEFAULT_STYLE: str = "default"
+#: 明确不要按钮的场景（原地更新，兄弟模块共享同一个对象）
+BUTTON_EMPTY_SCENES: set[str] = set()
 #: 上一次扩展加载的摘要（用来避免每次应用配置都重复打日志）
 EXT_REPORT_ROWS: list[str] = []
 
@@ -805,6 +810,12 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
     global BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE
     BUTTON_STYLE_MODE = CALC._parse_button_style_mode(cfg.get("button_style_mode"))
     BUTTON_DEFAULT_STYLE = _cfg_str(cfg, "button_default_style").strip() or "default"
+    # 「明确不要按钮」的场景：原地更新（重新赋值会让兄弟模块拿到旧对象）
+    BUTTON_EMPTY_SCENES.clear()
+    for _scene in _cfg_str(cfg, "button_empty_scenes").replace("，", ",").split(","):
+        _scene = _scene.strip().lower()
+        if _scene:
+            BUTTON_EMPTY_SCENES.add(_scene)
     builtin = _builtin_buttons()
     rows: dict[str, list[tuple[str, str, int]]] = {}
     raw = _cfg_str(cfg, "button_defs").strip()
@@ -818,11 +829,9 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
         if raw:
             _tunable_warn("button_defs", "没有解析出有效按钮，已回退内置")
         rows = {scene: list(items) for scene, items in builtin.items()}
-    else:
-        # 某个场景整段被过滤掉时单独回退，别让玩家看到空键盘
-        for scene, items in builtin.items():
-            if not rows.get(scene):
-                rows[scene] = list(items)
+    # ⚠️ 这里**故意不做**「某个场景空了就回退内置」：站长要能把某个场景的按钮全删掉
+    #（v1.17.0 起）。整表解析失败时上面已经整体回退，所以不会出现「配置写坏 -> 全没按钮」。
+    # 想连「继承父场景」也断掉，就把场景名写进 button_empty_scenes。
     rows = CALC._apply_button_style_policy(rows, BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE)
     BUTTONS.clear()
     BUTTONS.update(rows)
@@ -925,6 +934,10 @@ def _apply_command_config(cfg: dict[str, Any]) -> None:
     SUBCOMMAND_WORDS.clear()
     SUBCOMMAND_WORDS.update(_BUILTIN_SUBCOMMAND_WORDS)
     SUBCOMMAND_WORDS.update(COMMAND_ALIASES)
+    # 按钮也能指向站长的自定义命令 / 别名（否则那些行会被当「死按钮」丢掉）
+    CALC.BUTTON_COMMAND_EXTRA.clear()
+    CALC.BUTTON_COMMAND_EXTRA.update(COMMAND_ALIASES)
+    CALC.BUTTON_COMMAND_EXTRA.update(CUSTOM_COMMANDS)
     if custom:
         logger.info(
             "[配置] 自定义命令 %d 条、新增别名 %d 个已生效", len(custom), len(aliases)
@@ -1732,6 +1745,9 @@ _CONTENT_FALLBACK: dict[str, Any] = {
     "RANDOM_EVENTS": [],
     "MILESTONES": {},
     "ACHIEVEMENTS": {},
+    # 官方改过的默认行（老配置迁移用）；⚠️ 必须列在这里，
+    # 因为 _load_data_module() 只挑 _CONTENT_FALLBACK 里有的名字（漏了就等于没登记）
+    "CONTENT_ROW_FIXES": [],
 }
 
 _CONTENT: dict[str, Any] = {**_CONTENT_FALLBACK, **_load_data_module()}
@@ -2133,10 +2149,12 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
     # 站长自定义的鱼池优先级最高：整体接管鱼种 / 基准价 / 各钓点权重
     _apply_fish_defs(cfg)
     _apply_content_tables(cfg)
+    # ⚠️ 别名/自定义命令必须在按钮表**之前**解析：按钮那一列要认得它们
+    #（不然「/钓鱼 领奖」这种指向自定义命令的按钮会被当死按钮丢掉）
+    _apply_command_config(cfg)
     _apply_button_defs(cfg)
     _apply_button_layout(cfg)
     _apply_text_overrides(cfg)
-    _apply_command_config(cfg)
 
 
 
@@ -2361,13 +2379,12 @@ class FishingPlugin(
         cfg["sell_discount"] = _clamp(_safe_number(cfg["sell_discount"], 1.0), 0.0, 5.0)
         cfg["enable_group_broadcast"] = bool(cfg["enable_group_broadcast"])
         cfg["aquarium_capacity"] = int(
-            _clamp(_safe_int(cfg["aquarium_capacity"], 12, 1), 1, 64)
+            _clamp(_safe_int(cfg["aquarium_capacity"], 8, 1), 1, 64)
         )
-        cfg["aquarium_bonus"] = _clamp(_safe_number(cfg["aquarium_bonus"], 1.2), 1.0, 5.0)
-        # 展出加成的时间门槛：放进去一秒就取出来不给加成（0 = 关掉门槛，回到老行为）
-        cfg["aquarium_bonus_min_hours"] = _clamp(
-            _safe_number(cfg.get("aquarium_bonus_min_hours"), 1.0), 0.0, 168.0
-        )
+        # 旧的「展出加成」配置（aquarium_bonus / aquarium_bonus_min_hours）已废弃：
+        # 从配置字典里删掉，免得留着让人以为还有用
+        cfg.pop("aquarium_bonus", None)
+        cfg.pop("aquarium_bonus_min_hours", None)
         cfg["window_min"] = int(_clamp(_safe_int(cfg["window_min"], 4, 1), 1, 60))
         cfg["window_max"] = int(_clamp(_safe_int(cfg["window_max"], 8, 1), 1, 90))
         if cfg["window_max"] < cfg["window_min"]:
@@ -2486,13 +2503,14 @@ class FishingPlugin(
             _safe_number(cfg["easter_egg_chance"], 0.05), 0.0, 1.0
         )
         cfg["pond_income_per_hour"] = _clamp(
-            _safe_number(cfg["pond_income_per_hour"], 0.015), 0.0, 1.0
+            _safe_number(cfg["pond_income_per_hour"], 0.02), 0.0, 1.0
         )
         cfg["pond_income_cap_hours"] = int(
             _clamp(_safe_int(cfg["pond_income_cap_hours"], 12, 1), 1, 168)
         )
+        # 0 = 不封顶（站长想放开就填 0）
         cfg["pond_income_cap_coins"] = max(
-            0, _safe_int(cfg["pond_income_cap_coins"], 3000, 0)
+            0, _safe_int(cfg["pond_income_cap_coins"], 5000, 0)
         )
         cfg["decoration_slots"] = int(
             _clamp(_safe_int(cfg.get("decoration_slots"), 3, 0), 0, 20)
@@ -2665,30 +2683,28 @@ class FishingPlugin(
         if not isinstance(raw, dict):
             # 全新玩家：初始金币走配置（默认 100）
             player["gold"] = _safe_int(self.cfg.get("initial_gold"), 100, 0)
-        # 老存档迁移：升级前就在缸里的鱼没记过展出时间，按「早就放够了」记一笔
-        # （一次性：记过之后就走正常计时）。不做这个迁移的话，
-        # 站长缸里攒着的加成会因为「没计时」而永远领不到。
-        migrated = self._migrate_tank_display(player) or migrated
+        # 老存档：缸里已在养的鱼补上入缸时间（一次性），否则它们会因为「没有计时」
+        # 永远不产出 —— 收益是严格按计时算的
+        migrated = self._migrate_tank_clocks(player) or migrated
         if migrated:
             logger.info(f"玩家 {user_id} 数据已迁移到 v{DATA_VERSION}")
             await self._save_player(player)
         return player
 
-    def _migrate_tank_display(self, player: dict[str, Any]) -> bool:
-        """给老存档里「已经在缸里但没计时」的鱼补上展出时间（返回是否有改动）。"""
-        need = int(
-            max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0)) * 3600
-        )
+    def _migrate_tank_clocks(self, player: dict[str, Any]) -> bool:
+        """给「已经在缸里但没有入缸时间」的鱼补计时（老存档迁移，返回是否有改动）。
+
+        补成 ``max(1, 上次结算时刻)``：等于承认「它上次结算时就在缸里」，
+        升级不会把玩家攒着的那一段收益吃掉；之后新放进去的鱼一律走真实计时。
+        """
+        last = _safe_int(player.get("pond_last_ts"), 0, 0)
         changed = False
         for instance in player.get("aquarium") or []:
             if not isinstance(instance, dict):
                 continue
             if _safe_int(instance.get("tank_since"), 0, 0) > 0:
                 continue
-            if _safe_int(instance.get("tank_seconds"), 0, 0) > 0:
-                continue
-            # 记为「刚好够」：够门槛（拿得到加成），又不至于让页面显示成几百小时
-            instance["tank_seconds"] = max(1, need)
+            instance["tank_since"] = max(1, last)
             changed = True
         return changed
 
@@ -3444,64 +3460,6 @@ class FishingPlugin(
             return candidates[0]
         return None
 
-    def _settle_tank_display(self, instance: dict[str, Any], now: int | None = None) -> int:
-        """结清这条鱼的「在缸展出时间」并清掉入缸时间戳，返回累计秒数。
-
-        拿出来（取/卖）时调用。累计不清零：这次没放够，放回去接着攒。
-        """
-        now = int(now if now is not None else time.time())
-        total = _tank_display_seconds(instance, now)
-        instance["tank_since"] = 0
-        instance["tank_seconds"] = total
-        return total
-
-    def _claim_aquarium_bonus(
-        self, instance: dict[str, Any], now: int | None = None
-    ) -> tuple[int, str]:
-        """结算「水族馆展出加成」（取出/卖出时按 base_value 加价），**一生只能领一次**。
-
-        ⚠️ 两个真实漏洞都在这：
-        1. 早期版本每次「取出」都加一次，于是「取出 → 再放入 → 再取出」可以无限叠加价格
-           —— 用 ``pond_claimed`` 锁成终生一次；
-        2. 后来发现**放进缸里一秒再取出来照样加**（站长报的：「那 1.2 的倍数不能立刻
-           放入取出就有」）—— v1.16.0 起要求**展出满 ``aquarium_bonus_min_hours`` 小时**
-           （``tank_since`` / ``tank_seconds`` 计时，累计制：没放够可以放回去接着攒）。
-
-        返回 ``(加成金币, 结果码)``；结果码：``ok`` / ``claimed``（已领过）/
-        ``too_new``（展出时间不够，本次没有，放回去接着累计）/ ``off``（加成倍率 <= 1）。
-        """
-        displayed = self._settle_tank_display(instance, now)
-        if instance.get("pond_claimed"):
-            return 0, "claimed"
-        bonus = float(self.cfg["aquarium_bonus"])
-        if bonus <= 1.0:
-            return 0, "off"
-        need = int(
-            max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0)) * 3600
-        )
-        # 展出时间不够就不给（老存档的缸中鱼在 _load_player 里已经补过计时，
-        # 所以这里不需要再有「没计时就放行」的特例 —— 特例会让任何绕过「放入」
-        # 直接写进缸里的鱼白拿加成）
-        if need > 0 and displayed < need:
-            return 0, "too_new"
-        base = _safe_int(instance.get("base_value"), _instance_value(instance), 1)
-        gain = max(0, int(base * (bonus - 1.0)))
-        instance["pond_claimed"] = True
-        instance["live_bonus"] = _safe_int(instance.get("live_bonus"), 0, 0) + gain
-        instance["value"] = base + instance["live_bonus"]
-        return gain, "ok"
-
-    def _tank_bonus_note(self, gain: int, why: str) -> str:
-        """取/卖时那句加成说明（拿不到就说清为什么，别让玩家以为是 bug）。"""
-        if gain:
-            return f"　养大+{_fmt_gold(gain)}"
-        if why == "too_new":
-            hours = max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0))
-            return f"　（展出还没满 {hours:g} 小时，放回缸里接着攒）"
-        if why == "claimed":
-            return "　（加成已领过）"
-        return ""
-
     async def _finalize_sale(
         self,
         event: AstrMessageEvent,
@@ -3828,12 +3786,18 @@ class FishingPlugin(
         elif key in ("锁定", "锁", "lock"):
             handler = self._cmd_lock(event, user_id, *tokens)
         elif key in ("解锁", "解", "unlock"):
-            handler = self._cmd_unlock(event, user_id, *tokens)
+            # 智能解锁：写钓点名 = 解锁钓点，写序号/鱼名 = 解锁背包里的鱼
+            #（以前 /钓鱼 解锁 山间湖泊 会被当成「背包里没这条鱼」，很劝退）
+            if self._find_location(a2 + " " + after_first) is not None or \
+                    self._find_location(a2) is not None:
+                handler = self._cmd_locations(event, user_id, "解锁", after_sub)
+            else:
+                handler = self._cmd_unlock(event, user_id, *tokens)
         elif key in ("今日", "天气", "行情", "today", "weather", "market"):
             handler = self._cmd_today(event, user_id)
         elif key in ("排行", "排行榜", "rank", "top", "榜"):
             handler = self._cmd_leaderboard(event, user_id, after_sub)
-        elif key in ("商店", "鱼饵", "道具", "shop", "买"):
+        elif key in ("商店", "鱼饵", "道具", "shop"):
             handler = self._cmd_shop(event, user_id, a2, after_first)
         elif key in ("用", "使用", "道具用", "use"):
             handler = self._cmd_use_item(event, user_id, a2, after_first)
@@ -3860,6 +3824,38 @@ class FishingPlugin(
             handler = self._cmd_rods(event, user_id, a2, after_first)
         elif key in ("杂物", "漂流瓶", "收集品", "collect"):
             handler = self._cmd_collectibles(event, user_id)
+
+        # ---- 常用操作的「一步到位」短写法（v1.18.0）---------------------------------
+        # 让玩家少打字：把「水族馆 取 1」「商店 买 蚯蚓」「竿 用 星辉竿」这类嵌套写法
+        # 压缩成 /钓鱼 取 1、/钓鱼 买 蚯蚓、/钓鱼 装备 星辉竿。
+        # 参数一律按各子命令原本的约定传（别自己拼字符串），老写法逐字照旧。
+        # ⚠️ 参数要用 after_sub（= a2 + after_first）：短写法里 a2 就是第一个参数，
+        # 各子命令要的「子命令之后的全部参数」正好等于它。
+        elif handler is None and key in ("放", "放入", "养"):
+            handler = self._cmd_aquarium(event, user_id, "放", after_sub)
+        elif handler is None and key in ("取", "取出", "拿"):
+            handler = self._cmd_aquarium(event, user_id, "取", after_sub)
+        elif handler is None and key in ("领", "收租", "收益"):
+            handler = self._cmd_aquarium(event, user_id, "领", "")
+        elif handler is None and key in ("喂", "投喂"):
+            # /钓鱼 喂 高级饲料 1 == /钓鱼 用 高级饲料 1
+            handler = self._cmd_use_item(event, user_id, a2, after_first)
+        elif handler is None and key in ("洗", "洗髓"):
+            # /钓鱼 洗 2 == /钓鱼 用 洗髓丹 2
+            handler = self._cmd_use_item(event, user_id, "洗髓丹", after_sub)
+        elif handler is None and key in ("交", "交单", "交货"):
+            # /钓鱼 交 1 2 == /钓鱼 订单 交 1 2
+            handler = self._cmd_orders(event, user_id, "交", after_sub)
+        elif handler is None and key in ("买", "购买"):
+            # 智能买：蚯蚓/道具走商店，鱼竿走鱼竿
+            # （以前 /钓鱼 买 星辉竿 会被商店回一句「没这个货」）
+            if self._find_rod(a2) is not None:
+                handler = self._cmd_rods(event, user_id, "买", after_sub)
+            else:
+                handler = self._cmd_shop(event, user_id, "买", after_sub)
+        elif handler is None and key in ("装备", "换竿", "换鱼竿"):
+            # /钓鱼 装备 星辉竿 == /钓鱼 竿 用 星辉竿
+            handler = self._cmd_rods(event, user_id, "用", after_sub)
 
         if handler is None:
             # ---- 自定义命令（配置 custom_commands）----
@@ -4057,6 +4053,7 @@ class FishingPlugin(
         except Exception:
             pass
         changed = False
+        changed = self._apply_content_row_fixes() or changed
         for key in self.CONTENT_LIST_KEYS:
             default = DEFAULTS.get(key)
             if not isinstance(default, list) or not default:
@@ -4090,6 +4087,38 @@ class FishingPlugin(
                     save()
                 except Exception as e:  # pragma: no cover
                     logger.warning(f"配置自动升级落盘失败：{e}")
+        return changed
+
+    def _apply_content_row_fixes(self) -> bool:
+        """把「官方改过的默认行」安全地推到老配置里（只在那一行没被改过时才改）。
+
+        `content_auto_merge` 只补**缺的**行，改过的默认行永远到不了老配置
+        （洗髓丹就是活例子：它的效果写的是旧别名 ``quality_up``，和锦鲤玉佩重复，
+        v1.17.0 给它换了新效果，但站长配置里那一行不会自己变）。
+        所以官方改一行时，在 ``_game_data.CONTENT_ROW_FIXES`` 里登记
+        「旧整行 -> 新整行」：只有配置里那一行**逐字等于旧默认**才替换 ——
+        站长自己动过的行一律不碰。
+        """
+        try:
+            fixes = _CONTENT.get("CONTENT_ROW_FIXES") or []
+        except Exception:
+            fixes = []
+        changed = False
+        for fix in fixes:
+            if not (isinstance(fix, (list, tuple)) and len(fix) >= 3):
+                continue
+            key, old_line, new_line = str(fix[0]), str(fix[1]), str(fix[2])
+            current = self.config.get(key)
+            if not isinstance(current, list) or old_line not in current:
+                continue
+            if new_line in current:
+                continue
+            row_id = old_line.split("|", 1)[0]
+            self.config[key] = [
+                new_line if str(line) == old_line else line for line in current
+            ]
+            changed = True
+            logger.info(f"配置自动升级：{key} 的「{row_id}」按新版默认更新了效果")
         return changed
 
     def _warn_stale_config(self) -> None:

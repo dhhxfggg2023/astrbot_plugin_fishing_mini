@@ -72,7 +72,11 @@ class EffectSpec:
 
 # -----------------------------------------------------------------------------
 # 内置效果键（v1.13.0 之前散落在 _calc/_commands/页面里的那 8 个，含义逐字照搬）
-#   顺序 = 页面上的展示顺序，也 = _calc.EFFECT_ALLOWED 的顺序（回归测试比对用）
+#   顺序 = 页面上的展示顺序，也 = _calc 兜底白名单的顺序（回归测试比对「前 8 项」）
+#   ⚠️ 新增的内置键**追加在末尾**，不要插进前 8 个里 —— 那会破坏
+#   「历史 8 键在前」这条约定（test_effects_ext / test_editor_ui 都会卡）。
+#   v1.17.0 新增 quality_reroll（洗髓丹）：站长原来的洗髓丹写的是旧别名 quality_up，
+#   效果和锦鲤玉佩一模一样，等于买了个重复道具 —— 现在给它一个自己的效果。
 # -----------------------------------------------------------------------------
 BUILTIN_EFFECTS: tuple[EffectSpec, ...] = (
     EffectSpec("meat", "投喂：鱼肉 +N（永久）", "feed", "整数", "_calc._apply_feed"),
@@ -92,6 +96,11 @@ BUILTIN_EFFECTS: tuple[EffectSpec, ...] = (
         "_commands._cmd_use_item（buff_quality 分支）",
     ),
     EffectSpec("heal", "预留：回复体力（插件暂未启用）", "ext", "整数", ""),
+    EffectSpec(
+        "quality_reroll",
+        "洗髓丹：重掷这条鱼的个体品质，取更好的那次（值 = 掷几次）", "feed", "次数",
+        "_commands._cmd_use_item（quality_reroll 分支）",
+    ),
 )
 
 #: 旧写法 -> 正式键名（``quality_up`` 是 v1.9 之前的写法，老配置照常可用）

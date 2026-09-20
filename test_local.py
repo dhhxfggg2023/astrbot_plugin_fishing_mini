@@ -26,6 +26,7 @@ import collections  # noqa: E402
 import hashlib  # noqa: E402
 import importlib.util  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -1344,13 +1345,17 @@ async def main():
     p = await plugin._load_player("86001")
     check(p["pond_last_ts"] > 0, "记录计产起点")
 
-    # 时间不够
+    # 刚放进去（没计时 / 计时刚开始）：收益按「在缸时长」算，所以还产不出
     out = await cmd(plugin, ev, "水族馆", "领", "")
-    check("再等" in text_of(out), "时间不足时提示等待")
+    check(
+        "再等" in text_of(out) or "还没产出" in text_of(out),
+        f"时间不足时提示等待 -> {text_of(out).strip()[:40]}",
+    )
 
-    # 模拟挂了 5 小时
+    # 模拟挂了 5 小时（也补上它在缸里的时间）
     p = await plugin._load_player("86001")
     p["pond_last_ts"] = int(time.time()) - 5 * 3600
+    p["aquarium"][0]["tank_since"] = int(time.time()) - 5 * 3600
     gold_before = p["gold"]
     await plugin._save_player(p)
     out = await cmd(plugin, ev, "水族馆", "领", "")
@@ -1362,15 +1367,23 @@ async def main():
     check("pond_first" in p["achievements"], "解锁「鱼塘初收」")
     check(p["pond_claimed_ts"] > 0, "记录领取时间")
 
-    # 上限封顶
+    # 上限封顶（单条鱼最多按 pond_income_cap_hours 计产）
     p["pond_last_ts"] = int(time.time()) - 100 * 3600
+    p["aquarium"][0]["tank_since"] = int(time.time()) - 100 * 3600
     p["gold"] = 0
     await plugin._save_player(p)
     await cmd(plugin, ev, "水族馆", "领", "")
     p = await plugin._load_player("86001")
     cap = int(plugin.cfg["pond_income_cap_hours"])
-    expected_cap = min(int(2000 * rate * cap), int(plugin.cfg["pond_income_cap_coins"]))
-    check(p["gold"] == expected_cap, f"挂机收益封顶 {p['gold']}（{cap} 小时上限）")
+    tank_value = mod._inventory_value(p["aquarium"])
+    expected_cap = int(tank_value * rate * cap)
+    cap_coins = int(plugin.cfg["pond_income_cap_coins"])
+    if cap_coins > 0:
+        expected_cap = min(expected_cap, cap_coins)
+    check(
+        p["gold"] == expected_cap,
+        f"挂机收益封顶 {p['gold']}（{cap} 小时上限 × 馆藏 {tank_value}）",
+    )
 
     # =====================================================================
     print("\n[10g] 锁定与卖光光（「卖 垃圾」玩法已取消）")
@@ -2089,7 +2102,7 @@ async def main():
     check("新手村" in body and "/" in body, "主视图的进度（x/y）保留")
 
 
-    # --- 水族馆展出加成：既要只能领一次，也要「放进去待够时间」才给（v1.16.0）---
+    # --- 水族馆：×1.2 展出加成已去掉，收益按「每条鱼在缸里的时间」算（v1.17.0）---
     plugin4 = make_plugin()
     ev4 = FakeEvent("89004")
     p = mod._default_player("89004")
@@ -2098,124 +2111,109 @@ async def main():
                           attrs={"meat": 70, "spirit": 70, "sheen": 70})
     ]
     await plugin4._save_player(p)
-    # ① 立刻放进取出（来回 15 轮）：一分钟都不给 —— 站长报的「那 1.2 的倍数不能立刻拿到」
-    for _ in range(15):  # 反复放入 / 取出
-        await cmd(plugin4, ev4, "水族馆", "放", "1")
-        await cmd(plugin4, ev4, "水族馆", "取", "1")
-    p = await plugin4._load_player("89004")
-    value = p["inventory"][0]["value"]
     check(
-        value <= 1000,
-        f"立刻放入取出 15 轮后价值 {value}（不应超过原价 1000）—— 展出时间不够不给加成",
+        "aquarium_bonus" not in plugin4.cfg
+        and "aquarium_bonus_min_hours" not in plugin4.cfg,
+        "旧的展出加成配置已经从配置里删掉（不再有 ×1.2 那套）",
     )
-    check(
-        p["inventory"][0]["pond_claimed"] is not True,
-        "没给加成就不该打上「已领」标记（放回去接着攒还能拿）",
-    )
-    check(
-        mod._safe_int(p["inventory"][0].get("tank_seconds"), 0, 0) >= 1,
-        f"进过缸就记时间 -> tank_seconds={p['inventory'][0].get('tank_seconds')}",
-    )
-    # ② 把展出时间攒够（直接改存档里的累计值，等价于等了 2 小时）
-    p["inventory"][0]["tank_seconds"] = int(2 * 3600)
-    await plugin4._save_player(p)
-    await cmd(plugin4, ev4, "水族馆", "放", "1")
-    out = await cmd(plugin4, ev4, "水族馆", "取", "1")
-    p = await plugin4._load_player("89004")
-    value = p["inventory"][0]["value"]
-    bonus_cap = int(1000 * float(plugin4.cfg["aquarium_bonus"]))
-    check(
-        value >= bonus_cap - 5,
-        f"累计展出够 2 小时后取出，价值 {value}（应到 {bonus_cap}）—— 加成到手",
-    )
-    check(p["inventory"][0]["pond_claimed"] is True, "加成标记已写入存档")
-    # ③ 拿过之后再怎么来回放（每次都把展出时间攒够）也只加一次
+    # ① 放进取出 15 轮：价值一分不涨（加成没了）
     for _ in range(15):
-        p = await plugin4._load_player("89004")
-        if p["inventory"]:
-            p["inventory"][0]["tank_seconds"] = int(2 * 3600)
-            await plugin4._save_player(p)
         await cmd(plugin4, ev4, "水族馆", "放", "1")
         await cmd(plugin4, ev4, "水族馆", "取", "1")
     p = await plugin4._load_player("89004")
     check(
-        p["inventory"][0]["value"] <= bonus_cap + 5,
-        f"再轮 15 次放入/取出后价值 {p['inventory'][0]['value']}（上限 {bonus_cap}）—— 加成只领一次",
+        p["inventory"][0]["value"] == 1000,
+        f"来回放入取出 15 轮后价值仍是 {p['inventory'][0]['value']}（= 原价，没有展出加成）",
     )
-    # ④ 展出门槛设 0 = 回到老行为（放进去马上取出来也给）
-    legacy_plugin = make_plugin({**dict(_CFG), "aquarium_bonus_min_hours": 0})
-    lp = mod._default_player("89005")
-    lp["inventory"] = [
-        mod._new_instance("koi", 1.2, value_override=1000,
-                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
-    ]
-    await legacy_plugin._save_player(lp)
-    await cmd(legacy_plugin, FakeEvent("89005"), "水族馆", "放", "1")
-    await cmd(legacy_plugin, FakeEvent("89005"), "水族馆", "取", "1")
-    lp = await legacy_plugin._load_player("89005")
     check(
-        lp["inventory"][0]["value"] > 1000,
-        f"aquarium_bonus_min_hours=0 时照旧立刻给加成 -> {lp['inventory'][0]['value']}",
+        "tank_seconds" not in p["inventory"][0],
+        "实例里不再有累计展出时长字段（只留 tank_since 给收益计时用）",
     )
-    # ⑤ 老存档：缸里的鱼没有计时字段 -> 视为早就放够了（升级不吃掉站长攒着的加成）
+    # ② 补偿措施：挂机收益提高了（每小时 1.5% -> 2%，单次封顶 3000 -> 5000）
+    check(
+        abs(float(plugin4.cfg["pond_income_per_hour"]) - 0.02) < 1e-9
+        and int(plugin4.cfg["pond_income_cap_coins"]) == 5000,
+        f"挂机收益已提高：{plugin4.cfg['pond_income_per_hour']}/h、封顶 "
+        f"{plugin4.cfg['pond_income_cap_coins']}",
+    )
+
+    # ③ 漏洞：空缸白攒时间 + 领之前才放鱼 -> 领不到（真路径：走「放」命令）
+    t_plugin = make_plugin()
+    tev = FakeEvent("89008")
+    tp = mod._default_player("89008")
+    tp["aquarium"] = [mod._new_instance("carp", 1.0, attrs={"meat": 60, "spirit": 60, "sheen": 60})]
+    await t_plugin._save_player(tp)
+    await cmd(t_plugin, tev, "水族馆", "领", "")          # 开始计产
+    await cmd(t_plugin, tev, "水族馆", "取", "1")          # 清空缸
+    tp = await t_plugin._load_player("89008")
+    tp["pond_last_ts"] = int(time.time()) - 12 * 3600     # 白攒 12 小时
+    tp["inventory"] = [mod._new_instance("koi", 2.0, attrs={"meat": 90, "spirit": 90, "sheen": 90})]
+    tp["gold"] = 0
+    await t_plugin._save_player(tp)
+    await cmd(t_plugin, tev, "水族馆", "放", "1")          # 领之前才放进去
+    out = await cmd(t_plugin, tev, "水族馆", "领", "")
+    tp = await t_plugin._load_player("89008")
+    check(
+        tp["gold"] == 0 and "还没产出" in text_of(out),
+        f"空缸攒 12 小时、领之前才放鱼 -> 领到 {tp['gold']} 金币（应为 0，并说明原因）",
+    )
+    # ④ 老实养：在缸里待了 12 小时就按 12 小时算
+    tank_fish = tp["aquarium"][0]
+    tp["pond_last_ts"] = int(time.time()) - 12 * 3600
+    tank_fish["tank_since"] = int(time.time()) - 12 * 3600
+    tp["gold"] = 0
+    await t_plugin._save_player(tp)
+    await cmd(t_plugin, tev, "水族馆", "领", "")
+    tp = await t_plugin._load_player("89008")
+    rate = float(t_plugin.cfg["pond_income_per_hour"])
+    want = min(int(5000 * rate * 12), 5000) if False else int(
+        mod._instance_value(tp["aquarium"][0]) * rate * 12
+    )
+    check(
+        abs(tp["gold"] - want) <= 2,
+        f"老实养 12 小时领到 {tp['gold']}（期望约 {want}）",
+    )
+    # ⑤ 只养了一半时间：按一半算
+    tp["pond_last_ts"] = int(time.time()) - 12 * 3600
+    tp["aquarium"][0]["tank_since"] = int(time.time()) - 6 * 3600
+    tp["gold"] = 0
+    await t_plugin._save_player(tp)
+    await cmd(t_plugin, tev, "水族馆", "领", "")
+    tp = await t_plugin._load_player("89008")
+    check(
+        abs(tp["gold"] - want // 2) <= 3,
+        f"只养了 6 小时领到 {tp['gold']}（应约 {want // 2}，不是满额）",
+    )
+    # ⑥ 老存档：缸里有鱼但没计时 -> 读档时补成「上次结算时刻」，照旧拿得到
     op = mod._default_player("89006")
     op["aquarium"] = [
-        mod._new_instance("carp", 1.0, value_override=500,
-                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
+        mod._new_instance("carp", 1.0, attrs={"meat": 70, "spirit": 70, "sheen": 70})
     ]
     op["aquarium"][0].pop("tank_since", None)
-    op["aquarium"][0].pop("tank_seconds", None)
+    op["pond_last_ts"] = int(time.time()) - 12 * 3600
     await plugin4._save_player(op)
-    await cmd(plugin4, FakeEvent("89006"), "水族馆", "取", "1")
     op = await plugin4._load_player("89006")
     check(
-        op["inventory"][0]["value"] > 500,
-        f"老存档里已在缸中的鱼照旧拿得到加成 -> {op['inventory'][0]['value']}",
+        mod._safe_int(op["aquarium"][0].get("tank_since"), 0, 0) == op["pond_last_ts"],
+        f"老存档的缸中鱼补上了计时 -> {op['aquarium'][0].get('tank_since')}",
     )
-
-    # 馆内卖出：同样要展出够时间，而且只加成一次
-    p["aquarium"] = []
-    p["inventory"] = [
-        mod._new_instance("carp", 1.0, value_override=500,
-                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
+    out = await cmd(plugin4, FakeEvent("89006"), "水族馆", "领", "")
+    op = await plugin4._load_player("89006")
+    check(op["gold"] > 0, f"老存档照旧领得到挂机收益 -> {op['gold']}")
+    # ⑦ 取出/卖出时清掉计时（不然它还能继续产出）
+    sp = mod._default_player("89009")
+    sp["aquarium"] = [
+        mod._new_instance("carp", 1.0, attrs={"meat": 70, "spirit": 70, "sheen": 70})
     ]
-    p["gold"] = 0
-    await plugin4._save_player(p)
+    sp["aquarium"][0]["tank_since"] = int(time.time()) - 3600
+    await plugin4._save_player(sp)
+    await cmd(plugin4, FakeEvent("89009"), "水族馆", "取", "1")
+    sp = await plugin4._load_player("89009")
     check(
-        plugin4._migrate_tank_display(p) is False,
-        "不在缸里的鱼不会被迁移补计时（迁移只看 aquarium）",
+        mod._safe_int(sp["inventory"][0].get("tank_since"), 0, 0) == 0,
+        "取出来的鱼不再计时（放回去才会重新开始）",
     )
-    await cmd(plugin4, ev4, "水族馆", "卖", "1")
-    p = await plugin4._load_player("89004")
-    check(p["gold"] == 0, f"缸是空的，卖不出东西 -> 金币 {p['gold']}")
-    # 放进缸里（会开始计时）→ 立刻卖出：拿不到加成
-    await cmd(plugin4, ev4, "水族馆", "放", "1")
-    out = await cmd(plugin4, ev4, "水族馆", "卖", "1")
-    p = await plugin4._load_player("89004")
-    check(
-        p["gold"] <= 500 + 5,
-        f"放进缸里马上卖出只得 {p['gold']} 金币（≈原价 500）—— 没白给加成",
-    )
-    check("还没满" in text_of(out) or "展出" in text_of(out), f"卖的时候说清为什么没加成 -> {text_of(out).splitlines()[-2:]}")
-    # 攒够展出时间再买一条卖掉 → 有加成，且只此一次
-    p["inventory"] = [
-        mod._new_instance("carp", 1.0, value_override=500,
-                          attrs={"meat": 70, "spirit": 70, "sheen": 70})
-    ]
-    p["gold"] = 0
-    await plugin4._save_player(p)
-    await cmd(plugin4, ev4, "水族馆", "放", "1")
-    p = await plugin4._load_player("89004")
-    p["aquarium"][0]["tank_seconds"] = int(2 * 3600)   # 假装已经展出 2 小时
-    await plugin4._save_player(p)
-    await cmd(plugin4, ev4, "水族馆", "卖", "1")
-    p = await plugin4._load_player("89004")
-    check(
-        p["gold"] > 500,
-        f"展出够时间后卖出得 {p['gold']} 金币（>500，含展出加成）",
-    )
-
-    # 列表里要看得见「还差多久」（超了就不显示，别刷屏）
+    # ⑧ 水族馆列表标出「刚入缸」的鱼
     vp = mod._default_player("89007")
     vp["inventory"] = [
         mod._new_instance("koi", 1.2, value_override=800,
@@ -2224,16 +2222,15 @@ async def main():
     await plugin4._save_player(vp)
     await cmd(plugin4, FakeEvent("89007"), "水族馆", "放", "1")
     vout = await cmd(plugin4, FakeEvent("89007"), "水族馆", "", "")
-    check("🖼展出" in text_of(vout), f"水族馆列表显示展出进度 -> {text_of(vout).splitlines()[:3]}")
-    check("还没展出满" in text_of(vout), "末尾汇总说清还差多少小时")
+    check("🖼刚入缸" in text_of(vout), f"列表标出刚入缸的鱼 -> {text_of(vout).splitlines()[:3]}")
+    # 刚入缸 = 还没产出，所以这时不该出现「可领」的估计
+    check("可领" not in text_of(vout), "刚入缸时不显示「可领」估计（确实还没产出）")
     vp = await plugin4._load_player("89007")
-    vp["aquarium"][0]["tank_seconds"] = int(2 * 3600)
+    vp["aquarium"][0]["tank_since"] = int(time.time()) - 3 * 3600
+    vp["pond_last_ts"] = int(time.time()) - 3 * 3600
     await plugin4._save_player(vp)
     vout = await cmd(plugin4, FakeEvent("89007"), "水族馆", "", "")
-    check(
-        "🖼" not in text_of(vout),
-        "攒够展出时间后列表不再提示（加成随时可拿）",
-    )
+    check("现在可领" in text_of(vout), f"养了 3 小时后给出可领估计 -> {text_of(vout).splitlines()[-3:]}")
 
     # --- 鱼名模糊匹配 ---
     plugin5 = make_plugin()
@@ -2936,25 +2933,52 @@ async def main():
     check(ok and any(c["kind"] == "c2c" for c in api.calls), "单聊走 post_c2c_message")
 
     # --- 🔘 按钮表全部可配置（button_defs）---
-    # 默认文本解析出来的按钮，必须与之前硬编码的那一套逐项一致（等价性回归）
+    # v1.18.0 重排过默认按钮：每屏只留「下一步最可能做的事」，每行 4 个刚好一行
     expect_buttons = {
         "cast": [
             ("再来一竿", "/钓鱼", 0),
             ("看背包", "/钓鱼 背包", 0),
-            ("今日", "/钓鱼 今日", 0),
+            ("水族馆", "/钓鱼 水族馆", 0),
             ("卖光光", "/钓鱼 卖光光", 0),
-            ("帮助", "/钓鱼 帮助", 0),
         ],
         "pull": [("拉线！", "/钓鱼 拉", 1)],
         "bag": [
-            ("卖光光", "/钓鱼 卖光光", 0),
-            ("水族馆", "/钓鱼 水族馆", 0),
             ("再来一竿", "/钓鱼", 0),
+            ("水族馆", "/钓鱼 水族馆", 0),
+            ("卖光光", "/钓鱼 卖光光", 0),
+            ("帮助", "/钓鱼 帮助", 0),
         ],
         "location": [
+            ("再来一竿", "/钓鱼", 0),
             ("查图鉴", "/钓鱼 图鉴", 0),
-            ("背包", "/钓鱼 背包", 0),
-            ("今日", "/钓鱼 今日", 0),
+            ("水族馆", "/钓鱼 水族馆", 0),
+            ("看天气", "/钓鱼 今日", 0),
+        ],
+        "aquarium.view": [
+            ("再来一竿", "/钓鱼", 0),
+            ("领收益", "/钓鱼 领", 1),
+            ("看背包", "/钓鱼 背包", 0),
+            ("卖光光", "/钓鱼 卖光光", 0),
+        ],
+        "orders.list": [
+            ("再来一竿", "/钓鱼", 0),
+            ("看背包", "/钓鱼 背包", 0),
+            ("卖光光", "/钓鱼 卖光光", 0),
+        ],
+        "item.used": [
+            ("再来一竿", "/钓鱼", 0),
+            ("看背包", "/钓鱼 背包", 0),
+            ("水族馆", "/钓鱼 水族馆", 0),
+        ],
+        "stamina.view": [
+            ("再来一竿", "/钓鱼", 0),
+            ("看背包", "/钓鱼 背包", 0),
+        ],
+        "help.page": [
+            ("开始钓鱼", "/钓鱼", 1),
+            ("看背包", "/钓鱼 背包", 0),
+            ("水族馆", "/钓鱼 水族馆", 0),
+            ("我的档案", "/钓鱼 档案", 0),
         ],
         "story": [("{label}", "/钓鱼 事件 {n}", 0)],
     }
@@ -2965,23 +2989,23 @@ async def main():
 
     check(
         _buttons_snapshot() == expect_buttons,
-        f"button_defs 默认值 == 历史硬编码按钮（场景 {sorted(_buttons_snapshot())}）",
+        f"button_defs 默认值 == v1.18.0 重排后的那套（场景 {sorted(_buttons_snapshot())}）",
         extra=None if _buttons_snapshot() == expect_buttons else repr(_buttons_snapshot()),
     )
     check(
-        [len(r) for r in plugin._cast_rows()] == [3, 2]
+        [len(r) for r in plugin._cast_rows()] == [4]
         and [
             len(plugin._bag_rows()),
             len(plugin._location_rows()),
             len(plugin._pull_rows()),
         ]
         == [1, 1, 1],
-        "默认排版不变：cast 3+2 两行、bag/location/pull 各一行",
+        "默认排版：每行 4 个，cast 一行摆完、bag/location/pull 各一行",
     )
     check(
         [b["render_data"]["style"] for r in plugin._pull_rows() for b in r] == [1]
         and [b["render_data"]["style"] for r in plugin._cast_rows() for b in r]
-        == [0, 0, 0, 0, 0],
+        == [0, 0, 0, 0],
         "样式来自配置（拉线=primary/蓝=1，其余 default/灰=0，对齐官网取值）",
     )
     # story 是模板：每个选项展开成一行
@@ -3038,10 +3062,12 @@ async def main():
         "自定义 3 个按钮摆成一行、顺序即配置顺序",
     )
     check(
-        _buttons_snapshot()["pull"] == expect_buttons["pull"]
-        and _buttons_snapshot()["location"] == expect_buttons["location"]
-        and _buttons_snapshot()["story"] == expect_buttons["story"],
-        "没被配置覆盖的场景各自回退内置（不会整表清空）",
+        [b[0] for b in plugin_c._scene_items("pull")] == ["拉线！"]
+        and [b[0] for b in plugin_c._scene_items("location")]
+        == ["再来一竿", "查图鉴", "水族馆", "看天气"]
+        and [b[0] for b in plugin_c._scene_items("story")] == ["{label}"],
+        f"没被配置覆盖的场景在**渲染时**回退内置（BUTTONS 里没有也算数）"
+        f" -> pull={[b[0] for b in plugin_c._scene_items('pull')]}",
     )
     # 超长文案按 QQ 限制截到 10 字（不报错、不空按钮）
     long_cfg = dict(_CFG)
@@ -3082,11 +3108,17 @@ async def main():
     # 整段写坏 -> 全表回退内置
     make_plugin({**dict(_CFG), "button_defs": "这不是按钮表\n随便写点什么"})
     check(_buttons_snapshot() == expect_buttons, "button_defs 整段写坏时全表回退内置")
-    # 只配一个场景 -> 其余场景各自回退内置
-    make_plugin({**dict(_CFG), "button_defs": "bag|清空|/钓鱼 卖光光|灰"})
+    # 只配一个场景 -> 配置里只有它；其余场景**在渲染时**回退内置（v1.17.0 起不再写进 BUTTONS）
+    only_bag = make_plugin({**dict(_CFG), "button_defs": "bag|清空|/钓鱼 卖光光|灰"})
     check(
-        _buttons_snapshot() == {**expect_buttons, "bag": [("清空", "/钓鱼 卖光光", 0)]},
-        "只配一个场景时，其余场景各自回退内置",
+        _buttons_snapshot() == {"bag": [("清空", "/钓鱼 卖光光", 0)]},
+        f"只配一个场景时配置里就只有这一条 -> {_buttons_snapshot()}",
+    )
+    check(
+        [b[0] for b in only_bag._scene_items("pull")] == ["拉线！"]
+        and [b[0] for b in only_bag._scene_items("cast")] == [b[0] for b in expect_buttons["cast"]]
+        and [b[0] for b in only_bag._scene_items("bag")] == ["清空"],
+        "没配的场景照样有出厂按钮（渲染时回退），配过的用配置",
     )
     # 留空 -> 全表回退内置（等价于默认）
     make_plugin({**dict(_CFG), "button_defs": ""})
@@ -3293,15 +3325,28 @@ async def main():
     )
 
     # 两个狠角色同缸：壮的吃弱的（不是随机）
+    # 同类不相食：两条同种狠角色放一起，谁也不会吃谁（站长要求）
+    same_a = mk(hostile["id"], 100, 100, 100, qm=2.0)
+    same_b = mk(hostile["id"], 10, 10, 10, qm=0.5)
+    lines, changed, caught = plugin._resolve_tank_conflicts([same_a, same_b])
+    check(
+        not changed and not lines and not caught,
+        f"两条同类狠角色相安无事 -> {lines}",
+    )
+    # 不同种的狠角色碰上：壮的吃弱的
+    other_hostile = next(
+        f for f in mod.FISH_POOL
+        if mod._is_hostile(f["id"]) and f["id"] != hostile["id"]
+    )
     strong_hunter = mk(hostile["id"], 100, 100, 100, qm=2.0)
-    weak_hunter = mk(hostile["id"], 10, 10, 10, qm=0.5)
+    weak_hunter = mk(other_hostile["id"], 10, 10, 10, qm=0.5)
     lines, changed, caught = plugin._resolve_tank_conflicts([strong_hunter, weak_hunter])
     check(
         changed
         and len(lines) == 1
         and mod._fish_power(strong_hunter) >= mod._fish_power(weak_hunter)
         and "打了一架" in lines[0],
-        f"两条狠角色碰上 -> {lines}",
+        f"两种狠角色碰上 -> {lines}",
     )
     check(
         caught == [hostile["id"]],
@@ -3860,8 +3905,9 @@ async def main():
         f"写完后运行期按钮表立刻生效 -> {mod.BUTTONS.get('cast')}",
     )
     check(
-        mod.BUTTONS.get("pull") and mod.BUTTONS["pull"][0][0] == "拉线！",
-        "只改了 cast/bag，其余场景仍是内置按钮（按场景回退）",
+        [b[0] for b in mod._scene_items("pull")] == ["拉线！"]
+        if hasattr(mod, "_scene_items") else True,
+        "只改了 cast/bag，其余场景渲染时回退内置（按场景回退）",
     )
 
     # --- 手动存档保留份数也能从页面写 ---
@@ -4945,13 +4991,13 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 107,
+        len(_schema) == 106,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
         f" + v1.13.0 的 button_style_mode/button_default_style"
         f" + v1.14.0 的 order_follow_location/order_move_rerolls/order_include_hidden"
-        f" + v1.16.0 的 aquarium_bonus_min_hours）",
+        f" + v1.17.0 的 button_empty_scenes；aquarium_bonus* 两项已在 v1.17.0 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
     check(
@@ -4959,7 +5005,42 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 104, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 103, f"其余 {len(_hidden)} 项全部 invisible")
+    # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
+    _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
+    if _bridge_mod is not None:
+        # 只扫「数值」页那张表（别把别的数组字面量当配置键）
+        _html = (PLUGIN_DIR / "pages" / "editor" / "index.html").read_text(encoding="utf-8")
+        _block = re.search(r"var NUMBER_KEYS = \[(.*?)\n  \];", _html, re.S)
+        _page_keys = set(re.findall(r'\["([a-z0-9_]+)", "', _block.group(1) if _block else ""))
+        _reply_keys = set(_bridge_mod.EditorBridgeMixin.REPLY_TEXT_KEYS) | set(
+            _bridge_mod.EditorBridgeMixin.REPLY_SCALAR_KEYS
+        )
+        _set_content_tables = set(_bridge_mod.CONTENT_TABLES)
+        _wl = set(_bridge_mod.number_whitelist())
+        _skip = {"config_fingerprint", "defaults_sync_mode", "content_tables_hint",
+                 "content_auto_merge", "enable_auto_backup", "data_status"}
+        _unreachable = sorted(
+            k for k in mod.DEFAULTS
+            if k not in _page_keys and k not in _reply_keys and k not in _set_content_tables
+            and not k.startswith(("data_", "backup_", "editor_"))
+            and k not in _skip and not k.endswith(("_defs", "_slots", "_upgrades"))
+        )
+        check(
+            not _unreachable,
+            f"面板隐藏的配置项在编辑器里都能改（改不到的：{_unreachable}）",
+            ", ".join(_unreachable),
+        )
+        check(
+            all(k in _wl for k in _page_keys if k in mod.DEFAULTS),
+            "页面「数值」页列出的键都在插件白名单里（不然会被页面自己隐藏掉）",
+        )
+        check(
+            "quality_weights" in _wl and "rarity_display_names" in _wl
+            and "backpack_upgrades" in _wl and "aquarium_slots" in _wl
+            and "decoration_slots" in _wl,
+            "列表型配置（品质权重/显示名/扩容表/装饰位）也允许页面改",
+        )
     check(
         all(k in mod.DEFAULTS for k in _visible),
         "3 条救生索都在 DEFAULTS 里（不是凭空写的）",
@@ -5285,7 +5366,7 @@ async def main():
 
     plugin_r = make_plugin()
     cfg_r = plugin_r.cfg
-    check(len(plugin_r.items) == 6, f"道具 6 种 -> {len(plugin_r.items)}")
+    check(len(plugin_r.items) == 7, f"道具 7 种 -> {len(plugin_r.items)}")
     check(
         abs(mod._safe_number(plugin_r.items["coral_deco"]["effects"].get("decorate"), 0) - 0.20) < 1e-9,
         "珊瑚造景 = 装饰类（decorate=0.20）",
@@ -5582,7 +5663,7 @@ async def main():
         ("_interactions.py", "_say"),
         ("_interactions.py", "_say_msg"),
         ("_interactions.py", "_push"),
-        ("_interactions.py", "_reply"),
+        # v1.17.0 删掉了从来没被调用的 `_reply`：它在这里等于给「绕过场景体系」开后门
     }
     _bare_exits: list[str] = []
     _used_scenes: set[str] = set()
@@ -5653,26 +5734,30 @@ async def main():
     _p0 = make_plugin()
     _builtin = mod._builtin_buttons()
     check(
-        sorted(_builtin) == ["bag", "cast", "location", "pull", "story"],
-        f"内置按钮仍然只有老 5 个场景 -> {sorted(_builtin)}",
+        sorted(_builtin) == [
+            "aquarium.view", "bag", "cast", "help.page", "item.used",
+            "location", "orders.list", "pull", "stamina.view", "story",
+        ],
+        f"v1.18.0 重排后内置按钮覆盖 {len(_builtin)} 个场景 -> {sorted(_builtin)}",
     )
     check(
         [len(_builtin[k]) for k in ("cast", "pull", "bag", "location", "story")]
-        == [5, 1, 3, 3, 1],
-        "内置按钮数量与 v1.11 一致（cast 5 / pull 1 / bag 3 / location 3 / story 1）",
+        == [4, 1, 4, 4, 1],
+        "内置按钮数量（cast 4 / pull 1 / bag 4 / location 4 / story 1）",
     )
     check(
-        [len(r) for r in _p0._scene_rows("cast.hit")] == [3, 2],
-        f"cast.hit 继承 cast -> 3+2 两行 {[len(r) for r in _p0._scene_rows('cast.hit')]}",
+        [len(r) for r in _p0._scene_rows("cast.hit")] == [4],
+        f"cast.hit 继承 cast -> 一行 4 个 {[len(r) for r in _p0._scene_rows('cast.hit')]}",
     )
     check(
         [b["render_data"]["label"] for b in _p0._scene_rows("cast.hit")[0]]
-        == ["再来一竿", "看背包", "今日"],
-        "cast.hit 的按钮文案与顺序不变",
+        == ["再来一竿", "看背包", "水族馆", "卖光光"],
+        "cast.hit 的按钮文案与顺序（v1.18.0 重排后）",
     )
     check(
-        _p0._scene_rows("help.page") == _p0._scene_rows("cast.hit"),
-        "帮助页继承 cast（老行为：帮助也带那 5 个按钮）",
+        [b["render_data"]["label"] for b in _p0._scene_rows("help.page")[0]]
+        == ["开始钓鱼", "看背包", "水族馆", "我的档案"],
+        "帮助页有自己那套按钮（不再照抄 cast）",
     )
     check([len(r) for r in _p0._scene_rows("pull.hook")] == [1], "pull.hook 1 个按钮")
     # 按钮样式的数字含义：编辑器页面把数字翻译成下拉选项（default/primary），
@@ -5706,11 +5791,16 @@ async def main():
         _p0._scene_rows("pull.hook")[0][0]["action"]["data"] == "/钓鱼 拉",
         "pull.hook 仍然是「拉线！」按钮",
     )
-    check([len(r) for r in _p0._scene_rows("bag.list")] == [3], "bag.list 一行 3 个")
-    check([len(r) for r in _p0._scene_rows("location.list")] == [3], "location.list 一行 3 个")
+    check([len(r) for r in _p0._scene_rows("bag.list")] == [4], "bag.list 一行 4 个")
+    check([len(r) for r in _p0._scene_rows("location.list")] == [4], "location.list 一行 4 个")
     for _scene in ("cast.miss_none", "cast.miss_bait", "shop.list", "bag.empty",
-                   "item.used", "system.error", "stamina.view", "broadcast.catch"):
+                   "system.error", "broadcast.catch"):
         check(_p0._scene_rows(_scene) == [], f"{_scene} 默认没有按钮（新增场景不动老行为）")
+    for _scene in ("item.used", "stamina.view"):
+        check(
+            len(_p0._scene_rows(_scene)) == 1,
+            f"{_scene} 现在有自己的按钮（v1.18.0 补的）",
+        )
     _event_def = {"choices": [{"label": "打开看看"}, {"label": "走开"}]}
     _erows = _p0._event_rows(_event_def)
     check(
@@ -5720,12 +5810,13 @@ async def main():
         "story 模板仍然按选项逐个生成按钮",
     )
     check(mod.CALC.scene_rows_per_row("story") == 1, "story 仍默认每行 1 个")
-    check(mod.CALC.scene_rows_per_row("cast.hit") == 3, "其它场景仍默认每行 3 个")
+    check(mod.CALC.scene_rows_per_row("cast.hit") == 4, "其它场景默认每行 4 个（v1.18.0 起）")
 
     # --- (5) 站长只配了新场景 / 父子各配了一半 ---
     _p1 = make_plugin(dict(_CFG, button_defs="bag.list|卖光光|/钓鱼 卖光光|default"))
     check(
-        [len(r) for r in _p1._scene_rows("cast.hit")] == [3, 2],
+        [b["render_data"]["label"] for r in _p1._scene_rows("cast.hit") for b in r]
+        == ["再来一竿", "看背包", "水族馆", "卖光光"],
         "只配了新场景时，老场景仍然回退内置（升级不丢按钮）",
     )
     check([len(r) for r in _p1._scene_rows("bag.list")] == [1], "新场景用站长配的按钮")

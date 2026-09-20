@@ -86,18 +86,6 @@
     "type": "int",
     "default": 8
   },
-  "aquarium_bonus": {
-    "invisible": true,
-    "description": "水族馆取出/卖出的价值加成系数",
-    "type": "float",
-    "default": 1.2
-  },
-  "aquarium_bonus_min_hours": {
-    "invisible": true,
-    "description": "拿「展出加成」要求鱼在缸里展出满多少小时（累计制：没放够可以放回去接着攒）。0 = 不要求，放进去马上取出来也给（老行为）",
-    "type": "float",
-    "default": 1.0
-  },
   "decoration_slots": {
     "description": "水族馆里最多同时摆几个耐久型装饰（珊瑚造景），0 = 不开放",
     "type": "int",
@@ -362,9 +350,9 @@
   },
   "pond_income_per_hour": {
     "invisible": true,
-    "description": "鱼塘（水族馆）挂机收益：每小时产出占馆藏估值的比例",
+    "description": "鱼塘（水族馆）每小时产出馆藏估值的比例。v1.17.0 去掉了「取出 ×1.2 展出加成」，补偿就是把它从 0.015 提到 0.02",
     "type": "float",
-    "default": 0.015
+    "default": 0.02
   },
   "pond_income_cap_hours": {
     "invisible": true,
@@ -374,9 +362,9 @@
   },
   "pond_income_cap_coins": {
     "invisible": true,
-    "description": "鱼塘挂机单次领取的金币上限",
+    "description": "单次领取的金币上限（0 = 不封顶）。原为 3000，随展出加成取消一起提高",
     "type": "int",
-    "default": 3000
+    "default": 5000
   },
   "bait_defs": {
     "invisible": true,
@@ -402,6 +390,7 @@
       "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
       "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
       "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
+      "pill_quality|洗髓丹|🔮|500|重掷这条鱼的个体品质，取更好的那次（不影响三维）|quality_reroll=3",
       "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
       "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20"
     ]
@@ -505,8 +494,7 @@
     "description": "手动存档保留份数（0 = 永久保留）。设成 3 就只留最近 3 份，在编辑器页面点「新建存档」时自动清理旧的。注意：删除存档不会再生成新存档。",
     "type": "int",
     "default": 0
-  }
-,
+  },
   "backup_dir": {
     "invisible": true,
     "description": "存档目录（留空 = 插件目录下的 backups/）",
@@ -700,7 +688,7 @@
     "invisible": true,
     "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。插件里每条回复都有独立的场景键（共 150+ 个，见编辑器页面「💬 回复」页的场景卡片），常用的如 cast.hit=钓到鱼的结果 / cast.miss_none=空竿 / pull.hook=咬钩提示 / bag.list=背包视图 / location.list=钓点视图 / shop.list=商店货架 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）。老的 5 个场景键（cast/pull/bag/location/story）仍然有效：没单独配置的子场景会继承它们，所以升级后默认按钮一字不变。样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
     "type": "text",
-    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|今日|/钓鱼 今日|default\ncast|卖光光|/钓鱼 卖光光|default\ncast|帮助|/钓鱼 帮助|default\npull|拉线！|/钓鱼 拉|primary\nbag|卖光光|/钓鱼 卖光光|default\nbag|水族馆|/钓鱼 水族馆|default\nbag|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|背包|/钓鱼 背包|default\nlocation|今日|/钓鱼 今日|default\nstory|{label}|/钓鱼 事件 {n}|default"
+    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|水族馆|/钓鱼 水族馆|default\ncast|卖光光|/钓鱼 卖光光|default\npull|拉线！|/钓鱼 拉|primary\nbag|再来一竿|/钓鱼|default\nbag|水族馆|/钓鱼 水族馆|default\nbag|卖光光|/钓鱼 卖光光|default\nbag|帮助|/钓鱼 帮助|default\nlocation|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|水族馆|/钓鱼 水族馆|default\nlocation|看天气|/钓鱼 今日|default\naquarium.view|再来一竿|/钓鱼|default\naquarium.view|领收益|/钓鱼 领|primary\naquarium.view|看背包|/钓鱼 背包|default\naquarium.view|卖光光|/钓鱼 卖光光|default\norders.list|再来一竿|/钓鱼|default\norders.list|看背包|/钓鱼 背包|default\norders.list|卖光光|/钓鱼 卖光光|default\nitem.used|再来一竿|/钓鱼|default\nitem.used|看背包|/钓鱼 背包|default\nitem.used|水族馆|/钓鱼 水族馆|default\nstamina.view|再来一竿|/钓鱼|default\nstamina.view|看背包|/钓鱼 背包|default\nhelp.page|开始钓鱼|/钓鱼|primary\nhelp.page|看背包|/钓鱼 背包|default\nhelp.page|水族馆|/钓鱼 水族馆|default\nhelp.page|我的档案|/钓鱼 档案|default\nstory|{label}|/钓鱼 事件 {n}|default"
   },
   "text_overrides": {
     "invisible": true,
@@ -741,6 +729,11 @@
     "type": "text",
     "default": "",
     "hint": "例：快捷签到|执行:签到 ｜ 领奖|发送:今天也要加油！你现在有 {金币} 金币（点券）"
+  },
+  "button_empty_scenes": {
+    "invisible": true,
+    "description": "明确「就是不要按钮」的场景（逗号分隔场景名，例如 cast.none,bag.empty）：连「继承父场景」也断掉。留空 = 不特殊处理",
+    "type": "string",
+    "default": ""
   }
-
 }

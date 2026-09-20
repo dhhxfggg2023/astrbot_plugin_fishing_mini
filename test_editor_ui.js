@@ -204,27 +204,32 @@ function runAssertions() {
   check(badRod.length === 0, "所有鱼饵的「需要鱼竿」都存在",
     badRod.length ? badRod.map(function (b) { return b.id; }).join(" ") : rodIds.join("/"));
   /* 页面上的效果键白名单必须和插件一致。
-     v1.13.0：唯一来源是 _effects.BUILTIN_EFFECTS（启动时同步给 _calc.EFFECT_ALLOWED）；
+     v1.17.0：唯一来源就是 `_effects.BUILTIN_EFFECTS` 注册表本身（`_calc._effect_allowed()`
+     直接读它，不再靠「启动时同步一份」，因为 main 的 `_expose_globals_all()` 会把
+     同步好的副本覆盖回旧的 —— 扩展键和新内置键在真实运行时全都解析不出来）。
+     `_calc.EFFECT_ALLOWED` 只剩「单独导入 _calc 时的兜底」，所以它必须是注册表的**前缀**。
      页面里那份清单只是**离线兜底** —— 在线时页面用插件发来的 effect_keys 覆盖它。 */
   const calcSrc = fs.readFileSync(path.join(__dirname, "_calc.py"), "utf8");
   const allowedBlock = calcSrc.match(/EFFECT_ALLOWED[^=]*=\s*\(([\s\S]*?)\)/);
-  const pluginKeys = allowedBlock
+  const fallbackKeys = allowedBlock
     ? allowedBlock[1].split(",").map(s => s.trim().replace(/["']/g, "")).filter(Boolean)
     : [];
-  check(pluginKeys.length >= 8, "从 _calc.py 读到 EFFECT_ALLOWED 白名单",
-    pluginKeys.join("/") || "没读到");
+  check(fallbackKeys.length >= 8, "从 _calc.py 读到 EFFECT_ALLOWED 兜底白名单",
+    fallbackKeys.join("/") || "没读到");
   const fxSrc = fs.readFileSync(path.join(__dirname, "_effects.py"), "utf8");
   const registryKeys = [];
   const specRe = /EffectSpec\(\s*"([A-Za-z_][A-Za-z0-9_]*)"/g;
   let specHit;
   while ((specHit = specRe.exec(fxSrc)) !== null) registryKeys.push(specHit[1]);
-  check(registryKeys.join(",") === pluginKeys.join(","),
-    "效果注册表顺序 == _calc 白名单（页面上也是这个顺序）",
-    "注册表=" + registryKeys.join("/") + " 白名单=" + pluginKeys.join("/"));
+  check(registryKeys.slice(0, fallbackKeys.length).join(",") === fallbackKeys.join(","),
+    "注册表前 N 项 == _calc 的兜底白名单（历史 8 键在前）",
+    "注册表=" + registryKeys.join("/") + " 兜底=" + fallbackKeys.join("/"));
+  check(/def _effect_allowed\(/.test(calcSrc) && /sys\.modules\.get\("astrbot_fishing_effects"\)/.test(calcSrc),
+    "解析白名单直接读注册表（不再依赖启动时的同步，绕开被覆盖的坑）", "");
   const pageKeys = T.ITEM_EFFECT_KEY_NAMES.filter(k => k !== "quality_up");
-  check(pageKeys.slice().sort().join(",") === pluginKeys.slice().sort().join(","),
-    "页面兜底清单与插件一致（在线时会被插件发来的清单覆盖）",
-    "页面=" + pageKeys.join("/") + " 插件=" + pluginKeys.join("/"));
+  check(pageKeys.slice().sort().join(",") === registryKeys.slice().sort().join(","),
+    "页面兜底清单与注册表一致（在线时会被插件发来的清单覆盖）",
+    "页面=" + pageKeys.join("/") + " 注册表=" + registryKeys.join("/"));
   check(/function applyEffectKeys\(/.test(html) && /ITEM_EFFECT_KEYS = rows/.test(html) &&
     /applyEffectKeys\(config\.effect_keys\)/.test(html),
     "页面会用插件发来的 effect_keys 覆盖兜底清单（效果清单不再写死）", "");

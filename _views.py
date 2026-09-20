@@ -58,7 +58,12 @@ class ViewsMixin:
     # -------------------------------------------------------------------------
 
     def _scene_buttons(self, scene: str) -> list[tuple[str, str, int]]:
-        """取某场景的按钮：配置优先，缺失或整段被过滤光则回退内置默认。"""
+        """取某场景的按钮：配置优先，缺失或整段被过滤光则回退内置默认。
+
+        ``button_empty_scenes`` 里列出的场景直接空 —— 站长要的是「这个场景就是没按钮」。
+        """
+        if scene in BUTTON_EMPTY_SCENES:
+            return []
         items = BUTTONS.get(scene) or []
         if not items:
             items = _BUILTIN_BUTTONS.get(scene) or []
@@ -69,10 +74,12 @@ class ViewsMixin:
         return list(BUTTONS.get(scene) or [])
 
     def _scene_source(self, scene: str) -> str:
-        """该场景按钮的来源：``config`` / ``inherit`` / ``default`` / ``none``。
+        """该场景按钮的来源：``config`` / ``inherit`` / ``default`` / ``none`` / ``off``。
 
         编辑器页面用它显示「这组按钮是哪来的」，排查「为什么这里没按钮」很有用。
         """
+        if scene in BUTTON_EMPTY_SCENES:
+            return "off"
         if self._scene_configured_rows(scene):
             return "config"
         parent = SCENE_PARENT.get(scene) or ""
@@ -83,12 +90,19 @@ class ViewsMixin:
         return "none"
 
     def _scene_items(self, scene: str) -> list[tuple[str, str, int]]:
-        """取某场景生效的按钮（元组形态）：自己配的 > 继承父场景 > 内置默认。"""
+        """取某场景生效的按钮（元组形态）：自己配的 > 继承父场景 > 内置默认。
+
+        ``button_empty_scenes`` 里列出的场景**直接返回空**：站长明确说不要按钮时，
+        连「继承父场景」也要断掉（否则删了一个子场景的按钮，父场景的又会冒出来）。
+        """
+        if scene in BUTTON_EMPTY_SCENES:
+            return []
         items = BUTTONS.get(scene) or []
         if not items:
+            # 父场景也可能只有出厂按钮（站长没配过 cast，但 cast.hit 要继承它的按钮）
             parent = SCENE_PARENT.get(scene) or ""
             if parent:
-                items = BUTTONS.get(parent) or []
+                items = BUTTONS.get(parent) or _BUILTIN_BUTTONS.get(parent) or []
         if not items:
             items = _BUILTIN_BUTTONS.get(scene) or []
         return list(items)
@@ -259,6 +273,20 @@ class ViewsMixin:
             return item_id
         return f"{item.get('emoji', '')}{item.get('name', item_id)}"
 
+    def _buff_status_line(self, player: dict[str, Any]) -> str:
+        """钓手手气的当前状态（一行；没有就返回空串）。
+
+        锦鲤玉佩是「持续 N 竿」的 buff，玩家最想知道的是**还剩几竿** ——
+        v1.18.0 起档案和每一条上鱼结果里都会明确写出来。
+        """
+        left = _safe_int(player.get("buff_casts_left"), 0, 0)
+        luck = _safe_number(player.get("luck_charges"), 0.0)
+        if left > 0:
+            return f"🎐 锦鲤玉佩：手气 +{luck:.0%}　还剩 {left} 竿"
+        if luck > 0:
+            return f"🔮 下一竿手气 +{luck:.0%}（一次性）"
+        return ""
+
     def _format_result(
         self,
         player: dict[str, Any],
@@ -276,6 +304,9 @@ class ViewsMixin:
         if fish and fish["rarity"] in ("传说", "神话"):
             head += f"　{fish['flavor']}"
         lines = [head, f"　{_attrs_line(catch)}　余额 {_fmt_gold(player.get('gold', 0))}"]
+        # 手气 buff 生效时把剩余竿数带上（buff 结束就不显示，不占版面）
+        if _safe_int(player.get("buff_casts_left"), 0, 0) > 0:
+            lines.append(f"　{self._buff_status_line(player)}")
         return "\n".join(lines)
 
     def _order_wait_text(self, player: dict[str, Any]) -> str:
@@ -335,11 +366,7 @@ class ViewsMixin:
 
         total = 0
         best = None
-        # 展出加成要「在缸里待够时间」才有：还没攒够的鱼标一下进度（够了就不显示，别刷屏）
-        need_s = int(
-            max(0.0, _safe_number(self.cfg.get("aquarium_bonus_min_hours"), 1.0)) * 3600
-        )
-        bonus_on = float(self.cfg["aquarium_bonus"]) > 1.0 and need_s > 0
+        # 收益按「每条鱼各自在缸里的时间」算（v1.17.0）：标一下还没开始产出的鱼
         pending = 0
         for idx, instance in enumerate(aquarium, start=1):
             value = _instance_value(instance)
@@ -348,21 +375,19 @@ class ViewsMixin:
                 best = instance
             feed = _safe_int(instance.get("feed_uses"), 0, 0)
             extra = f" 喂{feed}" if feed else ""
-            # ⚠️ 要用 _tank_display_seconds（含「这次还待在缸里」的那段），
-            # 直接读 tank_seconds 只有「上一次结清」的量，进度会看着不动
             shown = _tank_display_seconds(instance, now_ts)
-            tracked = _safe_int(instance.get("tank_since"), 0, 0) > 0 or shown > 0
-            if bonus_on and tracked and not instance.get("pond_claimed") and shown < need_s:
+            if shown < 60:
                 pending += 1
-                extra += f"　🖼展出{shown / 3600.0:.1f}/{need_s / 3600.0:g}h"
+                extra += "　🖼刚入缸"
+            else:
+                extra += f"　🖼{shown / 3600.0:.1f}h"
             lines.append(
                 f"{idx:>2}.{_instance_line(instance)}　{_attrs_line(instance)}" + extra
             )
-        lines.append(f"🧮 估值 {_fmt_gold(total)}（取出/卖出 ×{self.cfg['aquarium_bonus']:g}）")
+        lines.append(f"🧮 馆藏估值 {_fmt_gold(total)}")
         if pending:
             lines.append(
-                f"　🖼 {pending} 条还没展出满 {need_s / 3600.0:g} 小时（累计）——"
-                "满了再取出/卖出才加价"
+                f"　🖼 {pending} 条刚入缸 —— 收益按每条鱼在缸里的时间算，养着才有产出"
             )
         if best is not None:
             lines.append(f"👑 镇馆之宝：{_instance_line(best)}")
@@ -384,26 +409,12 @@ class ViewsMixin:
             )
         if expired:
             lines.append(f"　（清理了 {expired} 个已失效的装饰）")
-        # 今日收益提示（与「/钓鱼 水族馆 领」的结算口径完全一致）
-        today = self._today_text()
-        if player.get("last_income_date") != today:
-            now_ts = int(time.time())
-            last = _safe_int(player.get("pond_last_ts"), 0, 0) or now_ts
-            hours = min(
-                (now_ts - last) / 3600.0,
-                float(self.cfg["pond_income_cap_hours"]),
-            )
-            est = min(
-                int(
-                    total
-                    * float(self.cfg["pond_income_per_hour"])
-                    * hours
-                    * (1.0 + deco_bonus)
-                ),
-                int(self.cfg["pond_income_cap_coins"]),
-            )
-            if est > 0:
-                lines.append(f"💰 今日可领 {_fmt_gold(est)}　/钓鱼 水族馆 领")
+        # 收益提示（与「/钓鱼 领」的结算口径完全一致：同一份 _pond_income）
+        est = int(_pond_income(player, self.cfg, now_ts)["income"])
+        if est > 0:
+            lines.append(f"💰 现在可领 {_fmt_gold(est)}　/钓鱼 领")
+        elif aquarium:
+            lines.append("　💤 刚入缸的鱼还没开始产出（按每条鱼在缸里的时间算）")
         return "\n".join(lines)
 
     def _shop_view(self, player: dict[str, Any]) -> str:
@@ -500,23 +511,47 @@ class ViewsMixin:
         )
         pages: list[tuple[str, list[str]]] = [
             (
-                "基础",
+                "开始钓",
                 [
-                    "　/钓鱼　　　　　下竿（写 钓/抛竿 也行）",
-                    "　/钓鱼 10　　　 连钓 10 次（扣 10 点体力 + 10 个饵）",
-                    "　/钓鱼 拉　　　 拉线（也可写 收线/提竿）",
-                    "　/钓鱼 体力　　 看体力（攒着最多 20 点）",
-                    "　/钓鱼 背包　　 看背包",
-                    "　/钓鱼 卖光光　 清空背包换金币",
-                    "　/钓鱼 换饵 蚯蚓　换鱼饵（换饵 空钩 不花钱）",
-                    "　/钓鱼 档案　　 等级/金币/统计",
-                    "　/钓鱼 签到　　 每日金币",
-                    "　/钓鱼 今日　　 今日天气与行情",
-                    "　/钓鱼 排行　　 群内排行榜",
-                    "　/钓鱼 锁定 1　 锁定不想卖的鱼",
-                    "　/钓鱼 事件 1　 水面上偶尔会有事发生",
+                    "　/钓鱼　　　　　　　下竿（发「钓」也行）",
+                    "　/钓鱼 10　　　　　 连钓 10 次（扣 10 点体力 + 10 个饵）",
+                    "　/钓鱼 拉　　　　　 咬钩后拉线（收线 / 提竿 也行）",
+                    "　/钓鱼 体力　　　　 看体力",
                     stamina_line,
                     fee_line,
+                ],
+            ),
+            (
+                "背包与买卖",
+                [
+                    "　/钓鱼 背包　　　　 看背包（带序号和价格）",
+                    "　/钓鱼 卖 1 2　　　 卖掉第 1、2 条（也能 卖 鲤鱼 / 卖 全部）",
+                    "　/钓鱼 卖光光　　　 一次清空（锁定的会留着）",
+                    "　/钓鱼 锁定 1　　　 锁定不想卖的鱼（/钓鱼 解锁 1 取消）",
+                    "　/钓鱼 商店　　　　 看货架",
+                    "　/钓鱼 买 蚯蚓 20　 买鱼饵 / 道具 / 鱼竿（写名字就行）",
+                    "　/钓鱼 装备 星辉竿　换鱼竿（/钓鱼 鱼竿 看全部）",
+                    "　/钓鱼 换饵 蚯蚓　　换当前鱼饵（/钓鱼 换饵 空钩 = 不挂饵）",
+                    "　/钓鱼 扩建背包　　 背包扩容",
+                    f"　背包上限 {base_cap} 条起，不能无限囤货",
+                ],
+            ),
+            (
+                "赚钱养鱼",
+                [
+                    "　/钓鱼 签到　　　　 每天领一笔金币",
+                    "　/钓鱼 今日　　　　 今日天气 + 鱼市行情",
+                    "　/钓鱼 订单　　　　 订单（按当前钓点刷新，比卖店赚一倍）",
+                    "　/钓鱼 交 1 2　　　 交单（交过的不再收）",
+                    "　— 鱼缸（挂机收益）—",
+                    "　/钓鱼 水族馆　　　 看鱼缸",
+                    "　/钓鱼 放 1 3　　　 把背包第 1、3 条放进缸",
+                    "　/钓鱼 取 1　　　　 取回来",
+                    "　/钓鱼 领　　　　　 领挂机收益（鱼在缸里待得越久越多）",
+                    "　/钓鱼 喂 高级饲料 1　投喂：涨三维、直接涨价",
+                    "　/钓鱼 洗 2　　　　 用洗髓丹重掷第 2 条的个体品质",
+                    "　/钓鱼 用 珊瑚造景　 摆装饰：72 小时内挂机产出 +20%",
+                    "　/钓鱼 水族馆 扩建　 花金币扩容鱼缸",
                 ],
             ),
         ]
@@ -530,8 +565,9 @@ class ViewsMixin:
             title = "钓点" if len(chunks) == 1 else f"钓点 {index}/{len(chunks)}"
             extra = (
                 [
-                    "　/钓鱼 去 <名称>　　　 前往",
-                    "　/钓鱼 钓点 解锁 <名>　解锁",
+                    "　/钓鱼 钓点　　　　　 全部钓点 + 解锁条件",
+                    "　/钓鱼 去 <名称>　　 前往（写简称也行）",
+                    "　/钓鱼 解锁 <名称>　 解锁并前往",
                 ]
                 if index == len(chunks)
                 else []
@@ -542,38 +578,37 @@ class ViewsMixin:
             [
                 ("鱼竿", rod_lines + [
                     "　🔒 的竿要等级达标才能买",
-                    "　/钓鱼 鱼竿 买 <名> ｜ 用 <名>",
+                    "　/钓鱼 买 <竿名>　　 买鱼竿",
+                    "　/钓鱼 装备 <竿名>　 换上",
                 ]),
                 (
-                    "鱼饵与道具",
+                    "鱼饵",
                     bait_lines
                     + [
-                        "　— 道具 —",
-                    ]
-                    + item_lines
-                    + [
                         "　部分鱼饵要等级 + 对应鱼竿才能买",
-                        "　/钓鱼 商店 买 <名> [个数]　/钓鱼 用 <道具> [栏位]",
+                        "　/钓鱼 买 <名字> [个数]　/钓鱼 换饵 <名字>",
                     ],
                 ),
                 (
-                    "养成与赚钱",
-                    [
-                        "　/钓鱼 水族馆　　　　 放/取/卖/领/扩建",
-                        "　/钓鱼 订单　　　　　 订单（按当前钓点刷新，收益更高）",
-                        "　/钓鱼 订单 交 1 2　　批量交单（交过的不再收）",
-                        "　/钓鱼 商店 扩容　　　背包扩容",
-                        f"　背包上限 {base_cap} 起，不能无限囤货",
-                        "　养鱼提升肉质/灵性/光泽 → 直接涨价",
+                    "道具",
+                    item_lines
+                    + [
+                        "　/钓鱼 喂 <饲料> 1　投喂（三维永久上涨）",
+                        "　/钓鱼 洗 1　　　　 洗髓丹：重掷个体品质",
+                        "　/钓鱼 用 珊瑚造景　摆装饰：挂机产出 +20%",
+                        f"　图鉴 {len(FISH_POOL)} 种　成就 {len(ACHIEVEMENTS)} 个",
                     ],
                 ),
                 (
-                    "收集与社交",
+                    "钓点与收集",
                     [
-                        "　/钓鱼 查 <鱼名>　　 这条鱼在哪些钓点",
-                    "　/钓鱼 查 <钓点名>　 这个钓点有哪些鱼",
-                    "　/钓鱼 图鉴　　　　　 鱼的收集进度",
+                        "　/钓鱼 图鉴　　　　　 各钓点的收集进度",
+                        "　/钓鱼 图鉴 详　　　 完整鱼名单（可翻页）",
+                        "　/钓鱼 查 <鱼名>　　 这鱼在哪些钓点、要不要拉线",
+                        "　/钓鱼 查 <钓点名>　 这个钓点有哪些鱼",
                         "　/钓鱼 杂物　　　　　 杂物与纸条收集",
+                        "　/钓鱼 排行　　　　　 群内排行榜（金币 / 图鉴 / 最贵）",
+                        "　/钓鱼 档案　　　　　 等级、金币、统计",
                     ],
                 ),
                 (

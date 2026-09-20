@@ -74,13 +74,24 @@ print("v1.13.0 回归：按钮样式统一 / 效果注册表 / 扩展点")
 print("=" * 62)
 
 # =====================================================================
-print("\n[1] 效果注册表：内置 8 键与历史白名单逐字一致（升级零变化）")
+print("\n[1] 效果注册表：历史 8 键在前、新增键追加在末尾")
 _LEGACY = ("meat", "spirit", "sheen", "value_up", "decorate", "feed_bonus", "buff_quality", "heal")
-check(CALC.EFFECT_ALLOWED == _LEGACY, f"_calc 白名单 == 历史白名单（{len(CALC.EFFECT_ALLOWED)} 键）")
-check(tuple(FX.effect_keys()) == _LEGACY, f"注册表键序 == 历史白名单：{FX.effect_keys()}")
 check(
-    [s.key for s in FX.BUILTIN_EFFECTS] == list(_LEGACY),
-    "BUILTIN_EFFECTS 顺序 == 历史白名单（页面上也是这个顺序）",
+    tuple(CALC.EFFECT_ALLOWED) == _LEGACY,
+    f"_calc 的兜底白名单 == 历史 8 键（{len(CALC.EFFECT_ALLOWED)} 键）",
+)
+_LIVE = tuple(FX.effect_keys())
+check(
+    _LIVE[: len(_LEGACY)] == _LEGACY,
+    f"注册表前 8 项 == 历史白名单（后面才是新键）：{_LIVE}",
+)
+check(
+    _LIVE == _LEGACY + ("quality_reroll",),
+    f"v1.17.0 只多了一个内置键 quality_reroll：{_LIVE}",
+)
+check(
+    [s.key for s in FX.BUILTIN_EFFECTS] == list(_LIVE),
+    "BUILTIN_EFFECTS 顺序 == 生效键序（页面上也是这个顺序）",
 )
 check(
     FX.EFFECT_ALIASES == {"quality_up": "buff_quality"},

@@ -227,17 +227,17 @@ body {
 .btn-icon { width: 28px; height: 28px; padding: 0; justify-content: center; }
 
 /* ============================== 标签页 ============================== */
+/* 16 个标签在窄屏上一行放不下 —— 换行显示，不要横向滚动条让人去找（站长明确要求） */
 .tabs {
   display: flex;
   align-items: stretch;
-  gap: 2px;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  row-gap: 0;
   padding: 0 var(--sp-5);
   background: var(--card);
   border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: thin;
 }
-.tabs::-webkit-scrollbar { height: 0; }
 
 .tab {
   position: relative;
@@ -408,11 +408,27 @@ table.grid thead th.num { text-align: right; }
 table.grid thead th .col-hint { font-weight: 400; color: var(--faint); font-size: 10.5px; }
 
 table.grid tbody td {
-  padding: 4px var(--sp-3);
-  line-height: 1.45;
+  padding: 7px var(--sp-3);
+  line-height: 1.5;
   border-bottom: 1px solid var(--border-soft);
   vertical-align: middle;
 }
+/* 分节标题行（数值页按「基础 / 经济 / 拉线 …」分组显示） */
+table.grid tbody tr.group-row > td {
+  padding: 12px var(--sp-3) 6px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  color: var(--primary);
+  background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 34px;
+  z-index: 4;
+}
+/* 说明列允许换行（数值页那种长说明不再被截成一行还让人左右拉） */
+table.grid.wrap-cells tbody td { white-space: normal; }
+table.grid.wrap-cells .cut { max-width: none; overflow: visible; text-overflow: clip; }
 /* 行状态用「左侧 3px 竖条」表达，不再整行铺色 */
 table.grid tbody td:first-child { border-left: 3px solid transparent; }
 table.grid tbody tr:nth-child(even) { background: var(--zebra); }
@@ -806,6 +822,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 .rp-hint { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
 .rp-mode { display: flex; gap: 6px; align-items: center; }
 .rp-table-wrap { overflow: auto; max-height: calc(100vh - 400px); }
+/* 长列表用「换行小方块」铺开，别做成一行横向滚动让人去拉滑块 */
+.chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+td.actions .btn + .btn { margin-left: 4px; }
 
 /* ============================== 响应式 ============================== */
 @media (max-width: 1100px) {
@@ -1202,6 +1221,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     ["spirit", "投喂：鱼灵 +N（永久）"],
     ["sheen", "投喂：鱼光 +N（永久）"],
     ["value_up", "投喂：估值 +N（永久）"],
+    ["quality_reroll", "洗髓丹：重掷这条鱼的个体品质，取更好的那次（值 = 掷几次）"],
     ["feed_bonus", "投喂：这条鱼的投喂上限 +N 次"],
     ["buff_quality", "钓手手气：value 是倍率，生效 buff_cast_count 竿"],
     ["quality_up", "同上（旧写法，插件按 buff_quality 处理）"],
@@ -1469,37 +1489,107 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     }
   };
 
-  /** 「数值」标签页固定展示的配置键：[键, 名称, 单位, 说明]。 */
+  /**
+   * 「数值」标签页的配置键：`[键, 名称, 单位, 说明, 是否文本行, 分组]`。
+   *
+   * ⚠️ 插件面板里的配置项**全部**隐藏了，所以凡是「只能手改配置文件」的键，
+   * 都必须在这里出现一次 —— 漏一个站长就永远改不了（v1.17.0 补齐了 40 个）。
+   * 第 5 位 `true` = 文本行（逗号/冒号分隔的名单，例如 `常见:14,少见:4.6`）。
+   */
   var NUMBER_KEYS = [
-    ["stamina_max", "体力上限", "点", "攒满需要 stamina_regen_seconds × 上限"],
-    ["stamina_regen_seconds", "体力恢复间隔", "秒", "每多少秒恢复 1 点；填 0 = 本服不限体力"],
-    ["multi_cast_max", "单次连钓上限", "次", "/钓鱼 <数字> 一次最多连钓几条"],
-    ["fish_cost", "每竿钓费", "金币", "空钩也要付的钱；0 = 免费下竿"],
-    ["initial_gold", "新玩家初始金币", "金币", "第一次玩时给多少"],
-    ["sign_reward", "签到奖励", "金币", "每天签到拿多少"],
-    ["sell_discount", "卖鱼折扣", "倍", "1.0 = 原价卖，0.8 = 打八折"],
-    ["fish_value_mult", "鱼价总闸", "倍", "所有鱼基准价的全局倍率（改物价用这个）"],
-    ["location_codex_gate", "钓点图鉴门槛", "比例", "上一个钓点图鉴开到几成才能前往下一个"],
-    ["item_drop_chance", "杂物概率", "概率", "没中鱼时钩上带物件的概率"],
-    ["bottle_note_chance", "漂流瓶纸条概率", "概率", "钩到漂流瓶时里面有纸条的概率"],
-    ["variant_chance", "变异概率", "概率", "钓到变异个体的概率"],
-    ["level_xp_base", "升级曲线基准", "竿", "每级基础竿数"],
-    ["level_xp_ratio", "等级曲线底数", "倍", "指数曲线底数，越大后期越难升级"],
-    ["hook_rate_fallback", "上钩率兜底", "概率", "鱼饵配置写错时的兜底咬钩率"],
-    ["aquarium_capacity", "水族馆容量", "条", "一开始能养几条"],
-    ["aquarium_bonus", "水族馆加成", "倍", "馆藏收益的倍率"],
-    ["aquarium_bonus_min_hours", "展出加成的门槛", "小时", "取出/卖出要加价，鱼得在缸里展出满这么多小时（累计）；0 = 不要求（放进去马上取出来也给）"],
-    ["order_count", "订单数量", "个", "同时挂几个订单"],
-    ["order_reward_mult", "订单奖励倍率", "倍", "提交订单的奖励系数"],
-    ["order_follow_location", "订单跟随当前钓点", "开关", "1 = 开（默认）：只点当前钓点钓得到的鱼，换钓点会跟着换一批；0 = 关：老行为，从全部鱼种里点"],
-    ["order_move_rerolls", "换钓点最多换几批", "批", "每个刷新周期内，换钓点最多能换几批订单；0 = 换钓点也不换单（防来回换图刷单）"],
-    ["order_include_hidden", "订单可点隐藏生物", "开关", "1 = 开（默认）：大肥鱼这种隐藏生物也可能被点单；0 = 关：订单不点它"],
-    ["backpack_base", "初始鱼篓容量", "条", "背包一开始能装多少"],
-    // 第 5 位 = 这一行是文本（逗号分隔的名单），不是数字
+    // ---- 基础与体力 ----
+    ["stamina_max", "体力上限", "点", "攒满需要 stamina_regen_seconds × 上限", false, "基础"],
+    ["stamina_regen_seconds", "体力恢复间隔", "秒", "每多少秒恢复 1 点；填 0 = 本服不限体力", false, "基础"],
+    ["multi_cast_max", "单次连钓上限", "次", "/钓鱼 <数字> 一次最多连钓几条", false, "基础"],
+    ["backpack_base", "初始鱼篓容量", "条", "背包一开始能装多少", false, "基础"],
+    ["backpack_upgrades", "背包扩容档位", "容量|价格", "用逗号分隔，例如 15|400,25|1100", true, "基础"],
+    ["initial_gold", "新玩家初始金币", "金币", "第一次玩时给多少", false, "基础"],
+    ["fish_cost", "每竿钓费", "金币", "空钩也要付的钱；0 = 免费下竿", false, "基础"],
+    ["sign_reward", "签到奖励", "金币", "每天签到拿多少", false, "基础"],
+    ["enable_group_broadcast", "群播报", "开关", "1 = 开：稀有鱼上钩时在群里播报；0 = 关", false, "基础"],
+
+    // ---- 经济与物价 ----
+    ["sell_discount", "卖鱼折扣", "倍", "1.0 = 原价卖，0.8 = 打八折", false, "经济"],
+    ["fish_value_mult", "鱼价总闸", "倍", "所有鱼基准价的全局倍率（改物价用这个）", false, "经济"],
+    ["fish_value_overrides", "单条鱼改价", "id:价", "只改某几条鱼的价格，例如 koi:3000,shark:900（留空 = 不改）", true, "经济"],
+    ["codex_bonus_per_rarity", "图鉴集齐加成", "5 个数", "按品质给「集齐该品质」的加价（常见,少见,稀有,传说,神话）", true, "经济"],
+    ["item_drop_chance", "杂物概率", "概率", "没中鱼时钩上带物件的概率", false, "经济"],
+    ["bottle_note_chance", "漂流瓶纸条概率", "概率", "钩到漂流瓶时里面有纸条的概率", false, "经济"],
+    ["variant_chance", "变异概率", "概率", "钓到变异个体的概率", false, "经济"],
+
+    // ---- 等级与图鉴 ----
+    ["level_xp_base", "升级曲线基准", "竿", "每级基础竿数", false, "等级"],
+    ["level_xp_ratio", "等级曲线底数", "倍", "指数曲线底数，越大后期越难升级", false, "等级"],
+    ["level_xp_growth", "升级曲线二次项", "系数", "0 = 纯指数曲线；调大会让后期额外变慢", false, "等级"],
+    ["location_codex_gate", "钓点图鉴门槛", "比例", "上一个钓点图鉴开到几成才能前往下一个", false, "等级"],
+
+    // ---- 稀有度与数值表 ----
+    ["rarity_spawn_weights", "品质出现权重", "品质:权重", "越大越常见，例如 常见:14,神话:0.04", true, "稀有度"],
+    ["rarity_value_factors", "品质价值倍数", "品质:倍", "各品质相对基准价的倍数", true, "稀有度"],
+    ["rarity_difficulty", "品质拉线难度", "品质:0~1", "越高中线窗口越短、越容易跑", true, "稀有度"],
+    ["rarity_attr_ranges", "品质三维范围", "品质:低-高", "钓上来时三维的随机区间", true, "稀有度"],
+    ["rarity_escape_chance", "品质逃脱率", "品质:概率", "这些品质要拉线，拉失败就跑（不写 = 只按 default_escape_rate）", true, "稀有度"],
+    ["rarity_display_names", "品质显示名", "5 个名字", "图鉴/背包上显示的名字（顺序 = 常见到神话；改了记得同步「数值」里其它按品质写的表）", true, "稀有度"],
+    ["tier_base_values", "各钓点基准价", "16 个数", "从第一个钓点到最后一个钓点的基准价倍数", true, "稀有度"],
+    ["value_variance", "个体差异范围", "低-高", "同一条鱼每条之间的价格浮动", true, "稀有度"],
+    ["quality_weights", "个体品质权重", "5 个数", "普通/优良/稀有/极品/传说的出现权重", true, "稀有度"],
+    ["quality_tiers", "个体品质档位", "档位表", "名字:倍率下限-上限:表情，例如 普通:0.8-1.0:⚪", true, "稀有度"],
+    ["attr_weights", "三维权重", "键:权重", "计算鱼价时肉质/灵性/光泽各占多少", true, "稀有度"],
+    ["attr_labels", "三维显示名", "键:名字", "背包/图鉴里显示的名字（meat:肉质 这种）", true, "稀有度"],
+    ["attr_par", "三维及格线", "分", "低于它按它算，避免小鱼卖成负数", false, "稀有度"],
+
+    // ---- 拉线互动 ----
+    ["interactive_rarities", "要拉线的品质", "逗号分隔", "这些品质上钩后要拉线，例如 传说,神话（留空 = 全都直接上钩）", true, "拉线"],
+    ["window_min", "拉线窗口下限", "秒", "最短的拉线窗口", false, "拉线"],
+    ["window_max", "拉线窗口上限", "秒", "最长的拉线窗口", false, "拉线"],
+    ["sweet_spot_width", "完美区宽度", "比例", "中间那段完美区占窗口的比例", false, "拉线"],
+    ["perfect_bonus", "完美拉线加价", "倍", "完美拉线多卖多少", false, "拉线"],
+    ["good_bonus", "偏差拉线加价", "倍", "没到完美但也没跑，多卖多少", false, "拉线"],
+    ["perfect_escape_factor", "完美区逃脱系数", "倍", "乘在品质逃脱率上（<1 = 更不容易跑）", false, "拉线"],
+    ["edge_escape_factor", "边缘逃脱系数", "倍", "拉到边缘时乘上去（>1 = 更容易跑）", false, "拉线"],
+    ["default_escape_rate", "默认逃脱率", "概率", "品质没单独写逃脱率时用这个", false, "拉线"],
+
+    // ---- 鱼饵与咬钩 ----
+    ["bait_hook_rates", "各鱼饵咬钩率", "鱼饵:概率", "这一竿中鱼的概率；认中文饵名与百分数，漏写按 hook_rate_fallback", true, "鱼饵"],
+    ["hook_rate_fallback", "咬钩率兜底", "概率", "鱼饵配置写错时的兜底咬钩率", false, "鱼饵"],
+    ["consume_bait_on_empty", "空竿也扣饵", "开关", "1 = 每次下竿都扣 1 个饵；0 = 空竿不扣（默认）", false, "鱼饵"],
+    ["location_hook_factors", "各钓点咬钩系数", "钓点:倍", "乘在鱼饵咬钩率上；≥1 = 这个钓点必上鱼（前三个图就是）", true, "鱼饵"],
+
+    // ---- 天气 / 行情 / 插曲 ----
+    ["enable_weather", "天气系统", "开关", "1 = 开：每天随机天气影响上钩与品质", false, "世界"],
+    ["enable_market", "鱼市行情", "开关", "1 = 开：每天随机行情影响鱼价", false, "世界"],
+    ["market_boost_min", "行情最低倍数", "倍", "行情最差时的价格倍数", false, "世界"],
+    ["market_boost_max", "行情最高倍数", "倍", "行情最好时的价格倍数", false, "世界"],
+    ["story_chance", "随机插曲概率", "概率", "每竿触发小插曲的概率", false, "世界"],
+    ["easter_egg_chance", "彩蛋概率", "概率", "每竿触发彩蛋的概率", false, "世界"],
+
+    // ---- 水族馆 / 养成 ----
+    ["aquarium_capacity", "水族馆容量", "条", "一开始能养几条", false, "水族馆"],
+    ["pond_income_per_hour", "挂机产出/小时", "比例", "每小时产出馆藏估值的百分之几（0.02 = 2%）；收益按每条鱼在缸里的时间算", false, "水族馆"],
+    ["pond_income_cap_hours", "单条鱼最长计产", "小时", "一条鱼最多按这么多小时计产（睡一觉回来也不会算爆）", false, "水族馆"],
+    ["pond_income_cap_coins", "单次领取上限", "金币", "一次最多领多少（0 = 不封顶）", false, "水族馆"],
+    ["decoration_slots", "装饰位数量", "个", "鱼缸里能同时摆几个珊瑚造景（0 = 关掉这个玩法）", false, "水族馆"],
+    ["aquarium_slots", "鱼缸扩建档位", "名字|价格", "用逗号分隔，例如 精致缸|1600,生态缸|5400", true, "水族馆"],
+    ["decoration_hours", "装饰耐久", "小时", "一个造景加成持续多少小时", false, "水族馆"],
+    ["feed_max_uses", "投喂次数上限", "次", "一条鱼最多喂几次（育灵水可以再+）", false, "水族馆"],
+    ["buff_cast_count", "手气 buff 竿数", "竿", "锦鲤玉佩生效多少竿", false, "水族馆"],
     ["hostile_keywords", "狠角色关键词", "逗号分隔",
       "名字里带这些字的鱼会在缸里捕食更弱的同伴（温和鱼再肥也不下嘴）。留空 = 用内置默认名单。" +
       "现实里的捕食者但现在没算进去的：黑鱼、鲶、鳜、鲈、带鱼、鲅、石斑鱼、巨型石斑 —— 想要就自己加进来",
-      true]
+      true, "水族馆"],
+
+    // ---- 订单 ----
+    ["order_count", "订单数量", "个", "同时挂几个订单", false, "订单"],
+    ["order_reward_mult", "订单奖励倍率", "倍", "提交订单的奖励系数", false, "订单"],
+    ["order_unlock_level", "订单解锁等级", "级", "几级才能看到订单", false, "订单"],
+    ["order_refresh_min_hours", "订单刷新间隔下限", "小时", "最快多久换一批", false, "订单"],
+    ["order_refresh_max_hours", "订单刷新间隔上限", "小时", "最慢多久换一批（在上下限之间随机）", false, "订单"],
+    ["order_follow_location", "订单跟随当前钓点", "开关", "1 = 开（默认）：只点当前钓点钓得到的鱼，换钓点会跟着换一批；0 = 关：老行为，从全部鱼种里点", false, "订单"],
+    ["order_move_rerolls", "换钓点最多换几批", "批", "每个刷新周期内，换钓点最多能换几批订单；0 = 换钓点也不换单（防来回换图刷单）", false, "订单"],
+    ["order_include_hidden", "订单可点隐藏生物", "开关", "1 = 开（默认）：大肥鱼这种隐藏生物也可能被点单；0 = 关：订单不点它", false, "订单"],
+
+    // ---- 其他 ----
+    ["button_mode", "官方按钮形态", "自动/markdown/text/关闭", "QQ 官方机器人发按钮的方式；出问题就改成 text 或关闭", true, "其他"]
   ];
 
   /** lastLoadError：本轮载入失败的原因（给页面显示，不白屏）。 */
@@ -1628,7 +1718,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       out.numbers.push({
         key: key, label: item[1],
         value: asText ? toText(raw[key]) : toNum(raw[key]),
-        unit: item[2], desc: item[3], text: asText
+        unit: item[2], desc: item[3], text: asText,
+        group: toText(item[5]) || "其他"
       });
     });
 
@@ -2430,7 +2521,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       hint: "这些是全局数值旋钮；内容表（鱼/饵/竿/钓点）在各自的标签页里改",
       keyField: "key",
       readonlyKeys: ["key", "label", "desc"],
-      tableMinWidth: "900px",
+      // 说明写得很长（每个键都讲清「改了什么会怎样」），让它换行显示，
+      // 别为了塞进一行又把表格撑出横向滚动条
+      wrapCells: true,
+      tableMinWidth: "620px",
       sortOptions: [["default", "默认顺序"], ["name", "按名称"], ["valueDesc", "按数值（高→低）"]],
       columns: [
         { key: "label", label: "数值项",    type: "readonly", w: "200px" },
@@ -2551,7 +2645,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       styleModes: [],           // [{value,label}] 样式策略选项（按按钮表 / 统一）
       styleMode: "按按钮表",    // 当前策略（全局属性，保存进配置）
       styleCfgTouched: false,   // 全局样式设置改了还没保存
-      originalStyle: { mode: "按按钮表", style: "default" },  // 已保存的样式设置
+      emptyScenes: "",          // 「明确不要按钮」的场景（逗号分隔，配置里的原文）
+      emptyScenesDraft: "",     // 上面那项的草稿
+      originalStyle: { mode: "按按钮表", style: "default", empty: "" },  // 已保存的样式设置
       view: "cards",            // cards = 场景卡片 / overview = 按钮总览
       focus: "",                // 当前聚焦的场景（预览面板跟着它）
       previewOpen: true,        // 预览面板是否展开（常驻 + 可折叠）
@@ -3137,8 +3233,22 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         "</div></td></tr>";
     }
 
+    // 数值页按「组」分节显示（组名来自 NUMBER_KEYS 第 6 位）：
+    // 只在默认顺序下插分节标题 —— 按数值/名称排序时顺序被打乱，插标题反而看不懂
+    var grouped = tab.id === "numbers" && state.sort === "default";
+    var lastGroup = null;
+
     return list.map(function (it) {
       var row = it.row, index = it.index;
+      var head = "";
+      if (grouped) {
+        var g = toText(row.group) || "其他";
+        if (g !== lastGroup) {
+          lastGroup = g;
+          head = '<tr class="group-row"><td colspan="' + (tab.columns.length + 2) + '">' +
+            esc(g) + "</td></tr>";
+        }
+      }
       var errs = validateRow(tab, row);
       var invalid = Object.keys(errs).length > 0;
       var isSel = state.selected.indexOf(index) >= 0;
@@ -3164,7 +3274,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         : '<button class="btn btn-sm btn-icon btn-ghost" data-act="row:copy" data-index="' + index + '" title="复制这一行">⧉</button>' +
           '<button class="btn btn-sm btn-icon btn-ghost" data-act="row:del" data-index="' + index + '" title="删除这一行">🗑</button>';
 
-      return '<tr class="' + (isSel ? "is-selected " : "") + (isDirty ? "is-dirty " : "") + (invalid ? "is-invalid " : "") +
+      return head + '<tr class="' + (isSel ? "is-selected " : "") + (isDirty ? "is-dirty " : "") + (invalid ? "is-invalid " : "") +
         (state.editing && state.editing.index === index ? "is-editing" : "") + '">' +
         '<td style="width:34px"><input type="checkbox" data-act="row:select" data-index="' + index + '"' + (isSel ? " checked" : "") + " /></td>" +
         tds +
@@ -3189,7 +3299,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
 
     html += renderToolbar(tab, list, d);
 
-    html += '<div class="table-wrap"><table class="grid"' + (tab.tableMinWidth ? ' style="min-width:' + tab.tableMinWidth + '"' : "") + ">";
+    html += '<div class="table-wrap"><table class="grid' + (tab.wrapCells ? " wrap-cells" : "") + '"' + (tab.tableMinWidth ? ' style="min-width:' + tab.tableMinWidth + '"' : "") + ">";
     html += "<thead><tr>";
     html += '<th style="width:34px"><input type="checkbox" data-act="selectAll" title="全选/取消" /></th>';
     html += tab.columns.map(function (col) {
@@ -3593,7 +3703,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
   var REPLY_LAYOUT_ALL = "*";
   /** QQ 官方按钮一行最多 5 个 */
   var REPLY_ROW_MAX = 5;
-  var REPLY_SOURCE_LABEL = { config: "配置", inherit: "继承", default: "默认", none: "无按钮" };
+  var REPLY_SOURCE_LABEL = {
+    config: "配置", inherit: "继承", default: "默认", none: "无按钮", off: "已关闭按钮"
+  };
   /** 旧按钮表里的场景名（只用于兜底展示时给个中文名） */
   var REPLY_SCENE_LABEL = {
     cast: "抛竿结果", pull: "咬钩拉线", bag: "背包", location: "钓点", story: "随机插曲"
@@ -3735,6 +3847,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
       buttonStyleModes: modes,
       buttonStyleMode: toText(r.button_style_mode) || "按按钮表",
       buttonDefaultStyle: toText(r.button_default_style) || "default",
+      buttonEmptyScenes: toText(r.button_empty_scenes),
       // 效果键清单（插件给的；空 = 用内置清单）
       effectKeys: Array.isArray(r.effect_keys) ? r.effect_keys : [],
       groups: groups,
@@ -3951,12 +4064,15 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     var names = templatePlaceholders(tpl);
     var unknown = unknownPlaceholders(tpl, samples, declared);
     var hasOriginal = names.indexOf("原文") >= 0;
+    // 「!!」开头 = 站长明确要整段替换（丢掉动态内容，自己写整条），这时不要求 {原文}
+    var full = toText(tpl).replace(/^\s+/, "").indexOf("!!") === 0;
     return {
       names: names,
       unknown: unknown,
       hasOriginal: hasOriginal,
-      missingOriginal: !!dynamicText && !hasOriginal,
-      empty: toText(tpl).trim() === ""
+      fullReplace: full,
+      missingOriginal: !!dynamicText && !hasOriginal && !full,
+      empty: toText(tpl).trim() === "" || (full && toText(tpl).replace(/^\s*!!/, "").trim() === "")
     };
   }
 
@@ -3974,7 +4090,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
         (declared.join(" / ") || "（没有声明任何占位符）"));
     }
     if (issues.missingOriginal) {
-      out.push("这条回复的文字是代码拼出来的，模板里必须保留 {原文}，否则插件会忽略这次覆盖。");
+      out.push("这条回复的文字是代码拼出来的，模板里必须保留 {原文}；" +
+        "想整段自己写（放弃里面的动态内容）就在最前面加两个感叹号：!! 你要的整段文案");
     }
     return out;
   }
@@ -4262,6 +4379,7 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (state.replies.styleCfgTouched && !state.replies.readonly) {
       payload.button_style_mode = toText(state.replies.styleMode) || "按按钮表";
       payload.button_default_style = toText(state.replies.defaultStyle) || "default";
+      payload.button_empty_scenes = toText(state.replies.emptyScenesDraft);
     }
     return payload;
   }
@@ -4309,7 +4427,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (wroteStyle) {
       r.styleMode = toText(r.styleMode) || "按按钮表";
       r.defaultStyle = toText(r.defaultStyle) || "default";
-      r.originalStyle = { mode: r.styleMode, style: r.defaultStyle };
+      r.emptyScenes = toText(r.emptyScenesDraft);
+      r.originalStyle = { mode: r.styleMode, style: r.defaultStyle, empty: r.emptyScenes };
       r.styleCfgTouched = false;
     }
     applyButtonsTextToTable(r.original.button_defs);
@@ -4398,7 +4517,9 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     r.styleModes = payload.buttonStyleModes || [];
     r.styleMode = payload.buttonStyleMode || "按按钮表";
     r.defaultStyle = payload.buttonDefaultStyle || "default";
-    r.originalStyle = { mode: r.styleMode, style: r.defaultStyle };
+    r.emptyScenes = payload.buttonEmptyScenes || "";
+    r.emptyScenesDraft = r.emptyScenes;
+    r.originalStyle = { mode: r.styleMode, style: r.defaultStyle, empty: r.emptyScenes };
     r.styleCfgTouched = false;
     applyEffectKeys(payload.effectKeys);   // 效果清单也从插件读（不再写死）
 
@@ -4608,7 +4729,10 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     html += '<div class="rp-body">';
     html += '<div class="rp-row"><span class="rp-label">文案模板</span>' +
       '<span class="hint faint">' + esc(scene.desc || "") +
-      (scene.dynamic_text ? "　（这条回复由代码拼装）" : "　（模板就是完整文案，可任意改写）") + "</span></div>";
+      (scene.dynamic_text
+        ? "　（正文由代码拼装：用 {原文} 保留它、前后随便加；" +
+          "以 !! 开头 = 整段替换，动态内容会被丢掉）"
+        : "　（模板就是完整文案，可任意改写）") + "</span></div>";
     html += '<textarea class="rp-text' + (warnings.length ? " is-bad" : "") + '" data-act="rp:text" data-scene="' +
       esc(scene.id) + '" spellcheck="false" rows="2" placeholder="这条回复要说的话…"' +
       (r.readonly ? " readonly" : "") + ">" + esc(text) + "</textarea>";
@@ -4725,7 +4849,15 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     html += '<div class="form-row"><label>默认 / 统一样式</label><span class="field">' +
       '<select data-act="rp:defaultStyle"' + (r.readonly ? " disabled" : "") + ">" +
       replyStyleOptions(r.defaultStyle) + "</select></span></div>";
+    html += '<div class="form-row"><label>不要按钮的场景</label><span class="field" style="flex:1">' +
+      '<input type="text" data-act="rp:emptyScenes" placeholder="逗号分隔场景名，例如 cast.none,bag.empty"' +
+      ' value="' + esc(toText(r.emptyScenesDraft)) + '"' + (r.readonly ? " disabled" : "") +
+      " /></span></div>";
     html += "</div>";
+    html += '<div class="form-note" style="padding:0 10px 10px">' +
+      "「不要按钮的场景」填了之后，这些场景<b>连继承父场景、连出厂默认按钮都不会再长出来</b> —— " +
+      "删按钮删不干净时用这里兜底（场景名就是卡片上那串英文，例如 <span class=\"mono\">cast.none</span>）。" +
+      "留空 = 不特殊处理。</div>";
     html += '<div class="form-note" style="padding:0 10px 10px">写进配置的样子：' +
       '<span class="mono">*|3</span>（全局默认）、<span class="mono">story.prompt|1</span>（单个场景覆盖）。' +
       "卡片里的「每行 N 个」只写那个场景的覆盖行。</div>";
@@ -4781,6 +4913,8 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
           "</td>" +
           (r.readonly ? "" :
             '<td class="actions">' +
+            '<button class="btn btn-sm" data-act="rp:btnAdd" data-scene="' + esc(row.scene_id) +
+            '" title="给这个场景再加一个按钮">＋</button>' +
             '<button class="btn btn-sm" data-act="rp:goto" data-scene="' + esc(row.scene_id) +
             '" title="跳到这张卡片">✏️ 改</button>' +
             '<button class="btn btn-sm btn-danger" data-act="rp:btnDel" data-scene="' + esc(row.scene_id) +
@@ -4788,6 +4922,22 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
           "</tr>";
       });
       html += "</tbody></table></div>";
+    }
+
+    // 还没有任何按钮的场景：直接在总览里点一下就能加（以前这些场景在总览里根本不出现）
+    var emptyScenes = (r.scenes || []).filter(function (s) {
+      return !replySceneDraft(s.id).buttons.length;
+    });
+    if (emptyScenes.length && !r.readonly) {
+      html += '<div class="card-foot" style="padding:10px 14px;border-top:1px solid var(--border)">' +
+        '<div class="hint" style="margin-bottom:6px">还没有按钮的场景（' + emptyScenes.length +
+        " 个）—— 点场景名就给它加一个按钮：</div>" +
+        '<div class="chip-wrap">' +
+        emptyScenes.slice(0, 200).map(function (s) {
+          return '<button class="btn btn-sm" data-act="rp:btnAdd" data-scene="' + esc(s.id) +
+            '" title="' + esc(s.desc || s.id) + '">＋ ' + esc(s.label) + "</button>";
+        }).join("") +
+        "</div></div>";
     }
     html += "</section>";
     return html;
@@ -5935,6 +6085,14 @@ html[data-theme="light"] .rar-myth     { color: #9a6700; }
     if (act === "rp:styleMode") {
       state.replies.styleMode = toText(el.value) || "按按钮表";
       state.replies.styleCfgTouched = true;
+      return;
+    }
+    if (act === "rp:emptyScenes") {
+      state.replies.emptyScenesDraft = toText(el.value);
+      state.replies.styleCfgTouched = true;
+      // 只更新状态栏与标签，避免输入时整页重绘导致失焦
+      renderStatusBar();
+      renderTabs();
       return;
     }
     if (act === "rp:query") {

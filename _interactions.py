@@ -40,21 +40,9 @@ def _message_text(message: Any) -> str:
 class InteractionsMixin:
     """交互与推送：按钮 payload、@ 提醒、随机插曲、群播报、拉线小游戏（由 FishingPlugin 继承，见 main.py 的类定义）。"""
 
-    def _reply(self, event: AstrMessageEvent, text: str):
-        """统一的回复入口。
-
-        不同平台对文本的处理不一样，这里做一层适配：
-
-        - **QQ 官方机器人（qq_official）**：不支持原生 markdown 时会由 AstrBot
-          自动降级为纯文本，所以我们统一走 ``plain_result`` 即可，安全。
-        - 其余平台：同样是纯文本，不做额外处理。
-
-        单独包一个函数是为了将来接按钮/模板消息时只需改这一个地方。
-        当前 AstrBot（v4.28.1）的消息组件里没有 Button/Keyboard，
-        QQ 官方机器人的按钮需要直接用 botpy 的 keyboard payload，
-        不属于插件公开 API，因此这里不做，改用清晰的分行文本指令引导。
-        """
-        return event.plain_result(text)
+    # 注：这里曾经有个 `_reply()`「统一回复入口」，但**从来没有调用点**，
+    # 还被 test_local 的场景护栏当成合法出口（等于给「绕过场景体系」开了后门）。
+    # v1.17.0 删掉：发文本一律走 _say / _say_msg / _push，场景键才守得住。
 
     # -------------------------------------------------------------------------
     # 玩家数据读写（插件级 KV 存储）
