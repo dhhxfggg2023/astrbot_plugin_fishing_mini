@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """数值计算与配置解析。
 
 这一层决定「鱼值多少钱、长多少属性、等级怎么算、配置怎么写坏都不崩」，
@@ -310,7 +310,13 @@ def _parse_effects(text: str) -> dict[str, float]:
     return effects
 
 def _parse_item_defs(raw: Any) -> dict[str, dict[str, Any]]:
-    """解析道具定义。返回 {item_id: {...}}。"""
+    """解析道具定义。返回 {item_id: {...}}。
+
+    格式：``id|名称|emoji|单价|说明|效果``，v1.18.16 起可再加第 7 段
+    **解锁等级**（省略 = 1 级，老配置照常读）：
+    道具的价格是**一口价**，但它的收益随鱼价水涨船高，所以后期道具必须靠等级门槛
+    来卡「什么时候买才划算」，否则要么前期买亏、要么后期白菜价。
+    """
     items: dict[str, dict[str, Any]] = {}
     entries = raw if isinstance(raw, list) else DEFAULTS["item_defs"]
     for entry in entries:
@@ -329,6 +335,7 @@ def _parse_item_defs(raw: Any) -> dict[str, dict[str, Any]]:
             "price": max(0, _to_int(parts[3], 0)),
             "desc": parts[4],
             "effects": _parse_effects(parts[5]),
+            "unlock_level": max(1, _to_int(parts[6], 1)) if len(parts) > 6 else 1,
         }
     return items
 
@@ -2431,10 +2438,11 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("collection.detail", "collection", "图鉴完整清单（分页）", ""),
     ("collection.location", "collection", "某个钓点的收集进度", ""),
     # ---- 查鱼 ----
-    ("fishinfo.usage", "fishinfo", "查鱼 / 查钓点的用法说明", ""),
     ("fishinfo.detail", "fishinfo", "鱼或钓点的详情", ""),
     ("fishinfo.location_detail", "fishinfo", "钓点里的鱼种清单", ""),
-    ("fishinfo.not_found", "fishinfo", "没有这种鱼，也没有这个钓点", ""),
+    ("fishinfo.not_found", "fishinfo", "什么都没查到", ""),
+    ("fishinfo.index", "fishinfo", "/钓鱼 查 的用法（能查哪些东西）", ""),
+    ("fishinfo.multi_match", "fishinfo", "一个词命中好几样东西", ""),
     ("fishinfo.empty", "fishinfo", "这个钓点还没有配置鱼种", ""),
     # ---- 杂物 ----
     ("collectibles.view", "collectibles", "杂物与纸条收集", ""),

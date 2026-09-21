@@ -354,10 +354,16 @@ DEFAULTS: dict[str, Any] = {
     "level_xp_growth": 0.0,         # 升级曲线：二次增长系数（默认 0，留着做微调）
     # 上钩率：空钩基本靠运气，带饵才容易上鱼（"id:概率" 逗号分隔，站长可调）
     # 钓点难度系数：≥1.0 = 这个钓点必出鱼；<1.0 = 上钩率 × 系数（越深越容易空竿）
+    #
+    # ⚠️ v1.18.16 重定过阶梯：原来从新手村 1.0 一路滑到龙宫 0.54，
+    # 配上最好的饵（1.0）在深层也只有 54% 中鱼 —— 站长报「倒数第四个钓点
+    # 用最好的配置依旧相当于一半空杆」。现在的梯度是 1.0 → 0.82：
+    # 最深的地图（龙宫）拿最好的饵也有 82% 中鱼，用蚯蚓这种中档饵才是 57%，
+    # 「饵越好越不空竿」这条感受仍然成立，但不会让人觉得概率坏了。
     "location_hook_factors": (
-        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,night"
-        ":0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,trench:0.65"
-        ",glacier:0.62,aurora:0.60,starfall:0.58,void_sea:0.56,dragon_palace:0.54"
+        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,night"
+        ":0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,trench:0.86"
+        ",glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,dragon_palace:0.82"
     ),
     # 前往下一个钓点需要上一个钓点图鉴开到多少比例
     "location_codex_gate": 0.8,
@@ -423,19 +429,36 @@ DEFAULTS: dict[str, Any] = {
         "dragon_bait|龙涎|🐉|300|1|0.78|0.3,0.8,2.0,6.0,14.0|62|void_rod|"
         "龙宫檐下凝的一滴，寻常鱼闻了不敢靠近",
     ],
-    # 道具：id|名称|emoji|单价|说明|效果（效果键见 _parse_effects）
+    # 道具：id|名称|emoji|单价|说明|效果|解锁等级（见 _parse_effects）
     #   meat/spirit/sheen/value_up = 喂鱼（一次性，永久加成）
     #   decorate      = 摆进水族馆的装饰（耐久内持续加成挂机产出）
     #   feed_bonus    = 提升这条鱼的投喂上限
     #   buff_quality  = 作用于钓手本人的手气（持续 buff_cast_count 竿）
+    #   quality_reroll= 重掷这条鱼的个体品质（取更好的那次）
+    #   heal          = 回复体力（体力没开时用不了；满了不扣道具）
+    #
+    # v1.18.16 重设过一遍：道具是**一口价**，但它的收益随鱼价水涨船高 ——
+    # 所以每一档都配了等级门槛，让「什么时候买才划算」说得清楚：
+    #   1 级买的饲料只适合喂贵鱼；后期道具（玉佩/仙露/造景）都卡在海沟之后。
+    #   锦鲤玉佩也从 +30%/500 金削成 +20%/6000 金（原来 20 竿能多赚 3 万，
+    #   只要 500 金，等于后期白送）。
     "item_defs": [
-        "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1",
-        "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
-        "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
-        "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
-        "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3",
-        "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
-        "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
+        "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1|1",
+        "feed_premium|高级饲料|🍖|90|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3|6",
+        "feed_divine|仙露|💧|420|喂鱼：三维各 +10，估值 +600（永久）|"
+        "meat=10;spirit=10;sheen=10;value_up=600|14",
+        "growth_tonic|育灵水|🌱|800|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5|18",
+        "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "极小概率直接洗出「神品」|quality_reroll=3|20",
+        "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
+        "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+        "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
+        "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
+        "feed_mythic|龙涎饲料|🐲|1500|喂鱼：三维各 +18，估值 +2000（永久）|"
+        "meat=18;spirit=18;sheen=18;value_up=2000|45",
+        "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
+        "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
+        "hot_soup|姜汤|🍲|400|喝一口：回复体力（体力已满时不消耗）|heal=10|3",
     ],
     # ---- 可调数值表：想改物价 / 爆率 / 属性范围，改这里（或 WebUI）即可 ----
     # 鱼种品质：出现权重（越大越常见）、价值倍数、拉线难度、三维范围
@@ -488,8 +511,15 @@ DEFAULTS_SYNC_EXCLUDE_KEYS: frozenset[str] = frozenset(
         "content_tables_hint",
     }
 )
-#: 内容表（鱼池/钓点/鱼竿/鱼饵/道具/水族馆栏位…）**不参与默认值同步**：
+#: 内容表（鱼池/钓点/鱼竿/鱼饵/道具…）**不参与默认值同步**：
 #: 站长自己编辑过的内容不能被升级覆盖；官方新增内容由 content_auto_merge 增量补。
+#:
+#: ⚠️ `aquarium_slots` / `backpack_upgrades` **不在**这个名单里（v1.18.16 修的）：
+#: 它们虽然也是「内容」，但由 `DEFAULTS_MERGE_LIST_KEYS` 的**合并**逻辑负责
+#: （保留站长已有的档位、只补官方新增的尾巴）。以前把它们排除在同步之外，
+#: 于是合并逻辑永远不会被执行 —— 官方加了 4 档扩容、3 档鱼缸扩建，
+#: 站长的配置里**一档都没多**（游戏内和编辑器里都看不到），这就是站长报的
+#: 「扩容并没有生效」。凡是进了 `DEFAULTS_MERGE_*` 的键，都**不能**再排除。
 DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
     {
         "fish_defs",
@@ -502,8 +532,6 @@ DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
         "rod_defs",
         "bait_defs",
         "item_defs",
-        "aquarium_slots",
-        "backpack_upgrades",
         # 命令别名 / 自定义命令也是「站长自己写的内容」，同样不许被升级覆盖
         "command_aliases",
         "custom_commands",
@@ -511,6 +539,19 @@ DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
         "button_layout",
         "text_overrides",
     }
+)
+
+#: 「一整段多行文本」形态的内容表：升级时按行**追加**官方新增的条目
+#: （保留站长的行序、他改过的行、他自己加的条目）。
+#: ⚠️ 这一类表既不进 `CONTENT_LIST_KEYS`（那是给 list 形态的）也在同步排除名单里，
+#: 所以必须由 `_merge_text_content_rows()` 专门兜住 —— 漏了就会出现
+#: 「官方加了新杂物/新天气，老配置里永远看不到」（`fish_defs` 当年就是这个坑）。
+CONTENT_TEXT_KEYS: tuple[str, ...] = (
+    "fish_defs",
+    "collectible_defs",
+    "variant_defs",
+    "weather_defs",
+    "easter_egg_defs",
 )
 
 
@@ -596,6 +637,56 @@ DEFAULTS_VALUE_FIXES: dict[str, tuple[tuple[Any, Any], ...]] = {
     # 只在站长没动过这个值时替换 —— 他自己填过别的数就照他的来。
     "pond_income_cap_coins": ((5000, 100000),),
 }
+
+#: 「官方改过的内容行」：`(配置键, 旧整行, 新整行)`，只有配置里那一行**逐字等于旧行**
+#: 才替换（站长自己动过的行一律不碰）。用法与 `_game_data.CONTENT_ROW_FIXES` 完全一样。
+#:
+#: 为什么不写进 `_game_data.py`：**内容表的默认值在哪个文件，迁移就写在哪个文件** ——
+#: `item_defs` / `rod_defs` / `bait_defs` 的默认值就在这个文件里（DEFAULTS），
+#: 改它们的人顺手在这里登记，不用跨文件找。
+LOCAL_CONTENT_ROW_FIXES: tuple[tuple[str, str, str], ...] = (
+    # v1.18.16：道具整套重定价格 + 新增「解锁等级」那一段（13 件道具的大改版）。
+    # 七件老道具逐条登记，老配置里没被改过的那一行会自动升级到新价/新数值。
+    (
+        "item_defs",
+        "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1",
+        "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1|1",
+    ),
+    (
+        "item_defs",
+        "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
+        "feed_premium|高级饲料|🍖|90|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3|6",
+    ),
+    (
+        "item_defs",
+        "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|"
+        "meat=10;spirit=10;sheen=10;value_up=600",
+        "feed_divine|仙露|💧|420|喂鱼：三维各 +10，估值 +600（永久）|"
+        "meat=10;spirit=10;sheen=10;value_up=600|14",
+    ),
+    (
+        "item_defs",
+        "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
+        "growth_tonic|育灵水|🌱|800|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5|18",
+    ),
+    (
+        "item_defs",
+        "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "极小概率直接洗出「神品」|quality_reroll=3",
+        "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "极小概率直接洗出「神品」|quality_reroll=3|20",
+    ),
+    (
+        "item_defs",
+        "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
+        "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+    ),
+    (
+        "item_defs",
+        "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
+        "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
+    ),
+)
 
 
 def _merge_map_text(old: Any, new: str) -> Any:
@@ -4405,9 +4496,11 @@ class FishingPlugin(
             pass
         changed = False
         changed = self._apply_content_row_fixes() or changed
-        # fish_defs 是「一整段文本」且会整体接管鱼池，单独走一条追加逻辑
-        # （漏了它 = 新增的鱼永远进不了老配置，v1.18.8 的三个新钓点就是这么空掉的）
-        changed = self._merge_fish_defs() or changed
+        # 「一整段多行文本」形态的内容表（鱼池/杂物/变异/天气/彩蛋）：
+        # 单独走追加逻辑 —— 漏了它 = 官方新增的内容永远进不了老配置
+        #（v1.18.8 的三个新钓点就是这么空掉的，v1.18.16 把其余四张表也补上）
+        for key in CONTENT_TEXT_KEYS:
+            changed = self._merge_text_content_rows(key) or changed
         for key in self.CONTENT_LIST_KEYS:
             default = DEFAULTS.get(key)
             if not isinstance(default, list) or not default:
@@ -4454,9 +4547,11 @@ class FishingPlugin(
         站长自己动过的行一律不碰。
         """
         try:
-            fixes = _CONTENT.get("CONTENT_ROW_FIXES") or []
+            fixes = list(_CONTENT.get("CONTENT_ROW_FIXES") or [])
         except Exception:
             fixes = []
+        # 本文件自己管的内容表（道具/鱼竿/鱼饵）的迁移也一起走这里
+        fixes.extend(LOCAL_CONTENT_ROW_FIXES)
         changed = False
         for fix in fixes:
             if not (isinstance(fix, (list, tuple)) and len(fix) >= 3):
@@ -4483,31 +4578,38 @@ class FishingPlugin(
             logger.info(f"配置自动升级：{key} 的「{row_id}」按新版默认更新了效果")
         return changed
 
-    def _merge_fish_defs(self) -> bool:
-        """把新版默认鱼池里**还没有的鱼**补进站长的 `fish_defs`（只追加，不改老行）。
+    def _merge_text_content_rows(self, key: str) -> bool:
+        """把「一整段多行文本」形态的内容表补齐（只按 id 追加缺的行）。
 
-        为什么单独写一条：`fish_defs` 和 location_defs/rod_defs 那几张表不一样 ——
+        为什么单独写一条：这类表和 location_defs/rod_defs 那几张表不一样 ——
 
-        1. 它是一整段多行**文本**（不是 list），通用合并只认 list，所以一直被跳过；
-        2. 它**非空就整体接管鱼池**（见 `_apply_fish_defs`）。
+        1. 它们是多行**文本**（不是 list），通用合并只认 list，所以一直被跳过；
+        2. `fish_defs` 更狠：**非空就整体接管鱼池**（见 `_apply_fish_defs`）。
 
         两条加起来就是一个很难自己发现的坑：站长配置里那份是某个旧版本的快照，
-        那以后官方新增的鱼**一条都进不来**。v1.18.8 的三个新钓点正是这么变成
-        **空池**的 —— 钓点本身靠 location_defs 的 list 合并补上了，鱼却卡在这里，
-        于是「钓点进得去、里面一条鱼都没有、图鉴也是空的」。
+        那以后官方新增的内容**一条都进不来**。v1.18.8 的三个新钓点正是这么变成
+        **空池**的（钓点靠 location_defs 的 list 合并补上了，鱼却卡在这里）；
+        杂物 / 变异 / 天气 / 彩蛋四张表同理 —— 官方加了新天气，老配置里永远看不到。
 
-        只按 id 追加缺的行：站长的行序、他改过的行、他自己加的鱼一律不动。
+        只按 id 追加缺的行：站长的行序、他改过的行、他自己加的内容一律不动。
 
-        ⚠️ 只对「看起来就是官方鱼池的旧快照」下手：判据是配置里**至少一半的行**
-        是官方鱼的 id。手工写的小鱼池（只留几种鱼、自己从头配一套）**一个字都不改** ——
-        否则官方内容会直接淹没站长的自定义（`test_local.py` 的 [11b] 就钉着这条）。
+        ⚠️ 两条判据，先宽松后保守：
+
+        1. 配置里的行**全是官方条目的 id** → 它就是某个旧版本的快照（行数少也一样，
+           老版本的官方表本来就短），补齐即可；
+        2. 否则（夹了自定义内容）才看比例：官方 id 不到一半就当成「站长从头手配的
+           小表」，**一个字都不改** —— 否则官方 200 多条鱼会直接淹没他的几只鱼
+           （`test_local.py` 的 [11b] 钉着这条）。
+
+        第 1 条是 v1.18.16 补的：以前只有比例判据，于是「旧版本的 3 条杂物」
+        （3/7 < 50%）永远补不上官方新增的 4 条 —— 站长怎么升级都看不到新内容。
         """
-        default = DEFAULTS.get("fish_defs")
+        default = DEFAULTS.get(key)
         if not isinstance(default, str) or not default.strip():
             return False
-        current = self.config.get("fish_defs")
+        current = self.config.get(key)
         if current is None or (isinstance(current, str) and not current.strip()):
-            # 空的/没配 → 走「内置鱼池」那条路，不需要补（内置已经是最新的）
+            # 空的/没配 → 走「内置内容」那条路，不需要补（内置已经是最新的）
             return False
         if not isinstance(current, (str, list)):
             return False
@@ -4519,9 +4621,16 @@ class FishingPlugin(
             for item in items
             if item.strip() and "|" in item
         }
-        official_ids = {f["id"] for f in BUILTIN_FISH_POOL}
-        if len(have & official_ids) * 2 < len(official_ids):
-            # 手工鱼池：不动（官方新增的鱼不该淹没站长的自定义鱼池）
+        official_ids = {
+            line.split("|", 1)[0].strip()
+            for line in default.splitlines()
+            if line.strip() and "|" in line
+        }
+        if have and have <= official_ids:
+            # 清一色官方条目：某个旧版本的快照（哪怕只留了几条），补齐就行
+            pass
+        elif len(have & official_ids) * 2 < len(official_ids):
+            # 手工内容居多：不动（官方新增的条目不该淹没站长的自定义）
             return False
 
         rows = [
@@ -4529,24 +4638,24 @@ class FishingPlugin(
             for line in default.splitlines()
             if line.strip() and not line.strip().startswith("#") and "|" in line
         ]
-        added = [
-            line for line in rows if line.split("|", 1)[0].strip() not in have
-        ]
+        added = [line for line in rows if line.split("|", 1)[0].strip() not in have]
         if not added:
             return False
         if is_list:
-            self.config["fish_defs"] = list(current) + added
+            self.config[key] = list(current) + added
         else:
-            self.config["fish_defs"] = (
-                str(current).rstrip("\n") + "\n" + "\n".join(added)
-            )
+            self.config[key] = str(current).rstrip("\n") + "\n" + "\n".join(added)
 
         names = "、".join(line.split("|")[1] for line in added[:6] if "|" in line)
         logger.info(
-            f"配置自动升级：fish_defs 补上 {len(added)} 种新版鱼"
+            f"配置自动升级：{key} 补上 {len(added)} 条新版内容"
             f"（{names}{'…' if len(added) > 6 else ''}）"
         )
         return True
+
+    def _merge_fish_defs(self) -> bool:
+        """兼容旧调用点：鱼池的补齐（实现见 `_merge_text_content_rows`）。"""
+        return self._merge_text_content_rows("fish_defs")
 
     def _warn_stale_config(self) -> None:
         """旧版配置残留体检。

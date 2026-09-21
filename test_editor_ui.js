@@ -149,6 +149,19 @@ const hookNames = [
   // 滚动位置保留（点一项再点另一项不该跳回顶部）+ 数值页的实时提示
   "scrollAreas", "snapshotScroll", "restoreScroll",
   "numberRowValue", "levelThresholdAt", "levelCurveHint", "numberLiveHint",
+  // v1.18.16：全量配置键（每个键都要有编辑入口）+ 「🔎 全部配置键」视图 + 入口行渲染
+  "DEMO_NUMBER_VALUES", "demoNumberRows", "demoConfig", "numberEntryOf", "keyEntryLabel",
+  "keyEntryEditable", "KEY_DOCS", "applyKeyDocs", "numberRowFromItem", "configKeyCoverage",
+  "configKeyCoverageNow", "CONFIG_PAYLOAD_EXTRA_KEYS", "keyOverviewRows", "keysFilteredRows",
+  "renderKeysTable", "renderKeysSummary", "renderKeysTab", "refreshKeysMain", "gotoConfigKey",
+  "copyKeyName", "numberEntryCellHtml", "shortValueText", "numberRowPlan",
+  "PANEL_NEVER_WRITABLE",
+  // v1.18.16：场景卡片里「加按钮」的选择器（选项来自已有按钮 / 插件认识的指令）
+  "BUTTON_LABEL_PRESETS", "BUTTON_COMMAND_PRESETS", "buttonTemplateHint", "usedButtonValues",
+  "buttonOptionTag", "buttonOptionGroup", "buttonLabelOptions", "buttonCommandOptions",
+  "buttonStyleNumericOptions", "renderReplyDatalists", "replyNewButtonDraft",
+  "resetNewButtonDraft", "renderReplyButtonPicker", "replyPickSummaryHtml",
+  "refreshReplyPicker", "refreshReplyPickerSummary", "addPickedButton", "renderReplyButtonRow",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -184,7 +197,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 16, "标签页数量 = 16（12 + 玩家 + 命令别名 + 自定义命令 + 💬 回复）",
+  check(Object.keys(T.TAB_BY_ID).length === 17, "标签页数量 = 17（12 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个（离线演示数据，与线上 19 个无关）", (T.state.data.locations || []).length);
@@ -291,8 +304,8 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 15,
-    "15 个标签入口都有条目数徽标（12 原有 + 玩家 + 命令组 + 💬 回复）",
+  check(tabsHtml.split("tab-count").length - 1 === 16,
+    "16 个标签入口都有条目数徽标（12 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     tabsHtml.split("tab-count").length - 1);
   check(tabsHtml.indexOf('data-tab="replies"') > 0, "标签栏里有「💬 回复」入口");
   check(T.TAB_BY_ID.buttons.label.indexOf("原始文本") > 0,
@@ -400,6 +413,12 @@ function runAssertions() {
           "「💬 回复」渲染出卡片视图 + 二级切换", out.length + " 字符");
         check(out.indexOf("rp-side") >= 0 && out.indexOf("👁️ 预览") >= 0,
           "「💬 回复」右侧有常驻预览面板");
+      } else if (t.kind === "keys") {
+        const out = T.renderKeysTab(t);
+        check(out.indexOf("<table") >= 0 && out.indexOf("全部配置键") >= 0,
+          "「🔎 全部配置键」渲染出一张全量键表", out.length + " 字符");
+        check(out.indexOf("没有入口 <b>0</b>") >= 0 && out.indexOf("一个都不缺") >= 0,
+          "这一页自己写明「插件下发的键一个都不缺」");
       } else if (t.navGroup) {
         const out = T.renderTableTab(t);
         check(out.length > 400 && out.indexOf("<table") >= 0, "「" + t.label + "」渲染出表格", out.length + " 字符");
@@ -504,7 +523,8 @@ function runAssertions() {
     check(["dark", "light"].indexOf(documentStub.documentElement.getAttribute("data-theme")) >= 0,
       "data-theme 被规范成 dark/light", documentStub.documentElement.getAttribute("data-theme"));
     check(T.ENV.isDark === true, "离线默认深色");
-  }).then(channelHelpers).then(repliesPure).then(channelRoundTrip).then(repliesOnline)
+  }).then(channelHelpers).then(repliesPure).then(configKeysCoverage).then(wrappingRules)
+    .then(buttonPicker).then(channelRoundTrip).then(repliesOnline)
     .then(saveScope).then(legacyRecovery).then(finish);
 }
 
@@ -541,6 +561,16 @@ async function channelHelpers() {
     "老格式鱼饵（7 段、没有解锁等级那几列）也认，等级兜 1");
   check(T.TABLE_DEFS.baits.parse("x|y|z|1|2|3") === null,
     "鱼饵少于 7 段解析为 null（插件解析器也是这个门槛）");
+  /* 道具第 7 段 = 解锁等级（v1.18.16 加的那一列） */
+  const itemRow = T.TABLE_DEFS.items.parse("feed_basic|普通饲料|🌾|20|喂鱼|meat=2;spirit=1|20");
+  check(itemRow.unlock_level === 20 && itemRow.effects === "meat=2;spirit=1"
+    && T.TABLE_DEFS.items.serialize(itemRow).indexOf("|20") > 0,
+    "道具行 7 段解析正确（含解锁等级），序列化带回去");
+  const oldItem = T.TABLE_DEFS.items.parse("feed_basic|普通饲料|🌾|20|喂鱼|meat=2;spirit=1");
+  check(oldItem.unlock_level === 1 && T.TABLE_DEFS.items.serialize(oldItem).slice(-2) === "|1",
+    "老格式道具（6 段、没有解锁等级）也认，等级兜 1 并补回第 7 段");
+  check(T.TABLE_DEFS.items.parse("feed_basic|普通饲料|🌾|20|喂鱼") === null,
+    "道具少于 6 段解析为 null（插件解析器也是这个门槛）");
 
   // ---- 回复按钮表（button_defs）：场景|文案|点击后发送|样式 ----
   console.log("  ── 回复按钮表 ──");
@@ -1314,6 +1344,384 @@ async function repliesPure() {
 }
 
 /* =============================================================================
+   [13b] 🔎 全部配置键：插件配置里的每一个键都要有编辑入口（v1.18.16）
+   ============================================================================= */
+async function configKeysCoverage() {
+  console.log("\n[13b] 🔎 全部配置键：一个都不能漏");
+  /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
+  const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
+  const schemaKeys = Object.keys(schema);
+  check(schemaKeys.length === 113, "配置 schema 里是 113 个键", schemaKeys.length);
+
+  const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
+  const missingPage = schemaKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
+  const extraPage = pageKeys.filter(function (k) { return schemaKeys.indexOf(k) < 0; });
+  check(missingPage.length === 0, "schema 里的键页面上全部登记了（没有遗漏）",
+    missingPage.join(",") || "0 个遗漏");
+  check(extraPage.length === 0, "页面没有登记 schema 里不存在的键（清理过的旧键）",
+    extraPage.join(",") || "0 个多余");
+  check(new Set(pageKeys).size === pageKeys.length, "页面清单里没有重复的键",
+    pageKeys.length + " 个键 / " + new Set(pageKeys).size + " 个唯一");
+
+  /* 兜底函数：插件下发了页面不认识的键要能当场抓出来 */
+  const cov = T.configKeyCoverage(schemaKeys);
+  check(cov.missing.length === 0, "configKeyCoverage：没有一个键是「没有入口」的",
+    cov.missing.join(",") || "0 个");
+  check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
+    cov.badEntry.join(",") || "0 个");
+  check(cov.counts.total === 113 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 113,
+    "113 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+
+  /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
+  const noDoc = T.NUMBER_KEYS.filter(function (item) {
+    const row = T.numberRowFromItem(item, undefined);
+    return !String(row.label || "").trim() || !String(row.desc || "").trim();
+  });
+  check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
+    noDoc.map(function (x) { return x[0]; }).join(",") || "113/113 都有");
+  const longDoc = T.NUMBER_KEYS.filter(function (item) {
+    return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
+  });
+  check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
+    longDoc.length + "/113 条 ≥30 字");
+
+  /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
+  const expectTab = {
+    fish_defs: "fish", rod_defs: "rods", bait_defs: "baits", item_defs: "items",
+    location_defs: "locations", collectible_defs: "collectibles", variant_defs: "variants",
+    weather_defs: "weather", easter_egg_defs: "easter_eggs",
+    button_defs: "replies", text_overrides: "replies", button_layout: "replies",
+    button_style_mode: "replies", button_default_style: "replies", button_empty_scenes: "replies",
+    command_aliases: "aliases", custom_commands: "custom",
+    enable_auto_backup: "snapshots", backup_daily_hour: "snapshots",
+    backup_interval_hours: "snapshots", backup_keep_daily: "snapshots",
+    backup_keep_interval: "snapshots", backup_keep_manual: "snapshots"
+  };
+  const wrongJump = Object.keys(expectTab).filter(function (k) {
+    return cov.entries[k] !== ("tab:" + expectTab[k]);
+  });
+  check(wrongJump.length === 0, "23 个「在别的页改」的键都指向正确的标签页（点得到）",
+    wrongJump.length ? wrongJump.map(function (k) { return k + "=" + cov.entries[k]; }).join(" ") : "23/23 正确");
+  check(T.keyEntryLabel("tab:fish").indexOf("鱼池") > 0 &&
+    T.keyEntryLabel("tab:snapshots").indexOf("存档") > 0 &&
+    T.keyEntryLabel("panel").indexOf("只读") > 0,
+    "入口那一列写的是人话（「🐟 鱼池」页 / 插件面板（页面只读））");
+  check(T.keyEntryEditable("") === true && T.keyEntryEditable("tab:fish") === true &&
+    T.keyEntryEditable("panel") === false,
+    "「能不能在页面上改」判定正确（panel 只能在插件配置面板里改）");
+
+  /* 插件面板只读的那几个：必须是**已知的那 7 个**（多一个就说明漏了入口）
+     —— v1.18.16 把 backup_dir 放开成可改（存档目录就是个普通路径配置），
+     剩下 7 个分别是「没有上传通道的文件字段」和「数据操作 / 页面自己的状态」。 */
+  const panelKeys = schemaKeys.filter(function (k) { return cov.entries[k] === "panel"; }).sort();
+  check(panelKeys.join(",") ===
+    "backup_export_file,backup_import_file,data_action,data_confirm,data_status,data_target,editor_status",
+    "插件面板只读的键正好是这 7 个（Python 侧再放开白名单时这里跟着改）", panelKeys.join(","));
+
+  /* 数值页：113 个键铺成 113 行，入口行给跳转按钮、只读行不给输入框 */
+  const saved = T.state.data.numbers;
+  T.state.data.numbers = T.demoNumberRows();
+  const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
+  check(numKeys.length === 113 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 113 行（一行都没少）", numKeys.length + " 行");
+  const blank = T.state.data.numbers.filter(function (r) {
+    return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
+  }).map(function (r) { return r.key; }).sort();
+  check(blank.join(",") === "backup_dir,config_fingerprint,content_tables_hint,fish_value_overrides,user_edited_keys",
+    "演示态里没有空白行（这 5 个键的插件默认值本来就是空串 / 空表：存档目录留空 = 用插件目录下的 backups/）",
+    blank.join(","));
+  const jumpRow = T.state.data.numbers.filter(function (r) { return r.key === "fish_defs"; })[0];
+  check(T.numberEntryCellHtml(jumpRow).indexOf('data-act="num:jump"') > 0 &&
+    T.numberEntryCellHtml(jumpRow).indexOf("<input") < 0,
+    "内容表那一行只给一个可点的「→ 到 XX 页改」按钮（不给假的输入框）");
+  const panelRow = T.state.data.numbers.filter(function (r) { return r.key === "editor_status"; })[0];
+  check(T.numberEntryCellHtml(panelRow).indexOf("插件面板项") > 0 &&
+    T.numberEntryCellHtml(panelRow).length < 400,
+    "只读行写明「插件面板项」并且把几 KB 的 JSON 截短显示（不撑破表格）");
+  check(panelRow.value === "" && T.numberEntryCellHtml(panelRow).indexOf("NaN") < 0 &&
+    T.numberEntryCellHtml(panelRow).indexOf(">0<") < 0,
+    "空值显示成「—」而不是 0（numberRowFromItem 不做无脑 Number()）",
+    JSON.stringify(panelRow.value));
+  const jsonRow = { key: "editor_status", label: "状态", value: '{"updated_at":1,"snapshots":[' + "x".repeat(300) + "]}",
+    text: false, group: "数据面板", entry: "panel", entryLabel: "插件面板（页面只读）" };
+  const jsonCell = T.numberEntryCellHtml(jsonRow);
+  check(jsonCell.indexOf("共 " + jsonRow.value.length + " 字") > 0 && jsonCell.indexOf("NaN") < 0,
+    "长 JSON 只显示开头 + 总字数（不会把表格撑爆）", jsonCell.length + " 字符");
+  check(T.numberValuesFromPage(null).editor_status === undefined,
+    "只读行永远不会被提交（白名单拿不到时也一样）");
+  T.state.data.numbers = saved;
+
+  /* 「🔎 全部配置键」视图：搜得动、说得清、缺了会红脸 */
+  const keysHtml = T.renderKeysTab(T.TAB_BY_ID.keys);
+  check(keysHtml.indexOf("没有入口 <b>0</b>") > 0 && keysHtml.indexOf("一个都不缺") > 0,
+    "视图自己报「插件下发的键一个都不缺」");
+  check(keysHtml.indexOf("quality_myth_chance") > 0 && keysHtml.indexOf("洗髓出神品概率") > 0,
+    "表里按「配置键 + 中文名 + 说明 + 入口」列出每个键");
+  T.state.keysQuery = "洗髓";
+  const filtered = T.keysFilteredRows();
+  check(filtered.length >= 1 && filtered.every(function (r) {
+    return (r.key + r.label + r.desc + r.group).indexOf("洗髓") >= 0;
+  }), "按键名 / 中文名 / 说明搜得动", filtered.length + " 条命中");
+  T.state.keysQuery = "quality_myth_chance";
+  check(T.keysFilteredRows().length === 1 &&
+    T.keysFilteredRows()[0].key === "quality_myth_chance",
+    "按配置键精确搜索只留那一行");
+  T.state.keysQuery = "";
+  check(T.keysFilteredRows().length === 113, "清空搜索词 -> 又看到全部 113 个键");
+  check(keysHtml.indexOf('data-act="key:query"') > 0 &&
+    keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
+    "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
+  check(T.renderKeysTable([]).indexOf("没有匹配的配置键") > 0 &&
+    T.renderKeysTable([]).indexOf("筛出 <b>0</b>") > 0,
+    "搜不到时有空状态 + 计数（不是只剩一张空表）");
+
+  /* 白名单是最终权威：不在里面 -> 只读；放行了 -> 连「插件面板项」也跟着能改 */
+  const dirItem = T.NUMBER_KEYS.filter(function (x) { return x[0] === "backup_dir"; })[0];
+  const dirClosed = T.numberRowPlan(dirItem, "D:/bak", ["stamina_max"]);
+  check(dirClosed.entry === "" && dirClosed.writable === false &&
+    T.numberEntryCellHtml(dirClosed).indexOf("<input") < 0,
+    "插件没放行的键一律只读（backup_dir 不白名单里时也不给输入框）");
+  const dirOpen = T.numberRowPlan(dirItem, "D:/bak", ["backup_dir", "stamina_max"]);
+  check(dirOpen.entry === "" && dirOpen.writable === true,
+    "v1.18.16 插件放行后，存档目录在页面上直接可改");
+  const actItem = T.NUMBER_KEYS.filter(function (x) { return x[0] === "data_action"; })[0];
+  const actOpen = T.numberRowPlan(actItem, "无", ["data_action"]);
+  check(actOpen.entry === "" && actOpen.writable === true && actOpen.openedByPlugin === true,
+    "将来插件放行某个「插件面板」键时，页面不用改一行就跟着能改（白名单优先）");
+  const statusItem = T.NUMBER_KEYS.filter(function (x) { return x[0] === "editor_status"; })[0];
+  check(T.numberRowPlan(statusItem, "{}", ["editor_status"]).writable === false,
+    "页面自己的通道（editor_status）就算被放行也永远只读（免得读到过期状态）");
+  const stamItem = T.NUMBER_KEYS.filter(function (x) { return x[0] === "stamina_max"; })[0];
+  const stamClosed = T.numberRowPlan(stamItem, 20, ["fish_value_mult"]);
+  check(stamClosed.writable === false && stamClosed.readonlyWhy.indexOf("白名单") > 0,
+    "普通数值键不在白名单里时也不给输入框，并写明原因");
+
+  /* 反例：插件加了新键、页面没跟上时必须红着脸列出来（正常情况这里是 0） */  const badCov = T.configKeyCoverage(schemaKeys.concat(["brand_new_plugin_key"]));
+  check(badCov.missing.join(",") === "brand_new_plugin_key",
+    "插件多下发一个键就会被抓成「没有入口」", badCov.missing.join(","));
+  const savedKeys = T.state.configKeys;
+  T.state.configKeys = schemaKeys.concat(["brand_new_plugin_key"]);
+  const redHtml = T.renderKeysTab(T.TAB_BY_ID.keys);
+  check(redHtml.indexOf("页面还不认识的配置键") > 0 &&
+    redHtml.indexOf("brand_new_plugin_key") > 0,
+    "视图上真的会出红条点名（不是只在函数里算）");
+  check(redHtml.indexOf("没有入口 <b>1</b>") > 0, "汇总条上的「没有入口」跟着变成 1");
+  T.state.configKeys = savedKeys;
+
+  /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
+  const demo = T.demoNumberRows();
+  check(demo.length === 113 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 113 行且每行都有分组（数值页的分组标题撑得起来）",
+    demo.length + " 行");
+  check(T.DEMO_NUMBER_VALUES.stamina_max === 20 && T.DEMO_NUMBER_VALUES.level_xp_ratio === 1.08 &&
+    T.DEMO_NUMBER_VALUES.quality_myth_chance === 0.0025,
+    "演示值就是 _conf_schema.json 里的真实默认值（体力 20 / 曲线 1.08 / 洗髓 0.0025）",
+    String(T.DEMO_NUMBER_VALUES.stamina_max));
+  const groups = {};
+  demo.forEach(function (r) { groups[r.group] = (groups[r.group] || 0) + 1; });
+  check(Object.keys(groups).length >= 10, "演示数据铺开了十来个功能分组",
+    Object.keys(groups).length + " 组：" + Object.keys(groups).join("/"));
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [13c] 📄 长文字一律换行：不许 nowrap 截断、不许省略号（v1.18.16）
+   ============================================================================= */
+async function wrappingRules() {
+  console.log("\n[13c] 📄 长文字换行（站长：字数太多就多行显示）");
+  check(!/text-overflow:\s*ellipsis/.test(html),
+    "整页已经没有 text-overflow: ellipsis 了（不再截断）");
+  check(!/\.cut \{[^}]*nowrap/.test(html) && /\.cut \{[^}]*white-space: normal/.test(html),
+    ".cut（长说明列）改成换行显示，不再是 nowrap + 省略号");
+  check(/\.cut \{[^}]*overflow-wrap: anywhere/.test(html),
+    "长说明列还带 overflow-wrap: anywhere（长 URL / 长指令也能折行）");
+  check(/\.mono \{[^}]*overflow-wrap: anywhere/.test(html),
+    ".mono（等宽字）照样能换行（等宽 ≠ 不许折行）");
+  check(/table\.grid tbody td \{[\s\S]{0,220}?white-space: normal;[\s\S]{0,80}?overflow-wrap: anywhere;/.test(html),
+    "表格单元格默认就允许换行（不用给每张表加 wrap-cells）");
+  check(/td\.num, table\.grid tbody td\.id-cell \{ white-space: nowrap; \}/.test(html),
+    "只有数字列 / id 列保留单行（它们本来就没有长文本）");
+  check(/\.rp-btn \{[^}]*white-space: normal/.test(html) &&
+    !/\.rp-btn \{[^}]*text-overflow/.test(html),
+    "预览里的按钮文案也会换行（不再被截成一行）");
+  check(/\.rp-row > \.hint, \.rp-card-desc, \.form-note, \.notice div \{[\s\S]{0,120}?white-space: normal/.test(html),
+    "场景卡片的说明 / 提示条也会换行");
+  check(/\.statusbar > \* \{ min-width: 0; overflow-wrap: anywhere; white-space: normal; \}/.test(html),
+    "底部状态栏的长文字换行（窄窗口不顶出屏幕）");
+  check(/table\.grid\.stack tbody td \.cut,[\s\S]{0,200}?white-space: normal; word-break: break-word;/.test(html),
+    "窄窗口（≤1180px）卡片模式下同样换行（老规矩没被改坏）");
+  check(/content: attr\(data-label\)/.test(html) && /@media \(max-width: 1180px\)/.test(html),
+    "窄屏拆卡片 + data-label 的老规矩还在");
+
+  /* 渲染出来的东西也真的带着整段文字（不是被截断的半句） */
+  const longDesc = "这是一段故意写得很长的说明文字，用来确认表格里的说明列会整段换行显示，而不是被省略号截掉一半导致看不全。";
+  const row = { key: "x_long", label: "长说明", value: 1, unit: "", desc: longDesc, text: false, group: "测试" };
+  const cells = T.cellHtml(T.TAB_BY_ID.numbers,
+    T.TAB_BY_ID.numbers.columns.filter(function (c) { return c.key === "desc"; })[0], row, 0);
+  check(cells.indexOf(longDesc) > 0 && cells.indexOf("cut") > 0,
+    "说明列渲染出的是整段文字（带 .cut 换行样式，不进省略号）");
+  const fishCol = T.TAB_BY_ID.fish.columns.filter(function (c) { return c.key === "flavor"; })[0];
+  const fishRow = Object.assign({}, T.state.data.fish[0], {
+    flavor: "很长的说明文字：这条鱼的来历能写一大段，页面必须整段显示。" .repeat(4) + "（完）"
+  });
+  const fishCell = T.cellHtml(T.TAB_BY_ID.fish, fishCol, fishRow, 0);
+  check(fishCell.indexOf(fishRow.flavor) > 0 && fishCell.length > fishRow.flavor.length,
+    "鱼池的「说明」列也是整段渲染（没有被切成一行）", fishCell.length + " 字符");
+
+  /* 场景卡片里的按钮行：三个控件都在，而且都能换行 */
+  const card = T.renderReplyCard(T.replySceneById("cast.hit"));
+  check(/\.rp-btn-edit \{[\s\S]{0,120}?flex-wrap: wrap/.test(html),
+    "按钮编辑行允许换行（文案 / 指令 / 样式不会互相挤掉）");
+  const preview = T.renderReplyPreview(T.previewModelFor(T.replySceneById("cast.hit")));
+  check(preview.indexOf("rp-btn") > 0, "预览按钮用的是那条会换行的样式");
+  return Promise.resolve();
+}
+
+/* =============================================================================
+   [13d] 🔘 加按钮 = 从现成选项里挑（文案 / 指令 / 样式），格式与插件一致（v1.18.16）
+   ============================================================================= */
+async function buttonPicker() {
+  console.log("\n[13d] 🔘 场景卡片：加按钮从现成选项里挑");
+  const scene = T.replySceneById("cast.hit");
+
+  /* 文案下拉：已有文案（去重）+ 常用推荐 + 手动输入 */
+  const labelHtml = T.buttonLabelOptions("");
+  check(labelHtml.indexOf("已有的按钮文案") > 0 && labelHtml.indexOf("常用推荐") > 0,
+    "文案下拉分成「已有的按钮文案 / 常用推荐」两组");
+  check(labelHtml.indexOf(">再来一竿<") > 0 && labelHtml.indexOf(">拉线！<") > 0,
+    "下拉里能看到现有 button_defs 里真的用过的文案（再来一竿 / 拉线！）");
+  check(labelHtml.indexOf("看背包") > 0 && labelHtml.indexOf("卖光光") > 0,
+    "常用推荐也在（看背包 / 卖光光）");
+  check(labelHtml.indexOf("✏️ 手动输入…") > 0 && labelHtml.indexOf('value="__manual__"') > 0,
+    "保留「✏️ 手动输入…」兜底选项");
+  const usedLabels = T.usedButtonValues("label");
+  check(usedLabels.length === new Set(usedLabels).size && usedLabels.indexOf("再来一竿") >= 0,
+    "「已有文案」是从现有按钮里收集且去过重的", usedLabels.length + " 个：" + usedLabels.slice(0, 5).join("/"));
+  check(labelHtml.indexOf("is-bad") < 0, "文案下拉本身不带校验红（选完才校验）");
+
+  /* 指令下拉：已有指令 + 插件下发的规范子命令 + 短写法 / 模板 */
+  const cmdHtml = T.buttonCommandOptions("");
+  check(cmdHtml.indexOf("已有的指令") > 0 && cmdHtml.indexOf("插件认识的子命令") > 0 &&
+    cmdHtml.indexOf("常用短写法 / 模板") > 0,
+    "指令下拉分成「已有 / 插件子命令 / 短写法与模板」三组");
+  check(cmdHtml.indexOf('value="/钓鱼 事件 {n}"') > 0 && cmdHtml.indexOf("{n} = 第几个选项") > 0,
+    "带占位符的模板也给出来了（/钓鱼 事件 {n}）");
+  const canon = T.canonicalCommands();
+  check(canon.length > 0 && cmdHtml.indexOf('value="/钓鱼 ' + canon[0] + '"') > 0,
+    "插件下发的规范子命令都在下拉里（不写死清单）", canon.slice(0, 3).join("/"));
+  check(cmdHtml.indexOf('value="/钓鱼 背包"') > 0 && cmdHtml.indexOf('value="/钓鱼"') > 0,
+    "已有指令与「只发 /钓鱼」这种短写法都在");
+  check(cmdHtml.indexOf('value="__manual__"') > 0, "指令下拉同样保留手动输入");
+  check(T.buttonCommandOptions("/钓鱼 查 鲤鱼").indexOf('value="/钓鱼 查 鲤鱼" selected') > 0 &&
+    T.buttonLabelOptions("我自己想的文案").indexOf('value="我自己想的文案" selected') > 0,
+    "沿用下来的自定义值也会出现在下拉里（不会「隐身」导致选不回去）");
+  const cmdValues = (cmdHtml.match(/<option value="([^"]*)"/g) || []);
+  check(cmdValues.length === new Set(cmdValues).size, "指令下拉里的选项没有重复",
+    cmdValues.length + " 个选项");
+  const storyTpl = T.buttonCommandOptions("");
+  check(storyTpl.indexOf("{label}") >= 0 || T.buttonTemplateHint("{label}").indexOf("{label}") > 0,
+    "{label} / {n} 这类占位符有专门说明（不会被当成要原样发出去的指令）");
+  check(T.buttonTemplateHint("/钓鱼 事件 {n}").indexOf("{n}") > 0 &&
+    T.buttonTemplateHint("/钓鱼 背包") === "",
+    "只有真的带占位符的才加模板说明");
+
+  /* 样式下拉：default / primary / 0~255 */
+  const styleHtml = T.buttonStyleNumericOptions("");
+  check(styleHtml.indexOf('value="default"') > 0 && styleHtml.indexOf('value="primary"') > 0,
+    "样式下拉有 default（灰）与 primary（蓝）");
+  check(styleHtml.indexOf('value="0"') > 0 && styleHtml.indexOf('value="255"') > 0 &&
+    (styleHtml.match(/<option value="\d+"/g) || []).length === 256,
+    "数字样式 0~255 全都在（256 个）",
+    (styleHtml.match(/<option value="\d+"/g) || []).length);
+  check(T.buttonStyleNumericOptions("7").indexOf('value="7" selected') > 0,
+    "页面认不出的数字样式原样选中（保存一次不会把玩家的按钮颜色改掉）");
+
+  /* 卡片里真的渲染出选择器：三个下拉 + 格式说明 */
+  T.state.replies.picker = "cast.hit";
+  T.resetNewButtonDraft("cast.hit");
+  const picker = T.renderReplyButtonPicker("cast.hit");
+  check(picker.indexOf('data-act="rp:newLabel"') > 0 && picker.indexOf('data-act="rp:newData"') > 0 &&
+    picker.indexOf('data-act="rp:newStyle"') > 0,
+    "选择器有三个下拉（文案 / 点击后发送 / 样式）");
+  check(picker.indexOf('data-act="rp:btnAddConfirm"') > 0,
+    "选择器里有「＋ 加进去」按钮");
+  check(picker.indexOf("场景|文案|点击后发送|样式") > 0,
+    "选择器里写明存进配置还是老格式（场景|文案|指令|样式）");
+  const pickerCard = T.renderReplyCard(scene);
+  check(pickerCard.indexOf("rp-picker") > 0 && pickerCard.indexOf("rpPicker-cast.hit") > 0,
+    "开着选择器的场景卡片里真的渲染了它");
+  T.state.replies.picker = "";
+  check(T.renderReplyCard(scene).indexOf("rp-picker") < 0,
+    "关掉之后卡片里不再有选择器（不会 154 个场景一起膨胀）");
+  T.state.replies.picker = "cast.hit";
+
+  /* 产出格式：选完加进去，落到草稿里就是 {label,data,style}，序列化与插件逐字一致 */
+  const nb = T.replyNewButtonDraft();
+  nb.label = "看背包";
+  nb.data = "/钓鱼 背包";
+  nb.style = "primary";
+  const before = T.replySceneDraft("cast.hit").buttons.length;
+  const added = T.addPickedButton("cast.hit");
+  const draft = T.replySceneDraft("cast.hit");
+  check(draft.buttons.length === before + 1 && added.label === "看背包" &&
+    added.data === "/钓鱼 背包" && added.style === "primary",
+    "选中的文案 / 指令 / 样式变成了一个新按钮", JSON.stringify(added));
+  const serialized = T.TABLE_DEFS.buttons.serialize({
+    scene: "cast.hit", label: added.label, data: added.data, style: added.style
+  });
+  check(serialized === "cast.hit|看背包|/钓鱼 背包|primary",
+    "序列化结果与插件认的格式逐字一致（场景|文案|指令|样式）", serialized);
+  const payload = T.replyPayloadFor(null);
+  check(String(payload.button_defs).indexOf("cast.hit|看背包|/钓鱼 背包|primary") > 0,
+    "保存载荷里就是这一行（没有引入任何新格式）",
+    String(payload.button_defs).split("\n").slice(0, 3).join(" / "));
+
+  /* 手动输入兜底：切到手动模式后，写什么就存什么 */
+  nb.labelMode = "manual";
+  nb.dataMode = "manual";
+  nb.label = "我自己写的文案";
+  nb.data = "/钓鱼 查 鲤鱼";
+  const manual = T.addPickedButton("cast.hit");
+  check(manual.label === "我自己写的文案" && manual.data === "/钓鱼 查 鲤鱼",
+    "「✏️ 手动输入」写的东西原样保留（选择器只是少打字）", JSON.stringify(manual));
+  const manualPicker = T.renderReplyButtonPicker("cast.hit");
+  check(manualPicker.indexOf('data-act="rp:newLabelText"') > 0 &&
+    manualPicker.indexOf('data-act="rp:newDataText"') > 0 &&
+    manualPicker.indexOf("↩ 从列表里选") > 0,
+    "手动模式下给的是输入框，并且能切回列表");
+
+  /* {label}/{n} 占位符这条老覆盖点（story 场景）在新选择器里照样给得出来 */
+  const tplPickerCmd = T.buttonCommandOptions("/钓鱼 事件 {n}");
+  check(tplPickerCmd.indexOf('value="/钓鱼 事件 {n}" selected') > 0,
+    "story 那种模板指令在下拉里能被选中（老行为没丢）");
+  check(T.renderReplyCard(T.replySceneById("story.prompt")).indexOf("{label}") > 0,
+    "故事场景的卡片仍然显示 {label} 这类占位符");
+
+  /* 已有按钮行也能「挑」：三个控件都挂着 datalist */
+  const row = T.renderReplyButtonRow("cast.hit", { label: "看背包", data: "/钓鱼 背包", style: "default" }, 0, 1);
+  check(row.indexOf('list="rpLabelList"') > 0 && row.indexOf('list="rpCmdList"') > 0 &&
+    row.indexOf('list="rpStyleNums"') > 0,
+    "已有按钮的文案 / 指令 / 样式输入框也挂上了下拉数据");
+  const datalists = T.renderReplyDatalists();
+  check(datalists.indexOf('id="rpLabelList"') > 0 && datalists.indexOf('id="rpCmdList"') > 0 &&
+    datalists.indexOf('id="rpStyleNums"') > 0,
+    "三份 datalist 在回复页里只渲染一次（154 个场景共用）");
+  check((datalists.match(/<option value="255">/g) || []).length === 1,
+    "数字样式 0~255 也只有一份（不随卡片数量翻倍）");
+  const tabHtml = T.renderRepliesTab(T.TAB_BY_ID.replies);
+  check(tabHtml.indexOf('id="rpLabelList"') > 0 && tabHtml.indexOf('id="rpStyleNums"') > 0,
+    "回复页整体渲染时把 datalist 带上了（不然 list= 引用不到）");
+
+  T.state.replies.picker = "";
+  const reset = T.resetNewButtonDraft("cast.miss");
+  check(reset.style === T.state.replies.defaultStyle && reset.labelMode === "pick" &&
+    reset.dataMode === "pick" && reset.label === "",
+    "每次点「＋ 加按钮」都从干净状态开始（样式用全局默认）", JSON.stringify(reset));
+  return Promise.resolve();
+}
+
+/* =============================================================================
    [14] 数据通道的真实往返：假 SDK（apiGet/apiPost 到插件注册的相对路径）
    ============================================================================= */
 const captured = {
@@ -1537,8 +1945,26 @@ async function channelRoundTrip() {
   const keys = F.state.data.numbers.map(function (r) { return r.key; });
   check(keys.indexOf("stamina_max") >= 0 && keys.indexOf("multi_cast_max") >= 0,
     "数值页填入了白名单内的键", keys.join(","));
-  check(keys.indexOf("data_status") < 0,
-    "数值页不显示 data_status（不在插件白名单里）", keys.join(","));
+  /* v1.18.16：站长要求「所有配置键都看得见」，所以白名单外的键**照样显示**，
+     但必须是没有输入框的只读行 —— 改了也存不下去的假输入框比不显示更糟。 */
+  const dataRow = F.state.data.numbers.filter(function (r) { return r.key === "data_status"; })[0];
+  check(!!dataRow && dataRow.entry === "panel" && dataRow.writable === false,
+    "data_status 看得见，但标成「插件面板项 · 页面只读」", dataRow && dataRow.entry);
+  check(!!dataRow && dataRow.value === "不该出现在数值表里",
+    "字符串型的只读键原样显示（不会变成 NaN / 0）", dataRow && String(dataRow.value));
+  const fishJump = F.state.data.numbers.filter(function (r) { return r.entry === "tab:fish"; })[0];
+  check(!!fishJump && fishJump.key === "fish_defs",
+    "内容表在数值页只有一个可点的跳转行（去「🐟 鱼池」页改）", fishJump && fishJump.key);
+  check(F.numberEntryCellHtml(dataRow).indexOf('data-act=') < 0 &&
+    F.numberEntryCellHtml(dataRow).indexOf("<input") < 0,
+    "只读行里没有输入框（不给假的编辑入口）");
+  check(F.numberEntryCellHtml(fishJump).indexOf('data-act="num:jump"') > 0,
+    "跳转行给的是「→ 到 XX 页改」按钮（点得到）");
+  const noWhitelist = F.numberValuesFromPage(null);
+  check(noWhitelist.data_status === undefined && noWhitelist.editor_status === undefined,
+    "拿不到白名单时也不会提交「插件面板项」（否则插件会整批拒收）",
+    Object.keys(noWhitelist).join(","));
+  check(noWhitelist.stamina_max === 25, "白名单拿不到时普通数值照样能提交");
   check(F.state.data.numbers.filter(function (r) { return r.key === "stamina_max"; })[0].value === 25,
     "数值页显示的是配置里的真实值（25）");
 

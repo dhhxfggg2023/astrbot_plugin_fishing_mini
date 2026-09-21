@@ -105,8 +105,21 @@ CONTENT_TABLES: dict[str, type] = {
 NUMBER_KEY_BAD_SUFFIXES: tuple[str, ...] = ("_defs", "_slots", "_upgrades")
 NUMBER_KEY_BAD_PREFIXES: tuple[str, ...] = ("data_", "backup_", "editor_")
 #: 例外：名字像内容表，但页面上就是「一行逗号分隔的文本」，该由 save_numbers 改
+#: ⚠️ ``backpack_upgrades``（鱼篓扩容阶梯）以前这里错拼成 ``backup_upgrades``，
+#: 于是它被前缀规则 ``backup_`` 挡掉、编辑器里根本改不了 —— v1.18.16 一并修掉。
 NUMBER_KEY_ALLOW: frozenset[str] = frozenset(
     {"aquarium_slots", "backpack_upgrades", "decoration_slots"},
+)
+#: 例外：名字像管理项，但就是普通配置（v1.18.16 放开的）
+#: —— 站长要求「编辑器要能编辑插件的所有东西」。
+#: * ``backpack_upgrades`` 虽然以 ``backup_`` 开头，其实是「鱼篓扩容阶梯」（一直漏在这儿：
+#:   它既被 :data:`NUMBER_KEY_ALLOW` 拼错名字漏掉，又被前缀规则先一步挡掉）；
+#: * ``backup_dir`` 是存档目录（一个字符串路径），是唯一一个既安全又真有人想改的
+#:   ``backup_`` 键。
+#: ⚠️ ``backup_import_file`` / ``backup_export_file`` 这类**文件上传**字段不在其中：
+#: 插件页面的 API key 没有 /api/files 权限（历史上被 403 挡过），导入导出请走「💾 存档」页。
+NUMBER_KEY_PREFIX_ALLOW: frozenset[str] = frozenset(
+    {"backpack_upgrades", "backup_dir"}
 )
 
 #: 自动备份设置：页面字段名 -> 配置键 + 允许范围（None = 不限）
@@ -237,12 +250,17 @@ def number_whitelist() -> list[str]:
     插件面板里的配置项全部隐藏了，所以这里的口径要尽量宽：
     数值 / 布尔 / 字符串 / **列表**（页面按逗号分隔的文本提交）都能改，
     只把内容表（``*_defs``）和数据管理项（``data_*`` / ``backup_*`` / ``editor_*``）挡在外面。
+
+    两个例外（见 :data:`NUMBER_KEY_ALLOW` / :data:`NUMBER_KEY_PREFIX_ALLOW`）：
+    ``aquarium_slots`` / ``backpack_upgrades`` / ``decoration_slots`` 名字像内容表，
+    其实是一行逗号分隔的文本；``backpack_upgrades`` / ``backup_dir`` 还会被前缀规则
+    误伤，所以也在前缀例外里（v1.18.16 放开，站长要「编辑器能编辑所有东西」）。
     """
     keys: list[str] = []
     for key, value in _defaults_map().items():
         if not isinstance(key, str) or not key:
             continue
-        if key.startswith(NUMBER_KEY_BAD_PREFIXES):
+        if key.startswith(NUMBER_KEY_BAD_PREFIXES) and key not in NUMBER_KEY_PREFIX_ALLOW:
             continue
         if key.endswith(NUMBER_KEY_BAD_SUFFIXES) and key not in NUMBER_KEY_ALLOW:
             continue

@@ -15,6 +15,11 @@ from __future__ import annotations
 import time
 from typing import Any
 
+#: 帮助页**正文**最多几行。渲染时页头、空行、空行、页脚再占 4 行，
+#: 所以整条回复最多 20 行 —— 站长要求「每一条回复的文本量都控制好」，
+#: 道具这种十几行的表会自动拆成「道具 1/2」「道具 2/2」而不是一口气刷屏。
+HELP_PAGE_MAX_LINES = 16
+
 
 class ViewsMixin:
     """展示相关方法（由 FishingPlugin 继承，见 main.py 的类定义）。"""
@@ -582,6 +587,185 @@ class ViewsMixin:
             parts.append(f"逃脱率+{escape_factor - 1.0:.0%}")
         return ("　" + "　".join(parts)) if parts else ""
 
+    def _lookup_anything(
+        self, player: dict[str, Any], keyword: str, exact: bool = False
+    ) -> list[tuple[str, list[str]]]:
+        """在「玩家看得见的东西」里按名字查一遍 `/钓鱼 查`。
+
+        返回 ``[(分类标签, 详情行列表), …]``（可能命中多个分类，由调用方决定怎么展示）。
+
+        查得到的是：鱼饵、鱼竿、道具、杂物、变异、天气、成就。
+        鱼与钓点在主流程里先查过了（命中就直接出卡片），所以这里不重复。
+
+        ``exact=True`` 时只认**完全同名**（用于「精确优先」：查「锦鲤玉佩」
+        不该被鱼「锦鲤」的模糊匹配抢走）。
+
+        ⚠️ **只列游戏内的东西**：插件配置键、回复场景、内部函数、数据结构这些
+        「只有开发者才关心」的内容一律不进游戏（站长明确要求：游戏文本服务于游戏）。
+        """
+        key = str(keyword or "").strip()
+        if not key:
+            return []
+        lower = key.lower()
+        hits: list[tuple[str, list[str]]] = []
+
+        def matches(name: Any, extra: str = "") -> bool:
+            n = str(name or "").strip()
+            if not n:
+                return False
+            if exact:
+                return n == key or n.lower() == lower
+            return key in n or n.lower() == lower or (extra and key in extra)
+
+        # ---- 鱼饵（价格 / 手气 / 稀有度倾向 / 解锁 / 我的存量）----
+        for bait_id in self._bait_list():
+            bait = self.baits[bait_id]
+            if not matches(bait.get("name"), bait_id):
+                continue
+            owned = _safe_int((player.get("baits") or {}).get(bait_id), 0, 0)
+            equipped = player.get("equipped_bait") == bait_id
+            mults = bait.get("rarity_mult") or {}
+            best = max(mults, key=lambda r: _safe_number(mults.get(r), 1.0), default="")
+            worst = min(mults, key=lambda r: _safe_number(mults.get(r), 1.0), default="")
+            lines = [
+                f"{bait.get('emoji', '')}{bait.get('name')}"
+                f"　{_fmt_gold(bait.get('price', 0))} 金/个　持有 {owned}"
+                + ("　（正在用）" if equipped else ""),
+                f"　手气{_luck_stars(bait.get('luck'), 0.7)}"
+                f"　上钩率{_luck_stars(self.bait_hook_map.get(bait_id), 1.0)}",
+            ]
+            if best and worst and best != worst:
+                lines.append(f"　更容易钓到：{best}　更少见到：{worst}")
+            unlock = self._rod_need_text(bait)
+            if unlock:
+                lines.append(f"　需要：{unlock}")
+            if bait.get("desc"):
+                lines.append(f"　{bait['desc']}")
+            hits.append((f"🪱 鱼饵「{bait.get('name')}」", lines))
+
+        # ---- 鱼竿 ----
+        for rod in self.rods:
+            if not matches(rod.get("name"), str(rod.get("id"))):
+                continue
+            owned_rod = rod["id"] in (player.get("rods") or [DEFAULT_ROD])
+            lines = [
+                f"{rod['emoji']}{rod['name']}　{_fmt_gold(rod['price'])} 金"
+                + ("　（已拥有）" if owned_rod else ""),
+                f"　价值+{rod['value_bonus']:.0%}"
+                f"　手气{_luck_stars(rod.get('luck_bonus'), 0.2)}"
+                + self._rod_pull_text(rod),
+            ]
+            if int(rod.get("unlock_level", 1)) > 1:
+                lines.append(f"　解锁：{int(rod['unlock_level'])} 级")
+            if rod.get("desc"):
+                lines.append(f"　{rod['desc']}")
+            hits.append((f"🎣 鱼竿「{rod['name']}」", lines))
+
+        # ---- 道具（说清它到底干嘛用、怎么用）----
+        for item_id in self._item_list():
+            item = self.items[item_id]
+            if not matches(item.get("name"), item_id):
+                continue
+            owned = _safe_int((player.get("items") or {}).get(item_id), 0, 0)
+            lines = [
+                f"{item.get('emoji', '')}{item.get('name')}"
+                f"　{_fmt_gold(item.get('price', 0))} 金　持有 {owned}",
+                f"　{item.get('desc')}",
+            ]
+            if int(item.get("unlock_level", 1)) > 1:
+                lines.append(f"　解锁：{int(item['unlock_level'])} 级")
+            lines.append(f"　用法：{self._item_usage_hint(item_id)}")
+            hits.append((f"🎁 道具「{item.get('name')}」", lines))
+
+        # ---- 杂物（卖价 + 收集情况）----
+        for junk in COLLECTIBLES:
+            if not matches(junk.get("name"), str(junk.get("id"))):
+                continue
+            got = _safe_int((player.get("collectibles") or {}).get(junk["id"]), 0, 0)
+            lines = [
+                f"{junk.get('emoji', '')}{junk.get('name')}"
+                f"　卖价 {_fmt_gold(junk.get('value', 0))} 金"
+                + (f"　已收集 {got} 个" if got else "　还没捞到过"),
+                f"　{junk.get('desc', '')}",
+                "　没中鱼的那一竿才有机会钩上来",
+            ]
+            hits.append((f"🧺 杂物「{junk.get('name')}」", lines))
+
+        # ---- 变异 ----
+        for variant in VARIANTS:
+            if not matches(variant.get("name"), str(variant.get("id"))):
+                continue
+            got = _safe_int((player.get("variants") or {}).get(variant["id"]), 0, 0)
+            lines = [
+                f"{variant.get('emoji', '')}{variant.get('name')}"
+                f"　价值 ×{_safe_number(variant.get('mult'), 1.0):.1f}"
+                + (f"　遇到过 {got} 次" if got else "　还没遇到过"),
+                f"　{variant.get('desc', '')}",
+                "　纯运气：上钩那一刻小概率变成变异个体",
+            ]
+            hits.append((f"🧬 变异「{variant.get('name')}」", lines))
+
+        # ---- 天气 ----
+        today = self._today_weather_name(player)
+        for weather_cfg in WEATHERS:
+            if not matches(weather_cfg.get("name"), str(weather_cfg.get("id"))):
+                continue
+            lines = [
+                f"{weather_cfg.get('emoji', '')}{weather_cfg.get('name')}"
+                + ("　（今天就是它）" if today == weather_cfg.get("name") else ""),
+                f"　{_weather_hint(weather_cfg)}",
+            ]
+            if weather_cfg.get("desc"):
+                lines.append(f"　{weather_cfg['desc']}")
+            lines.append("　天气每天随机一种，全天不变（/钓鱼 今日 看今天的）")
+            hits.append((f"🌤️ 天气「{weather_cfg.get('name')}」", lines))
+
+        # ---- 成就（按名字/说明模糊查）----
+        unlocked = set(player.get("achievements") or [])
+        for ach_id, ach_text in ACHIEVEMENTS.items():
+            if not matches(ach_text, ach_id):
+                continue
+            done = ach_id in unlocked
+            hits.append((
+                f"🏅 成就「{self._ach_short_name(ach_text)}」",
+                [
+                    f"{'✅ 已达成' if done else '❔ 还没达成'}　{ach_text}",
+                    "　成就达成时会在群里提示一次",
+                ],
+            ))
+
+        return hits
+
+    @staticmethod
+    def _ach_short_name(ach_text: str) -> str:
+        """成就的短名：``🏆 垂钓达人：累计钓到 50 条`` → ``垂钓达人``。
+
+        成就文案统一是「emoji 名字：说明」的格式，查的时候玩家只关心名字。
+        """
+        text = str(ach_text or "")
+        head = text.split("：", 1)[0]
+        return head.split(" ", 1)[-1].strip() if " " in head else head.strip()
+
+    def _item_usage_hint(self, item_id: str) -> str:
+        """道具怎么用（一行，给 `/钓鱼 查` 的详情卡用）。"""
+        effects = (self.items.get(item_id) or {}).get("effects") or {}
+        if _safe_number(effects.get("quality_reroll"), 0.0) > 0:
+            return "/钓鱼 洗 <水族馆栏位>"
+        if _safe_number(effects.get("buff_quality"), 0.0) > 0:
+            return "/钓鱼 用 <名字>（作用在自己身上，不用栏位）"
+        if _safe_number(effects.get("decorate"), 0.0) > 0:
+            return "/钓鱼 用 <名字>（摆进鱼缸）"
+        if _safe_number(effects.get("feed_bonus"), 0.0) > 0:
+            return "/钓鱼 用 <名字> <水族馆栏位>"
+        if _safe_number(effects.get("heal"), 0.0) > 0:
+            return "/钓鱼 用 <名字>（回体力，不用栏位）"
+        return "/钓鱼 喂 <名字> [水族馆栏位]（不写栏位就是喂全缸）"
+
+    def _today_weather_name(self, player: dict[str, Any]) -> str:
+        """今天这个玩家的天气名（没开天气/没生成就返回空串）。"""
+        cfg = WEATHER_BY_ID.get(str(player.get("weather") or ""))
+        return str(cfg.get("name") or "") if cfg else ""
+
     def _help_pages(self) -> list[tuple[str, list[str]]]:
         """帮助分页内容：(标题, 行列表)。每页都尽量短，避免刷屏。"""
         cfg = self.cfg
@@ -638,6 +822,41 @@ class ViewsMixin:
             if int(cfg["fish_cost"]) <= 0
             else f"　钓费 {cfg['fish_cost']}/竿　签到 {cfg['sign_reward']}"
         )
+
+        def paginate(
+            title: str, rows: list[str], tail: list[str] | None = None
+        ) -> list[tuple[str, list[str]]]:
+            """把一张长表切成每页不超过 :data:`HELP_PAGE_MAX_LINES` 行的几页。
+
+            ``tail``（「用法提示」那几行）只挂在最后一页，并且**算在行数里**——
+            否则最后一页会正好超出一行（站长那边的道具页就是这么变成 21 行的）。
+            """
+            tail_rows = list(tail or [])
+            chunks: list[list[str]] = []
+            current: list[str] = []
+            for index, row in enumerate(rows):
+                rest = len(rows) - index - 1
+                # 最后一行要给尾巴留位置（尾巴只出现在最后一页）
+                limit = HELP_PAGE_MAX_LINES - (len(tail_rows) if rest <= 0 else 0)
+                if current and len(current) >= max(limit, 1):
+                    chunks.append(current)
+                    current = []
+                current.append(row)
+            if current or not chunks:
+                chunks.append(current)
+            if len(chunks[-1]) + len(tail_rows) > HELP_PAGE_MAX_LINES:
+                # 兜底：尾巴特别长时再拆一页（正常不会走到）
+                last = chunks.pop()
+                keep = max(HELP_PAGE_MAX_LINES - len(tail_rows), 1)
+                chunks.append(last[:keep])
+                chunks.append(last[keep:])
+            chunks[-1] = chunks[-1] + tail_rows
+            if len(chunks) == 1:
+                return [(title, chunks[0])]
+            return [
+                (f"{title} {i}/{len(chunks)}", chunk)
+                for i, chunk in enumerate(chunks, 1)
+            ]
         pages: list[tuple[str, list[str]]] = [
             (
                 "开始钓",
@@ -706,30 +925,40 @@ class ViewsMixin:
             pages.append((title, chunk + extra))
 
         pages.extend(
-            [
-                ("鱼竿", rod_lines + [
+            paginate(
+                "鱼竿",
+                rod_lines,
+                [
                     "　🔒 的竿要等级达标才能买",
                     "　/钓鱼 买 <竿名>　　 买鱼竿",
                     "　/钓鱼 装备 <竿名>　 换上",
-                ]),
-                (
-                    "鱼饵",
-                    bait_lines
-                    + [
-                        "　部分鱼饵要等级 + 对应鱼竿才能买",
-                        "　/钓鱼 买 <名字> [个数]　/钓鱼 换饵 <名字>",
-                    ],
-                ),
-                (
-                    "道具",
-                    item_lines
-                    + [
-                        "　/钓鱼 喂 <饲料> 1　投喂（三维永久上涨）",
-                        "　/钓鱼 洗 1　　　　 洗髓丹：重掷个体品质，极小概率出「神品」",
-                        "　/钓鱼 用 珊瑚造景　摆装饰：挂机产出 +20%",
-                        f"　图鉴 {len(FISH_POOL)} 种　成就 {len(ACHIEVEMENTS)} 个",
-                    ],
-                ),
+                ],
+            )
+        )
+        pages.extend(
+            paginate(
+                "鱼饵",
+                bait_lines,
+                [
+                    "　部分鱼饵要等级 + 对应鱼竿才能买",
+                    "　/钓鱼 买 <名字> [个数]　/钓鱼 换饵 <名字>",
+                ],
+            )
+        )
+        pages.extend(
+            paginate(
+                "道具",
+                item_lines,
+                [
+                    "　/钓鱼 喂 <饲料> 1　投喂（三维永久上涨）",
+                    "　/钓鱼 洗 1　　　　 洗髓丹：重掷个体品质，极小概率出「神品」",
+                    "　/钓鱼 用 珊瑚造景　摆装饰：挂机产出 +20%",
+                    f"　图鉴 {len(FISH_POOL)} 种　成就 {len(ACHIEVEMENTS)} 个",
+                ],
+            )
+        )
+        pages.extend(
+            [
                 (
                     "钓点与收集",
                     [

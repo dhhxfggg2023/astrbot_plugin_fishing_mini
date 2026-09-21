@@ -39,17 +39,17 @@ from __future__ import annotations
 #: 场景 id -> 默认文案模板。**由代码拼装的长文本用 ``{原文}`` 占位**
 TEXTS: dict[str, str] = {
     "sell.result": "{原文}",  # 动态文本
-    "pull.none": "🤔 现在没有鱼咬钩。直接发 /钓鱼 下竿，等提示「咬钩了」再发 /钓鱼 拉",
+    "pull.none": "🤔 这会儿没有鱼咬钩\n　先 /钓鱼 下竿，看到「咬钩了」再 /钓鱼 拉",
     "help.page": "{原文}",  # 动态文本
     "help.unknown": "{原文}",  # 动态文本
     "custom.send": "{原文}",  # 动态文本
     "pull.confirm": "✅ 收到，正在收线…",
-    "cast.multi_bad_times": "🤔 连钓次数要写正整数，例如 /钓鱼 10",
-    "system.error": "😵 操作没有成功（已记录到日志）\n　可以再试一次；如果一直失败，请把这条消息发给管理员",
-    "cast.busy": "🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉",
+    "cast.multi_bad_times": "🤔 次数要写正整数\n　例：/钓鱼 10 = 连下十竿",
+    "system.error": "😵 这一下没成，日志里记了一笔\n　再试一次；老出错就把这条发给管理员",
+    "cast.busy": "🎣 竿子还在手里\n　先 /钓鱼 拉，或者干脆等它跑掉",
     "cast.hit": "{原文}",  # 动态文本
     "cast.multi_limit": "{原文}",  # 动态文本
-    "cast.multi_busy": "🎣 手上还捏着竿呢，先 /钓鱼 拉 或等它跑掉",
+    "cast.multi_busy": "🎣 上一竿还等着收\n　先 /钓鱼 拉，再谈连钓",
     "cast.multi_summary": "{原文}",  # 动态文本
     "cast.no_gold": "{原文}",  # 动态文本
     "cast.bag_full": "{原文}",  # 动态文本
@@ -57,7 +57,7 @@ TEXTS: dict[str, str] = {
     "cast.multi_bag_full": "{原文}",  # 动态文本
     "cast.multi_achievement": "{原文}",  # 动态文本
     "cast.multi_milestone": "{原文}",  # 动态文本
-    "cast.multi_save_failed": "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）",
+    "cast.multi_save_failed": "⚠️ 这批渔获没存上\n　把这条发给管理员，日志里有详情",
     "cast.bad_bait": "{原文}",  # 动态文本
     "cast.no_stamina": "{原文}",  # 动态文本
     "cast.bait_note": "{原文}",  # 动态文本
@@ -82,20 +82,21 @@ TEXTS: dict[str, str] = {
     "backpack.max": "{原文}",  # 动态文本
     "backpack.no_gold": "{原文}",  # 动态文本
     "today.view": "{原文}",  # 动态文本
-    "rank.empty": "📊 还没有排行数据，先去 /钓鱼 抛几竿吧",
+    "rank.empty": "📊 榜上还空着\n　去 /钓鱼 抛两竿，第一名先到先得",
     "rank.no_data": "{原文}",  # 动态文本
     "bag.empty": "{原文}",  # 动态文本
-    "fishinfo.usage": "{原文}",  # 动态文本
     "fishinfo.location_detail": "{原文}",  # 动态文本
     "fishinfo.not_found": "{原文}",  # 动态文本
+    "fishinfo.index": "{原文}",  # 动态文本（/钓鱼 查 能查哪些东西；取代了原来的 fishinfo.usage）
+    "fishinfo.multi_match": "{原文}",  # 动态文本（一个词命中好几样）
     "collection.detail": "{原文}",  # 动态文本
     "collection.location": "{原文}",  # 动态文本
-    "aquarium.usage": "📖 水族馆用法\n　/钓鱼 水族馆　　　　　　欣赏\n　/钓鱼 水族馆 放 1　　　 从背包放入\n　/钓鱼 水族馆 取 1　　　 取回（估值+加成）\n　/钓鱼 水族馆 卖 1　　　 直接卖（估值+加成）\n　/钓鱼 用 <道具> 1　　　投喂提升三维\n　/钓鱼 水族馆 领　　　　 领取每日收益\n　/钓鱼 水族馆 扩建　　　 花金币扩容",
-    "shop.bait_usage": "📖 /钓鱼 鱼饵　　　　　　看鱼饵货架\n　/钓鱼 鱼饵 买 <名字> [数量]\n　例：/钓鱼 鱼饵 买 蚯蚓 20",
+    "aquarium.usage": "📖 水族馆\n　/钓鱼 水族馆　　　　看缸\n　放 1 / 取 1 / 卖 1　进出与变现\n　用 <道具> 1　　　　　投喂\n　领　　　　　　　　　收当天的产出\n　扩建　　　　　　　　花金币加位",
+    "shop.bait_usage": "📖 /钓鱼 鱼饵　　　　看饵的货架\n　/钓鱼 鱼饵 买 <名字> [数量]\n　例：/钓鱼 鱼饵 买 蚯蚓 20",
     "bait.empty": "{原文}",  # 动态文本
     "item.feed_done": "{原文}",  # 动态文本
-    "story.none": "🤔 眼下没什么需要你决定的事",
-    "story.expired": "💨 你犹豫了一会儿，那点动静已经过去了",
+    "story.none": "🤔 眼下没什么要你拿主意的事",
+    "story.expired": "💨 你犹豫的工夫，那点动静过去了",
     "story.bad_choice": "{原文}",  # 动态文本
     "orders.locked": "{原文}",  # 动态文本
     "orders.submit_result": "{原文}",  # 动态文本
@@ -103,18 +104,18 @@ TEXTS: dict[str, str] = {
     "location.unlock_go": "{原文}",  # 动态文本
     "rod.bought": "{原文}",  # 动态文本
     "rod.equipped": "{原文}",  # 动态文本
-    "lock.usage": "📖 /钓鱼 锁定 <序号…>　锁定的鱼不会被卖出\n　/钓鱼 解锁 <序号…>\n　先用 /钓鱼 背包 看序号",
+    "lock.usage": "📖 锁住的鱼不会被卖掉\n　/钓鱼 锁定 <序号…>　/钓鱼 解锁 <序号…>\n　序号看 /钓鱼 背包",
     "lock.bad_index": "{原文}",  # 动态文本
     "lock.all_done": "{原文}",  # 动态文本
-    "sell.empty": "🎒 背包空空的，没东西可卖",
-    "sell.removed": "🧹 「卖 垃圾」这个玩法已经去掉了\n　想一次清空背包：/钓鱼 卖光光（锁定的鱼会留下）\n　想只卖某种鱼：/钓鱼 卖 鲤鱼（可加数量）\n　想按序号卖：/钓鱼 卖 1 2 3",
-    "sell.nothing": "🤔 没有可卖的鱼\n　可能原因：背包是空的、序号超范围、或这种鱼你还没有\n　发 /钓鱼 背包 看背包，或用 /钓鱼 卖光光 一次卖光",
+    "sell.empty": "🎒 背包是空的，没东西可卖",
+    "sell.removed": "🧹 「卖 垃圾」这个玩法已经去掉了\n　清空背包：/钓鱼 卖光光（锁着的会留下）\n　只卖一种：/钓鱼 卖 鲤鱼\n　按序号卖：/钓鱼 卖 1 2 3",
+    "sell.nothing": "🤔 没找到能卖的鱼\n　可能序号超了，或这种鱼你还没钓到\n　发 /钓鱼 背包 看一眼",
     "sell.locked_note": "{原文}",  # 动态文本
     "fishinfo.empty": "{原文}",  # 动态文本
     "aquarium.view": "{原文}",  # 动态文本
     "aquarium.upgraded": "{原文}",  # 动态文本
     "aquarium.income": "{原文}",  # 动态文本
-    "aquarium.feed_usage": "📖 投喂请用：/钓鱼 用 <道具名> <水族馆栏位号>\n　例：/钓鱼 用 高级饲料 1",
+    "aquarium.feed_usage": "📖 投喂用「用」指令\n　/钓鱼 用 <道具名> <栏位号>\n　例：/钓鱼 用 高级饲料 1",
     "aquarium.put_done": "{原文}",  # 动态文本
     "aquarium.take_done": "{原文}",  # 动态文本
     "aquarium.sell_done": "{原文}",  # 动态文本
@@ -129,41 +130,41 @@ TEXTS: dict[str, str] = {
     "item.used": "{原文}",  # 动态文本
     "item.deco_used": "{原文}",  # 动态文本
     "item.breed_done": "{原文}",  # 动态文本
-    "item.feed_no_fish": "🐠 水族馆是空的，先把鱼放进去养",
+    "item.feed_no_fish": "🐠 缸里空着，先放条鱼进去",
     "item.feed_usage": "{原文}",  # 动态文本
     # 洗髓丹（v1.18.0 新增效果）：固定文案的两条可以直接整段改，动态的两条保留 {原文}
-    "item.reroll_no_fish": "🐠 水族馆是空的，先把要洗的鱼放进去",
+    "item.reroll_no_fish": "🐠 缸里空着，先放条要洗的鱼",
     "item.reroll_usage": "{原文}",  # 动态文本
-    "item.reroll_bad_slot": "🤔 栏位号不对，/钓鱼 水族馆 看看序号",
+    "item.reroll_bad_slot": "🤔 没这个栏位，/钓鱼 水族馆 看看序号",
     "item.reroll_failed": "{原文}",  # 动态文本
     "item.reroll_done": "{原文}",  # 动态文本
     "sign.done": "{原文}",  # 动态文本
-    "story.wrong_owner": "🙅 这是别人的动静，你插不上手\n　自己下竿的时候才会遇到属于你的小插曲",
+    "story.wrong_owner": "🙅 这是别人的动静，你插不上手\n　自己下竿才会撞见属于你的那一段",
     "orders.usage": "{原文}",  # 动态文本
     "location.not_found": "🤔 没有这个钓点，/钓鱼 钓点 看看",
     "location.locked": "{原文}",  # 动态文本
     "location.already_here": "{原文}",  # 动态文本
     "location.unlocked": "{原文}",  # 动态文本
     "location.unlock_need": "{原文}",  # 动态文本
-    "rod.not_found": "🤔 没有这款鱼竿",
+    "rod.not_found": "🤔 没这款鱼竿，名字再对一遍",
     "rod.owned": "{原文}",  # 动态文本
     "rod.level_low": "{原文}",  # 动态文本
     "rod.no_gold": "{原文}",  # 动态文本
     "rod.not_owned": "{原文}",  # 动态文本
     "sell.all_locked": "{原文}",  # 动态文本
-    "aquarium.max": "🏠 已经扩到最大了",
+    "aquarium.max": "🏠 已经扩到最大了，没地方再加",
     "aquarium.no_gold": "{原文}",  # 动态文本
     "aquarium.income_start": "{原文}",  # 动态文本
-    "aquarium.income_empty": "🐠 水族馆是空的，鱼塘没有产出",
+    "aquarium.income_empty": "🐠 缸里没鱼，鱼塘也就没有产出",
     "aquarium.income_wait": "{原文}",  # 动态文本
     "aquarium.put_usage": "{原文}",  # 动态文本
     "aquarium.full": "{原文}",  # 动态文本
     "aquarium.take_usage": "{原文}",  # 动态文本
     "aquarium.sell_usage": "📖 /钓鱼 水族馆 卖 <栏位号…>\n　例：/钓鱼 水族馆 卖 1　或　卖 1 3 5",
     "aquarium.bad_slot": "{原文}",  # 动态文本
-    "shop.usage": "📖 /钓鱼 鱼竿 买 <名字>　｜　/钓鱼 道具 买 <名字> [数量]　｜　/钓鱼 鱼饵 买 <名字> [数量]\n　三家店各看各的货架，名字写错会说清该去哪家；\n　懒得记也行：/钓鱼 买 <名字> 会自动认出它在哪家店",
-    "shop.item_usage": "📖 /钓鱼 道具　　　　　　看道具货架\n　/钓鱼 道具 买 <名字> [数量]\n　例：/钓鱼 道具 买 高级饲料 5",
-    "shop.free_hook": "🪝 空钩是免费的，不需要购买\n　直接发 /钓鱼 或 /钓鱼 空钩 就能用它下竿",
+    "shop.usage": "📖 鱼竿 /道具 /鱼饵，三家各买各的\n　/钓鱼 鱼竿 买 <名字>\n　/钓鱼 道具 买 <名字> [数量]\n　/钓鱼 鱼饵 买 <名字> [数量]\n　写错店名会说清该去哪家",
+    "shop.item_usage": "📖 /钓鱼 道具　　　　看道具货架\n　/钓鱼 道具 买 <名字> [数量]\n　例：/钓鱼 道具 买 高级饲料 5",
+    "shop.free_hook": "🪝 空钩不要钱，不用买\n　发 /钓鱼 或者 /钓鱼 空钩 就能用",
     "shop.not_found": "{原文}",  # 动态文本
     "shop.wrong_shop_rod": "{原文}",  # 动态文本
     "shop.wrong_shop_item": "{原文}",  # 动态文本
@@ -174,11 +175,11 @@ TEXTS: dict[str, str] = {
     "story.recap": "{原文}",  # 动态文本（连载的「第 N 话　上次：…」）
     "bait.locked": "{原文}",  # 动态文本
     "item.empty": "🎒 没有道具，去 /钓鱼 道具 买",
-    "item.deco_disabled": "🪸 本服没有开放装饰位（decoration_slots = 0）",
+    "item.deco_disabled": "🪸 本服没开装饰位（decoration_slots = 0）",
     "item.deco_full": "{原文}",  # 动态文本
-    "item.breed_no_fish": "🐠 水族馆是空的，先把鱼放进去再培育",
+    "item.breed_no_fish": "🐠 缸里空着，先放条鱼再谈培育",
     "item.breed_usage": "{原文}",  # 动态文本
-    "item.breed_bad_slot": "🤔 栏位号不对，/钓鱼 水族馆 看看序号",
+    "item.breed_bad_slot": "🤔 没这个栏位，/钓鱼 水族馆 看看序号",
     "item.breed_failed": "{原文}",  # 动态文本
     "item.feed_full": "{原文}",  # 动态文本
     "item.feed_missing": "{原文}",  # 动态文本
@@ -207,8 +208,8 @@ TEXTS: dict[str, str] = {
     "cast.milestone": "{原文}",  # 动态文本（推送：里程碑）
     "cast.egg": "{原文}",  # 动态文本（推送：彩蛋）
     "cast.save_failed": (
-        "⚠️ 数据保存失败，这条记录可能不会保留\n"
-        "　请把这条消息发给管理员核对（日志里有详情）"
+        "⚠️ 这一竿没存上，记录可能留不住\n"
+        "　把这条发给管理员核对（日志里有详情）"
     ),
     "collectibles.view": "{原文}",  # 动态文本
     "broadcast.catch": "{原文}",  # 动态文本

@@ -1231,20 +1231,26 @@ class CommandsMixin:
                     yield _r
 
     async def _cmd_fish_info(self, event: AstrMessageEvent, user_id: str, a2: str = ""):
-        """查鱼：``/钓鱼 查 鲤鱼`` 或 ``/钓鱼 查 山间湖泊``。
+        """/钓鱼 查 <名字>：**凡是游戏里看得到的东西都能查**。
 
-        钓点太多、鱼有 203 种，玩家记不住谁在哪儿——所以这个入口给两件事：
-        1) 输入鱼名 → 它在哪些钓点、什么品质、基准价、要不要拉线、自己有没有
-        2) 输入钓点名 → 这个钓点有哪些鱼（带基准价，按品质分组）
+        - 鱼 → 品质、基准价、要不用拉线、出没钓点、自己的记录
+        - 钓点 → 这个钓点的鱼种清单（按品质分组）
+        - 鱼饵 / 鱼竿 / 道具 / 杂物 / 变异 / 天气 / 成就 → 各自的说明卡
+
+        匹配规则（v1.18.16 定的，避免「查 锦鲤玉佩」被鱼「锦鲤」抢走）：
+        1) **先找完全同名的**：命中一个就出卡片，命中多个就列出来让你挑；
+        2) 没有再退到「名字里含这几个字」的模糊匹配，规则同上。
+
+        ⚠️ 只查玩家在游戏里看得见的东西；插件配置键、回复场景、内部函数这些
+        开发者才关心的内容不进游戏（站长明确要求：游戏文本服务于游戏）。
         """
         name = (a2 or "").strip()
         if not name:
-            sample = "、".join(f["name"] for f in FISH_POOL[:5])
-            async for _r in self._say_msg(event, "fishinfo.usage", event.plain_result(
-                    "📖 /钓鱼 查 <鱼名 或 钓点名>\n"
-                    f"　例：/钓鱼 查 鲤鱼　/钓鱼 查 山间湖泊\n"
-                    f"　常见鱼：{sample} …\n"
-                    "　不知道名字就发 /钓鱼 图鉴 看进度、/钓鱼 图鉴 详 看完整清单"
+            async for _r in self._say_msg(event, "fishinfo.index", event.plain_result(
+                    "📖 /钓鱼 查 <名字>\n"
+                    "　鱼、钓点、鱼饵、鱼竿、道具、杂物、变异、天气、成就 都能查，\n"
+                    "　例如 /钓鱼 查 鲲　/钓鱼 查 蚯蚓　/钓鱼 查 龙宫　/钓鱼 查 月夜\n"
+                    "　名字记不清就先用 /钓鱼 图鉴 与 /钓鱼 钓点 翻一翻"
                 )):
                 yield _r
             return
@@ -1259,24 +1265,27 @@ class CommandsMixin:
             best = _safe_int(entry.get("best_value"), 0, 0) if isinstance(entry, dict) else 0
             return total, best, held.get(fish_id, 0)
 
-        # ---- 按钓点查 ----
-        loc = self._find_location(name)
-        if loc is not None:
+        # ---- 各类详情卡（都是「几行短句」，方便统一走详情/多命中两条出口）----
+        # 站长要求「每一条回复的文本量都控制好」：钓点卡最多 14 行（含结尾那两行
+        # 「…还有 N 种」和「/钓鱼 查 <鱼名>」），超了就截断并指路
+        # （龙宫 15 种鱼全列是 20+ 行，刷屏而且没人一次看完）。
+        CARD_MAX_LINES = 14
+
+        def loc_card(loc_cfg: dict[str, Any]) -> list[str]:
             ids = [
                 fid
-                for fid, w in (LOCATION_WEIGHTS.get(loc["id"]) or {}).items()
+                for fid, w in (LOCATION_WEIGHTS.get(loc_cfg["id"]) or {}).items()
                 if w > 0 and fid in FISH_BY_ID
             ]
-            if not ids:
-                async for _r in self._say_msg(event, "fishinfo.empty", event.plain_result(f"🐟 {loc['name']} 没有配置鱼种")):
-                    yield _r
-                return
-            lines = [
-                f"{loc['emoji']} {loc['name']}　共 {len(ids)} 种"
-                f"　价值×{loc['value_mult']:.2f}"
-                f"　需{loc['level_gate']}级"
-                + (f"/{_fmt_gold(loc['gold_gate'])}金" if loc["gold_gate"] else "")
+            out = [
+                f"{loc_cfg['emoji']} {loc_cfg['name']}　共 {len(ids)} 种"
+                f"　价值×{loc_cfg['value_mult']:.2f}"
+                f"　需{loc_cfg['level_gate']}级"
+                + (f"/{_fmt_gold(loc_cfg['gold_gate'])}金" if loc_cfg["gold_gate"] else "")
             ]
+            hidden = 0
+            # 结尾固定还有「…还有 N 种」+「/钓鱼 查 <鱼名>」两行，先扣掉
+            body_cap = CARD_MAX_LINES - 2
             for rarity in RARITY_ORDER:
                 group = sorted(
                     (FISH_BY_ID[fid] for fid in ids if _fish_rarity(fid) == rarity),
@@ -1284,64 +1293,135 @@ class CommandsMixin:
                 )
                 if not group:
                     continue
-                lines.append(f"【{self._rarity_name(rarity)}】")
-                for fish in group:
-                    total, _best, now = mine(fish["id"])
+                if len(out) + 1 >= body_cap:
+                    hidden += len(group)
+                    continue
+                out.append(f"【{self._rarity_name(rarity)}】")
+                for one in group:
+                    if len(out) >= body_cap:
+                        hidden += 1
+                        continue
+                    total, _best, now = mine(one["id"])
                     mark = "✅" if total > 0 else "❔"
-                    lines.append(
-                        f"　{mark}{fish['name']}　{_fmt_gold(fish['value'])}金"
+                    out.append(
+                        f"　{mark}{one['name']}　{_fmt_gold(one['value'])}金"
                         + (f"　存{now}" if now else "")
                     )
-            lines.append("💡 /钓鱼 查 <鱼名> 看它在哪些钓点出现")
-            async for _r in self._say_msg(event, "fishinfo.location_detail", event.plain_result("\n".join(lines))):
+            if hidden:
+                out.append(f"　…还有 {hidden} 种，发 /钓鱼 图鉴 {loc_cfg['name']} 看全部")
+            out.append("💡 /钓鱼 查 <鱼名> 看它在哪些钓点出现")
+            return out
+
+        def fish_card(one: dict[str, Any]) -> list[str]:
+            home_list = [
+                loc_cfg
+                for loc_cfg in self.locations
+                if (LOCATION_WEIGHTS.get(loc_cfg["id"]) or {}).get(one["id"], 0) > 0
+            ]
+            out = [
+                f"{_fish_emoji(one)} {one['name']}　{self._rarity_name(one['rarity'])}"
+                f"　基准价 {_fmt_gold(one['value'])} 金币",
+            ]
+            # 见闻过的狠角色才标注：一开始谁都不知道，被它吃过鱼之后 /钓鱼 查 才看得到
+            if one["id"] in (player.get("hostiles_seen") or []):
+                out.append("　⚠️ 狠角色（在你缸里吃过鱼，别跟比它弱的放一块）")
+            out.append(
+                f"　上钩难易："
+                f"{'要拉线（会跑，手要快）' if one['rarity'] in self.interactive_rarities else '直接上钩，不用拉线'}"
+            )
+            if one.get("flavor"):
+                out.append(f"　{one['flavor']}")
+            if home_list:
+                out.append("　出没钓点：" + "、".join(
+                    f"{h['emoji']}{h['name']}(×{h['value_mult']:.2f})" for h in home_list
+                ))
+            else:
+                out.append("　出没钓点：暂时没人见到过（隐藏鱼？）")
+            total, best, now = mine(one["id"])
+            if total > 0:
+                out.append(
+                    f"　我的记录：共 {total} 条　最高卖过 {_fmt_gold(best)}"
+                    + (f"　背包里还有 {now} 条" if now else "")
+                )
+            else:
+                out.append("　我的记录：还没钓到过 ❔")
+            out.append("💡 /钓鱼 查 <钓点名> 看那个钓点的全部鱼种")
+            return out
+
+        loc = self._find_location(name)
+        fish = self._find_fish_by_name(name)
+        if loc is not None:
+            ids = [
+                fid
+                for fid, w in (LOCATION_WEIGHTS.get(loc["id"]) or {}).items()
+                if w > 0 and fid in FISH_BY_ID
+            ]
+            if not ids:
+                async for _r in self._say_msg(event, "fishinfo.empty", event.plain_result(
+                        f"🐟 {loc['name']} 没有配置鱼种"
+                )):
+                    yield _r
+                return
+
+        # 精确同名优先：查「锦鲤玉佩」不该被鱼「锦鲤」抢走（模糊匹配留作兜底）。
+        # 每条卡片带上自己该走的**场景键**：钓点仍然走 fishinfo.location_detail
+        # （站长以前给这个场景配过按钮/文案，不能因为改查法就丢），其余走 fishinfo.detail。
+        exact: list[tuple[str, list[str], str]] = []
+        if fish is not None and str(fish["name"]) == name:
+            exact.append((f"🐟 鱼「{fish['name']}」", fish_card(fish), "fishinfo.detail"))
+        if loc is not None and (
+            str(loc["name"]) == name or str(loc["id"]).lower() == name.lower()
+        ):
+            exact.append((
+                f"{loc['emoji']} 钓点「{loc['name']}」", loc_card(loc),
+                "fishinfo.location_detail",
+            ))
+        exact.extend(
+            (label, lines, "fishinfo.detail")
+            for label, lines in self._lookup_anything(player, name, exact=True)
+        )
+
+        fuzzy: list[tuple[str, list[str], str]] = []
+        if fish is not None:
+            fuzzy.append((f"🐟 鱼「{fish['name']}」", fish_card(fish), "fishinfo.detail"))
+        if loc is not None:
+            fuzzy.append((
+                f"{loc['emoji']} 钓点「{loc['name']}」", loc_card(loc),
+                "fishinfo.location_detail",
+            ))
+        fuzzy.extend(
+            (label, lines, "fishinfo.detail")
+            for label, lines in self._lookup_anything(player, name)
+        )
+
+        cards = exact or fuzzy
+
+        # ---- 出口一：什么都没查到 ----
+        if not cards:
+            async for _r in self._say_msg(event, "fishinfo.not_found", event.plain_result(
+                    f"🤔 没找到「{name}」\n"
+                    "　能查：鱼 / 钓点 / 鱼饵 / 鱼竿 / 道具 / 杂物 / 变异 / 天气 / 成就\n"
+                    "　也可以 /钓鱼 查 看用法、/钓鱼 图鉴 详 看鱼名单"
+            )):
                 yield _r
             return
 
-        # ---- 按鱼名查 ----
-        fish = self._find_fish_by_name(name)
-        if fish is None:
-            async for _r in self._say_msg(event, "fishinfo.not_found", event.plain_result(
-                    f"🤔 没有叫「{name}」的鱼，也没这个钓点\n"
-                    "　试试 /钓鱼 图鉴 详 [页码] 看完整鱼名单，"
-                    "或 /钓鱼 钓点 看钓点列表"
-                )):
+        # ---- 出口二：只命中一个 → 直接出详情卡（卡片自己会限长，最多 20 行）----
+        if len(cards) == 1:
+            async for _r in self._say_msg(event, cards[0][2], event.plain_result(
+                    "\n".join(cards[0][1][:20])
+            )):
                 yield _r
             return
-        homes = [
-            loc_cfg
-            for loc_cfg in self.locations
-            if (LOCATION_WEIGHTS.get(loc_cfg["id"]) or {}).get(fish["id"], 0) > 0
-        ]
-        rarity = fish["rarity"]
-        interactive = rarity in self.interactive_rarities
-        total, best, now = mine(fish["id"])
-        lines = [
-            f"{_fish_emoji(fish)} {fish['name']}　{self._rarity_name(rarity)}"
-            f"　基准价 {_fmt_gold(fish['value'])} 金币",
-        ]
-        # 见闻过的狠角色才标注：一开始谁都不知道，被它吃过鱼之后 /钓鱼 查 才看得到
-        if fish["id"] in (player.get("hostiles_seen") or []):
-            lines.append("　⚠️ 狠角色（在你缸里吃过鱼，别跟比它弱的放一块）")
-        lines.append(
-            f"　上钩难易：{'要拉线（会跑，手要快）' if interactive else '直接上钩，不用拉线'}"
-        )
-        if fish.get("flavor"):
-            lines.append(f"　{fish['flavor']}")
-        if homes:
-            lines.append("　出没钓点：" + "、".join(
-                f"{h['emoji']}{h['name']}(×{h['value_mult']:.2f})" for h in homes
-            ))
-        else:
-            lines.append("　出没钓点：暂时没人见到过（隐藏鱼？）")
-        if total > 0:
-            lines.append(
-                f"　我的记录：共 {total} 条　最高卖过 {_fmt_gold(best)}"
-                + (f"　背包里还有 {now} 条" if now else "")
-            )
-        else:
-            lines.append("　我的记录：还没钓到过 ❔")
-        lines.append("💡 /钓鱼 查 <钓点名> 看那个钓点的全部鱼种")
-        async for _r in self._say_msg(event, "fishinfo.detail", event.plain_result("\n".join(lines))):
+
+        # ---- 出口三：一个词命中好几样 → 列出来让他挑（不带正文，省版面）----
+        lines = [f"🔍 「{name}」能查到 {len(cards)} 处："]
+        for label, detail, _scene in cards[:8]:
+            lines.append(f"　{label}　{detail[0]}")
+        if len(cards) > 8:
+            lines.append(f"　…还有 {len(cards) - 8} 处")
+        lines.append("　写全一点就能直接看详细（例如 /钓鱼 查 高级饲料）")
+        async for _r in self._say_msg(event, "fishinfo.multi_match", event.plain_result("\n".join(lines))):
             yield _r
 
     async def _cmd_collection(self, event: AstrMessageEvent, user_id: str, a2: str = ""):
@@ -2490,6 +2570,47 @@ class CommandsMixin:
                 if not saved:
                     lines.append("⚠️ 保存失败")
                 async for _r in self._say_msg(event, "item.deco_used", event.plain_result("\n".join(lines))):
+                    yield _r
+                return
+
+            # --- 体力类（heal）：直接回体力，不需要水族馆（v1.18.16 启用）---
+            # 效果键 `heal` 从 v1.13.0 起就登记着「预留」，一直没人用；现在给姜汤这类道具用上。
+            # 三种情况都不该扣道具：体力系统没开、体力已经满、道具不够。
+            heal = int(round(_safe_number(effects.get("heal"), 0.0)))
+            if heal > 0:
+                if not _stamina_enabled(self.cfg):
+                    async for _r in self._say_msg(event, "item.used", event.plain_result(
+                            f"🍲 本服没开体力限制（想钓就钓），{item.get('name', item_id)}先留着吧"
+                    )):
+                        yield _r
+                    return
+                cap = int(self.cfg["stamina_max"])
+                _refresh_stamina(player, self.cfg)
+                before = _safe_int(player.get("stamina"), 0, 0)
+                if before >= cap:
+                    async for _r in self._say_msg(event, "item.used", event.plain_result(
+                            f"⚡ 体力已经满了（{before}/{cap}），"
+                            f"{item.get('name', item_id)}先留着"
+                    )):
+                        yield _r
+                    return
+                if _safe_int(items.get(item_id), 0, 0) <= 0:
+                    async for _r in self._say_msg(event, "item.missing", event.plain_result(
+                            f"🎒 没有 {self._item_label(item_id)} 了"
+                    )):
+                        yield _r
+                    return
+                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                player["stamina"] = min(cap, before + heal)
+                saved = await self._save_player(player)
+                lines = [
+                    f"🍲 喝下 {self._item_label(item_id)}",
+                    f"　⚡ 体力 {before} → {player['stamina']}/{cap}",
+                    f"　剩余 {_safe_int(items.get(item_id), 0, 0)} 个",
+                ]
+                if not saved:
+                    lines.append("⚠️ 保存失败")
+                async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
                     yield _r
                 return
 

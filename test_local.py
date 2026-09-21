@@ -1106,6 +1106,17 @@ async def main():
     check(f"{len(pages)}/{len(pages)}" in text_of(out), "页码越界自动钳到末页")
     out = await cmd(plugin, ev, "帮助", "", "")
     check("1/" in text_of(out), "默认显示第一页")
+    # 正文超过 HELP_PAGE_MAX_LINES 的长表会自动拆页（13 件道具 + 4 行用法提示）
+    _titles = [t for t, _rows in pages]
+    _item_titles = [t for t in _titles if t.startswith("道具")]
+    check(
+        len(_item_titles) >= 2 and all(t.startswith("道具 ") for t in _item_titles),
+        f"道具这种长表自动拆页 -> {_item_titles}",
+    )
+    check(
+        all(len(rows) <= mod.VIEWS.HELP_PAGE_MAX_LINES for _t, rows in pages),
+        f"每页正文都 ≤{mod.VIEWS.HELP_PAGE_MAX_LINES} 行（加上页头页脚共 20 行）",
+    )
 
     # =====================================================================
     print("\n[10] 成就")
@@ -2364,6 +2375,141 @@ async def main():
     )
 
     # =====================================================================
+    print("\n[6p] /钓鱼 查：游戏里能查到的一切（v1.18.16）")
+    # 站长要「最好所有能查的都能查」，同时明确「对开发者有用的就别写进游戏」。
+    look_plugin = make_plugin()
+    lp = mod._default_player("89201")
+    lp["weather"] = "moon"
+    lp["baits"] = {"worm": 3}
+    lp["items"] = {"lucky_jade": 2}
+    lp["collectibles"] = {"old_boot": 1}
+    lp["variants"] = {"albino": 1}
+    lp["rods"] = ["bamboo", "carbon"]
+    await look_plugin._save_player(lp)
+
+    async def _look(kw: str) -> str:
+        return text_of(await cmd(look_plugin, FakeEvent("89201"), "查", kw, "", ""))
+
+    # --- 覆盖到所有可查对象 ---
+    _cases = (
+        ("鲤鱼", "基准价"),          # 鱼
+        ("新手村", "价值×"),          # 钓点
+        ("蚯蚓", "金/个"),            # 鱼饵
+        ("龙纹鲤竿", "价值+"),        # 鱼竿
+        ("姜汤", "用法："),           # 道具
+        ("破靴子", "卖价"),           # 杂物（注意：也有一条同名的鱼）
+        ("月夜", "天气"),             # 天气
+        ("垂钓达人", "成就"),         # 成就
+    )
+    _miss = []
+    for _kw, _expect in _cases:
+        _body = await _look(_kw)
+        if _expect not in _body:
+            _miss.append(f"{_kw}->{_expect}")
+    check(
+        not _miss,
+        f"鱼/钓点/鱼饵/鱼竿/道具/杂物/天气/成就 八类都查得到（缺：{_miss or '无'}）",
+    )
+
+    # --- 精确同名优先：查「锦鲤玉佩」不该被鱼「锦鲤」的模糊匹配抢走 ---
+    _jade_body = await _look("锦鲤玉佩")
+    check(
+        "锦鲤玉佩" in _jade_body and "基准价" not in _jade_body,
+        f"查「锦鲤玉佩」给的是道具卡（不是鱼「锦鲤」）-> {_jade_body.splitlines()[0][:24]}",
+    )
+    check("基准价" in await _look("锦鲤"), "查「锦鲤」仍然是那条鱼")
+
+    # --- 一个词命中多个 → 列出来让他挑（不刷屏）---
+    _multi = await _look("月")
+    check(
+        "能查到" in _multi and len(_multi.splitlines()) <= 10,
+        f"命中多个时列表挑（行数受控）-> {len(_multi.splitlines())} 行",
+    )
+
+    # --- 查不到时给「能查什么」的引导，而不是冷冰冰的报错 ---
+    _none = await _look("这玩意儿不存在")
+    check("没找到" in _none and "成就" in _none, "查不到时列出能查的分类")
+
+    # --- 单条回复的长度受控：普通详情卡 ≤8 行，钓点卡 ≤14 行（鱼多，另算）---
+    _caps = {
+        "鲤鱼": 8,          # 鱼
+        "月华水母": 8,
+        "龙纹鲤竿": 8,      # 鱼竿
+        "锦鲤玉佩": 8,      # 道具
+        "月夜": 8,          # 天气
+        "垂钓达人": 8,      # 成就
+        "新手村": 14,       # 钓点：鱼种多，放宽到 14（钓鱼 查里的 CARD_MAX_LINES）
+    }
+    _over = []
+    for _kw, _cap in _caps.items():
+        _n = len((await _look(_kw)).splitlines())
+        if _n > _cap:
+            _over.append(f"{_kw}:{_n}>{_cap}")
+    check(
+        not _over,
+        f"详情卡长度受控（普通卡 ≤8 行、钓点卡 ≤14 行；超限：{_over or '无'}）",
+    )
+
+    # --- ⚠️ 不许把「只有开发者才关心」的东西写进游戏 ---
+    _dev_words = (
+        "配置", "scene", "fish_defs", "rod_defs", "item_defs", "REPLY_SCENES",
+        "get_kv_data", "_calc", "_engine", "DEFAULTS", "schema", "json",
+    )
+    _leak = []
+    for _kw in ("配置", "场景", "fish_defs", "settings", "scenes"):
+        _body = await _look(_kw)
+        for _w in _dev_words:
+            # 「没找到「配置」」这种把关键词原样回显的不算泄露
+            if _w in _body and _w not in _kw:
+                _leak.append(f"{_kw}->{_w}")
+    check(not _leak, f"查不到开发者向的内容（泄露：{_leak or '无'}）")
+
+    # =====================================================================
+    print("\n[6q] 深水钓点的空竿率（v1.18.16 重定阶梯）")
+    # 站长报「倒数第四个钓点用最好的配置依旧相当于一半空杆」——
+    # 原来最深的地图系数只有 0.54，配上最好的饵（1.0）也只有 54% 中鱼。
+    # ⚠️ 用**出厂配置**（_CFG 为了确定性把每款饵都写成 1.0，看不出饵与饵的差别）
+    hook_plugin = make_plugin(dict(load_schema_config("hook_ladder"), enable_weather=False))
+    _ladder = {
+        part.split(":", 1)[0].strip(): mod._safe_number(part.split(":", 1)[1], 1.0)
+        for part in str(hook_plugin.cfg["location_hook_factors"]).split(",")
+        if ":" in part
+    }
+
+    def _catch_rate(loc_id: str, bait_id: str) -> float:
+        return hook_plugin.bait_hook_map.get(bait_id, 0.3) * _ladder.get(loc_id, 1.0)
+
+    _deep = [loc["id"] for loc in hook_plugin.locations][-6:]
+    _bad = [
+        f"{lid}:{_catch_rate(lid, 'secret'):.0%}"
+        for lid in _deep
+        if _catch_rate(lid, "secret") < 0.80
+    ]
+    check(
+        not _bad,
+        f"最后 6 个钓点拿最好的饵都 ≥80% 中鱼（不达标的：{_bad or '无'}）",
+    )
+    check(
+        abs(_catch_rate("aurora", "secret") - 0.85) < 1e-9
+        and abs(_catch_rate("dragon_palace", "secret") - 0.82) < 1e-9,
+        f"倒数第四个（极光冰渊）85%、最后一个（龙宫）82% -> "
+        f"{_catch_rate('aurora', 'secret'):.0%}/{_catch_rate('dragon_palace', 'secret'):.0%}",
+    )
+    check(
+        _catch_rate("dragon_palace", "worm") < _catch_rate("dragon_palace", "secret") - 0.1,
+        f"饵越好越不空竿这条仍然成立（龙宫：蚯蚓 {_catch_rate('dragon_palace', 'worm'):.0%}"
+        f" < 秘制饵 {_catch_rate('dragon_palace', 'secret'):.0%}）",
+    )
+    check(
+        _ladder.get("novice") == 1.0 and _ladder.get("dragon_palace") == 0.82,
+        f"阶梯从 1.0 平滑降到 0.82 -> {_ladder.get('novice')}→{_ladder.get('dragon_palace')}",
+    )
+    check(
+        len(_ladder) == len(hook_plugin.locations),
+        f"每个钓点都有系数（{len(_ladder)}/{len(hook_plugin.locations)}）",
+    )
+
+    # =====================================================================
     print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
 
     real_curve = dict(mod.LEVEL_CURVE)
@@ -3083,14 +3229,19 @@ async def main():
     )
 
     # --- 新默认值的上鱼率矩阵（3000 竿采样，区间断言非恒真） ---
+    # 上鱼率 = 饵的上钩率 × 钓点系数（v1.18.16 的阶梯：极光 0.85、湖泊 0.96、
+    # 前三张图 1.0），所以面包屑在极光是 0.58×0.85≈0.49、在新手村是 0.58。
     mat = make_plugin(load_schema_config())
     for bait_id, loc_id, lo, hi in (
-        ("bread", "aurora", 0.28, 0.42),
-        ("secret", "aurora", 0.52, 0.68),
-        ("bread", "lake", 0.48, 0.62),
-        ("secret", "lake", 0.90, 1.00),
-        ("none", "aurora", 0.10, 0.22),
+        ("bread", "aurora", 0.45, 0.54),
+        ("secret", "aurora", 0.80, 0.90),
+        ("bread", "lake", 0.51, 0.60),
+        ("secret", "lake", 0.92, 0.99),
+        ("none", "aurora", 0.17, 0.25),
+        # 前三张图的系数是 1.0：`_roll_cast_outcome` 里 >= 1.0 直接判「必出鱼」，
+        # 所以新手村不管挂什么饵都是 100%（这是设计，不是 bug）
         ("bread", "novice", 1.00, 1.00),
+        ("dragon_bait", "dragon_palace", 0.78, 0.86),
     ):
         hit = sum(
             1 for _ in range(3000) if mat._roll_cast_outcome(bait_id, True, loc_id)[0] == "fish"
@@ -6289,10 +6440,22 @@ async def main():
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
-        # 只扫「数值」页那张表（别把别的数组字面量当配置键）
+        # 只扫「数值」页那张表（别把别的数组字面量当配置键）。
+        # 每行格式：["键", "中文名", "单位", "说明", 文本行?, "分组", "入口"]，
+        # 入口 = ""（数值页直接改）/ "tab:xxx"（别的标签页改）/ "panel"（插件面板、页面只读）
         _html = (PLUGIN_DIR / "pages" / "editor" / "index.html").read_text(encoding="utf-8")
         _block = re.search(r"var NUMBER_KEYS = \[(.*?)\n  \];", _html, re.S)
-        _page_keys = set(re.findall(r'\["([a-z0-9_]+)", "', _block.group(1) if _block else ""))
+        _entry_of: dict[str, str] = {}
+        for _line in (_block.group(1) if _block else "").splitlines():
+            _m = re.match(r'\s*\["([a-z0-9_]+)",', _line)
+            if not _m:
+                continue
+            # 第 7 位「入口」只在有值时写出来（"" = 数值页直接改，所以是省略不写）
+            _tail = re.search(r'"([a-z:_]*)"\s*\],?\s*$', _line)
+            _entry_of[_m.group(1)] = _tail.group(1) if _tail else ""
+        _page_keys = set(_entry_of)
+        _direct_keys = {k for k, e in _entry_of.items() if e == ""}
+        _panel_keys = {k for k, e in _entry_of.items() if e == "panel"}
         _reply_keys = set(_bridge_mod.EditorBridgeMixin.REPLY_TEXT_KEYS) | set(
             _bridge_mod.EditorBridgeMixin.REPLY_SCALAR_KEYS
         )
@@ -6302,6 +6465,13 @@ async def main():
                  "content_auto_merge", "enable_auto_backup", "data_status",
                  # 站长改过哪些键的清单：插件自动维护，不是给人改的
                  "user_edited_keys"}
+        # 页面清单必须覆盖 DEFAULTS 的每一个键（v1.18.16：113 个键一个不漏）
+        _missing_page = sorted(set(mod.DEFAULTS) - _page_keys)
+        check(
+            not _missing_page,
+            f"页面「全部配置键」清单覆盖 DEFAULTS 的每一个键（缺：{_missing_page or '无'}）",
+            f"{len(_page_keys)} 个键",
+        )
         _unreachable = sorted(
             k for k in mod.DEFAULTS
             if k not in _page_keys and k not in _reply_keys and k not in _set_content_tables
@@ -6313,15 +6483,38 @@ async def main():
             f"面板隐藏的配置项在编辑器里都能改（改不到的：{_unreachable}）",
             ", ".join(_unreachable),
         )
+        # 页面标着「数值页直接改」的键，插件必须真的放行（否则页面会显示成只读）
+        _not_allowed = sorted(_direct_keys - _wl)
         check(
-            all(k in _wl for k in _page_keys if k in mod.DEFAULTS),
-            "页面「数值」页列出的键都在插件白名单里（不然会被页面自己隐藏掉）",
+            not _not_allowed,
+            f"页面「数值页能改」的 {len(_direct_keys)} 个键都在插件白名单里（不在的：{_not_allowed or '无'}）",
+        )
+        # 反过来：页面标「插件面板只读」的，插件也不该放行（放了页面就该显示成可改）
+        _panel_but_open = sorted(_panel_keys & _wl)
+        check(
+            not _panel_but_open,
+            f"页面标只读的 {len(_panel_keys)} 个键插件确实没放行（错放的：{_panel_but_open or '无'}）",
+        )
+        _want_listy = ("quality_weights", "rarity_display_names",
+                       "backpack_upgrades", "aquarium_slots", "decoration_slots")
+        _missing_listy = sorted(k for k in _want_listy if k not in _wl)
+        check(
+            not _missing_listy,
+            f"列表型配置（品质权重/显示名/扩容表/装饰位）也允许页面改"
+            f"（白名单 {len(_wl)} 项，缺：{_missing_listy or '无'}）",
+        )
+        # 存档目录（v1.18.16 放开）：站长要「编辑器能编辑插件的所有东西」，
+        # 它是唯一一个既安全（一个字符串）又真有人想改的 backup_ 前缀键
+        check(
+            "backup_dir" in _wl and "backup_dir" in _direct_keys,
+            "存档目录 backup_dir 在页面与插件白名单里都是可改的",
+        )
+        _still_locked = sorted(
+            k for k in mod.DEFAULTS if k.startswith(("data_", "editor_"))
         )
         check(
-            "quality_weights" in _wl and "rarity_display_names" in _wl
-            and "backpack_upgrades" in _wl and "aquarium_slots" in _wl
-            and "decoration_slots" in _wl,
-            "列表型配置（品质权重/显示名/扩容表/装饰位）也允许页面改",
+            all(k not in _wl for k in _still_locked),
+            f"data_* / editor_* 仍然不让页面写（这些是插件的数据操作与页面自己的状态）",
         )
     check(
         all(k in mod.DEFAULTS for k in _visible),
@@ -6648,7 +6841,10 @@ async def main():
 
     plugin_r = make_plugin()
     cfg_r = plugin_r.cfg
-    check(len(plugin_r.items) == 7, f"道具 7 种 -> {len(plugin_r.items)}")
+    check(
+        len(plugin_r.items) == 13,
+        f"道具 13 种（v1.18.16 从 7 件扩到 13 件）-> {len(plugin_r.items)}",
+    )
     check(
         abs(mod._safe_number(plugin_r.items["coral_deco"]["effects"].get("decorate"), 0) - 0.20) < 1e-9,
         "珊瑚造景 = 装饰类（decorate=0.20）",
@@ -6662,8 +6858,8 @@ async def main():
         "育灵水 feed_bonus=5（对鱼生效）",
     )
     check(
-        abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("buff_quality"), 0) - 0.30) < 1e-9,
-        "锦鲤玉佩 buff_quality=0.30（对钓手生效）",
+        abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("buff_quality"), 0) - 0.20) < 1e-9,
+        "锦鲤玉佩 buff_quality=0.20（v1.18.16 从 0.30 削下来，对钓手生效）",
     )
 
     # --- 个体品质最高档：只能洗髓丹洗出来（v1.18.7 加档、v1.18.8 起叫「神品」）---
@@ -6812,10 +7008,10 @@ async def main():
         not mod._reroll_averse(lf, cfg_r, plugin_r._today_text()),
         "老鱼默认不是「厌恶」状态",
     )
-    # 洗髓丹价格 + 官方行迁移
+    # 洗髓丹价格（v1.18.16：1200 → 2500）+ 官方行迁移
     check(
-        mod._safe_int(plugin_r.items["pill_quality"].get("price"), 0, 0) == 1200,
-        f"洗髓丹价格 500 → 1200 -> {plugin_r.items['pill_quality'].get('price')}",
+        mod._safe_int(plugin_r.items["pill_quality"].get("price"), 0, 0) == 2500,
+        f"洗髓丹价格 500 → 1200 → 2500 -> {plugin_r.items['pill_quality'].get('price')}",
     )
     fix_cfg = dict(cfg_r)
     fix_cfg["item_defs"] = [
@@ -6823,12 +7019,13 @@ async def main():
     ]
     plugin_fix = make_plugin(fix_cfg)
     check(
-        "|1200|" in str(plugin_fix.cfg["item_defs"][0])
-        and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 1200,
-        "老配置里那行没被改过 → 自动升级成新价（CONTENT_ROW_FIXES）",
+        "|2500|" in str(plugin_fix.cfg["item_defs"][0])
+        and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 2500,
+        "老配置里那行没被改过 → 自动升级成新价（CONTENT_ROW_FIXES 三级链 + 本地迁移）",
     )
     # v1.18.10：个体品质最后一档改名「神品」，说明里那个「神话」指的其实是它 ——
-    # 已经在 v1.18.7 那版说明上的老配置也要跟着换（CONTENT_ROW_FIXES 允许多级链）
+    # 已经在 v1.18.7 那版说明上的老配置也要跟着换（CONTENT_ROW_FIXES 允许多级链，
+    # v1.18.16 的涨价与等级门槛就挂在这条链的末端）
     fix_cfg2 = dict(cfg_r)
     fix_cfg2["item_defs"] = [
         "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
@@ -7214,6 +7411,11 @@ async def main():
     # 「手气一竿即清」的断言偶发变红（这是测试的确定性要求，不是玩法改动）
     plugin_j = make_plugin(dict(_CFG, easter_egg_chance=0.0))
     ev_j = FakeEvent("96004")
+    # 玉佩的手气数值从配置读（v1.18.16 从 0.30 削到 0.20）：以后调平衡不用改测试
+    _JADE = mod._safe_number(
+        plugin_j.items["lucky_jade"]["effects"].get("buff_quality"), 0.0
+    )
+    _JADE_PCT = f"+{_JADE * 100:.0f}%"
     p4 = await plugin_j._load_player("96004")
     p4["items"]["lucky_jade"] = 1
     p4["baits"]["worm"] = 50
@@ -7222,7 +7424,7 @@ async def main():
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 20, f"玉佩 → 20 竿 -> {p4.get('buff_casts_left')}")
     check(
-        abs(mod._safe_number(p4.get("buff_quality"), 0) - 0.30) < 1e-9,
+        abs(mod._safe_number(p4.get("buff_quality"), 0) - _JADE) < 1e-9,
         f"玉佩的加成写在 buff_quality（持续型）-> {p4.get('buff_quality')}",
     )
     check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "玉佩不往一次性储备里塞东西")
@@ -7232,7 +7434,7 @@ async def main():
     p4 = await plugin_j._load_player("96004")
     check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 19, f"抛一竿后剩 19 -> {p4.get('buff_casts_left')}")
     check(
-        abs(mod._safe_number(p4.get("buff_quality"), 0) - 0.30) < 1e-9,
+        abs(mod._safe_number(p4.get("buff_quality"), 0) - _JADE) < 1e-9,
         "第 2 竿仍然吃到玉佩的手气（加成留着，竿数在减）",
     )
 
@@ -7266,12 +7468,12 @@ async def main():
     await plugin_j._save_player(p5)
     check(
         abs(mod._safe_number(p5.get("luck_charges"), 0) - 0.5) < 1e-9
-        and abs(mod._safe_number(p5.get("buff_quality"), 0) - 0.30) < 1e-9,
+        and abs(mod._safe_number(p5.get("buff_quality"), 0) - _JADE) < 1e-9,
         "插曲手气记在一次性储备里，玉佩的加成另算（两个字段分开）",
     )
     check(
-        abs(mod._effective_luck(p5) - 0.80) < 1e-9,
-        f"两者同时有时**加起来**（0.5 + 0.30 = 0.80）-> {mod._effective_luck(p5)}",
+        abs(mod._effective_luck(p5) - (0.5 + _JADE)) < 1e-9,
+        f"两者同时有时**加起来**（0.5 + {_JADE:.2f} = {0.5 + _JADE:.2f}）-> {mod._effective_luck(p5)}",
     )
 
     before_casts = mod._safe_int(p5.get("buff_casts_left"), 0, 0)
@@ -7283,15 +7485,15 @@ async def main():
         f"玉佩额度照常减 1（{before_casts} -> {p5.get('buff_casts_left')}）",
     )
     check(
-        abs(mod._safe_number(p5.get("buff_quality"), 0) - 0.30) < 1e-9,
+        abs(mod._safe_number(p5.get("buff_quality"), 0) - _JADE) < 1e-9,
         "玉佩的加成还在（没被一次性储备的清零连坐）",
     )
     await cmd(plugin_j, FakeEvent("96005"), "蚯蚓", "", "")
     p5 = await plugin_j._load_player("96005")
     check(
         mod._safe_number(p5.get("luck_charges"), 0) == 0
-        and abs(mod._effective_luck(p5) - 0.30) < 1e-9,
-        f"第二竿起事件那份没了，只剩玉佩的 +30% -> {mod._effective_luck(p5)}",
+        and abs(mod._effective_luck(p5) - _JADE) < 1e-9,
+        f"第二竿起事件那份没了，只剩玉佩的 {_JADE_PCT} -> {mod._effective_luck(p5)}",
     )
     # 一次性储备与玉佩**同时归零/失效**时的边界
     check(
@@ -7308,15 +7510,17 @@ async def main():
     # 状态行照实写：把「这一竿的合计」直接算给玩家看
     p5["luck_charges"] = 0.5
     line = plugin_j._buff_status_line(p5)
+    _sum_pct = f"+{(0.5 + _JADE) * 100:.0f}%"
     check(
-        "还剩" in line and "叠加" in line and "+50%" in line and "+80%" in line,
-        f"两者同时在时状态行写出这一竿的合计（0.5+0.3=80%）-> {line}",
+        "还剩" in line and "叠加" in line and "+50%" in line and _sum_pct in line,
+        f"两者同时在时状态行写出这一竿的合计（0.5+{_JADE:.1f}={_sum_pct}）-> {line}",
     )
     p5["luck_charges"] = 0.1
     line_low = plugin_j._buff_status_line(p5)
+    _low_pct = f"+{(0.1 + _JADE) * 100:.0f}%"
     check(
-        "叠加" in line_low and "+40%" in line_low,
-        f"一次性比玉佩小时也照样加起来（0.1+0.3=40%）-> {line_low}",
+        "叠加" in line_low and _low_pct in line_low,
+        f"一次性比玉佩小时也照样加起来（0.1+{_JADE:.1f}={_low_pct}）-> {line_low}",
     )
     p5["luck_charges"] = 0.0
     check("一次性" not in plugin_j._buff_status_line(p5), "只剩玉佩时不提一次性")
@@ -7324,10 +7528,10 @@ async def main():
     # 插曲给手气时的提示：也要说清是「叠加」，别让玩家以为被吞了
     p6 = mod._default_player("96104")
     p6["buff_casts_left"] = 5
-    p6["buff_quality"] = 0.30
+    p6["buff_quality"] = _JADE
     hint = "\n".join(plugin_j._grant_event_reward(p6, {"luck": [0.5, 0.5]}))
     check(
-        "叠加" in hint and "+80%" in hint and "回到 +30%" in hint,
+        "叠加" in hint and _sum_pct in hint and f"回到 {_JADE_PCT}" in hint,
         f"插曲文案写明与玉佩叠加、一竿后回到玉佩的值 -> {[l for l in hint.splitlines() if '🔮' in l]}",
     )
 
@@ -7480,8 +7684,9 @@ async def main():
     )
 
     # --- 手工配的小鱼池：一个字都不改 ---
-    # 判据是「配置里至少一半的行是官方鱼的 id」；只留几种鱼的自定义鱼池不符合，
-    # 官方新增内容不该把它淹没（[11b] 也钉着这条）。
+    # 判据有两条：全是官方 id 的（哪怕只剩几条）当作旧版快照补齐；夹了自定义内容的
+    # 才看比例（官方 id 不到一半 = 站长从头配的一套），官方新增内容不该把它淹没。
+    # [11b] 也钉着这条。
     handmade_cfg = dict(_CFG)
     handmade_cfg["fish_defs"] = (
         "good_fish|好鱼|常见|50|新手村:1.0|站长从头配的一套\n"
@@ -7531,6 +7736,197 @@ async def main():
     check(
         len(mod.FISH_POOL) == 271,
         f"复位回默认鱼池 -> {len(mod.FISH_POOL)} 种",
+    )
+
+    # =====================================================================
+    print("\n[10v] 扩容档位真的会进老配置（v1.18.16 修）")
+    # 站长报「扩容并没有生效，游戏和插件 ui 里面都看不到」。
+    # 病根：aquarium_slots / backpack_upgrades 虽然登记在「容器类合并」名单里，
+    # 却又被排除在默认值同步之外 —— 合并逻辑永远不会被执行，官方新增的档位
+    # 一档都进不来（游戏侧拿不到、编辑器读配置也没有）。
+    check(
+        "aquarium_slots" not in mod.DEFAULTS_SYNC_EXCLUDE_KEYS
+        and "backpack_upgrades" not in mod.DEFAULTS_SYNC_EXCLUDE_KEYS,
+        "扩容类配置不在「同步排除名单」里（否则合并逻辑永远跑不到）",
+    )
+    check(
+        "aquarium_slots" in mod.DEFAULTS_MERGE_LIST_KEYS
+        and "backpack_upgrades" in mod.DEFAULTS_MERGE_LIST_KEYS,
+        "它们在「容器类合并」名单里（保留站长已有档位、只补官方新增的尾巴）",
+    )
+    _grow_cfg = dict(_CFG)
+    _grow_cfg["backpack_upgrades"] = ["15|400", "25|1100", "30|2700"]
+    _grow_cfg["aquarium_slots"] = ["精致缸|1600", "生态缸|5400", "深海缸|16000"]
+    _grow_cfg["config_fingerprint"] = "旧指纹"
+    _grow_plugin = make_plugin(_grow_cfg)
+    await _grow_plugin._sync_defaults()
+    check(
+        len(_grow_plugin.config["backpack_upgrades"]) == 7
+        and _grow_plugin.config["backpack_upgrades"][:3]
+        == ["15|400", "25|1100", "30|2700"],
+        f"老配置的背包档位补到 7 档、原有 3 档一字不动 -> "
+        f"{len(_grow_plugin.config['backpack_upgrades'])} 档",
+    )
+    check(
+        len(_grow_plugin.config["aquarium_slots"]) == 6
+        and _grow_plugin.config["aquarium_slots"][0] == "精致缸|1600",
+        f"老配置的鱼缸档位补到 6 档 -> {len(_grow_plugin.config['aquarium_slots'])} 档",
+    )
+    # 补完要能真的用上（重新解析一遍配置）
+    _grow_plugin._refresh_config()
+    check(
+        len(_grow_plugin.backpack_upgrades) == 7
+        and len(_grow_plugin.aquarium_slots) == 6,
+        f"运行时也拿到了新档位 -> 背包 {len(_grow_plugin.backpack_upgrades)} 档"
+        f"／鱼缸 {len(_grow_plugin.aquarium_slots)} 档",
+    )
+    # 站长自己改过的档位一个都不动
+    _grown_cfg = dict(_CFG)
+    _grown_cfg["backpack_upgrades"] = ["20|999", "25|1100", "30|2700"]
+    _grown_cfg["config_fingerprint"] = "旧指纹"
+    _grown_plugin = make_plugin(_grown_cfg)
+    await _grown_plugin._sync_defaults()
+    check(
+        _grown_plugin.config["backpack_upgrades"][0] == "20|999",
+        f"站长改过的档位保留（只补尾巴）-> {_grown_plugin.config['backpack_upgrades'][0]}",
+    )
+
+    # --- 其余「文本形态」的内容表也要能补（杂物/变异/天气/彩蛋）---
+    check(
+        set(mod.CONTENT_TEXT_KEYS) >= {
+            "fish_defs", "collectible_defs", "variant_defs", "weather_defs",
+            "easter_egg_defs",
+        },
+        f"文本形态内容表清单 -> {mod.CONTENT_TEXT_KEYS}",
+    )
+    # 老版本的官方表很短（这里只留 3 条杂物 = 3/7 < 一半），v1.18.16 之前会被
+    # 「至少要有一半是官方 id」挡住，站长怎么升级都看不到官方新增的杂物。
+    _junk_cfg = dict(_CFG)
+    _junk_cfg["collectible_defs"] = "\n".join(
+        str(mod.DEFAULTS["collectible_defs"]).splitlines()[:3]
+    )
+    _junk_plugin = make_plugin(_junk_cfg)
+    check(
+        len(str(_junk_plugin.cfg["collectible_defs"]).splitlines())
+        == len(str(mod.DEFAULTS["collectible_defs"]).splitlines()),
+        f"老配置缺的杂物自动补齐（旧版快照只 3 条也认）-> "
+        f"{len(str(_junk_plugin.cfg['collectible_defs']).splitlines())} 行",
+    )
+
+    # =====================================================================
+    print("\n[10w] 数据状态面板不再自我膨胀（v1.18.16 修）")
+    # 站长那边 data_status 已经膨胀成几十 KB：旧代码把「上一版整段面板」
+    # 嵌进新面板的「上次操作」行，然后又把整段存回 self._data_status，
+    # 于是每 60 秒刷一次就复制一遍。
+    st_plugin = make_plugin()
+    st_plugin._data_status = "手动存档：2026-09-21_1208.json"
+    _fake_index = {"total": 3, "by_kind": {"daily": 1, "auto": 2, "manual": 0},
+                   "snapshots": [{"rel": "auto/2026-09-21_0842.json",
+                                  "mtime_text": "2026-09-21 08:42", "count": 16}]}
+    st_plugin.backup_store.rebuild_index = lambda: _fake_index
+    st_plugin._player_ids = lambda: asyncio.sleep(0, result=["1", "2"])
+
+    class _Cfg(dict):
+        def save_config(self):
+            self.saved = getattr(self, "saved", 0) + 1
+
+    st_plugin.config = _Cfg(st_plugin.config)
+    for _ in range(12):
+        await st_plugin._refresh_data_status()
+    _status = str(st_plugin.config.get("data_status") or "")
+    check(
+        len(_status) <= mod.DATA_ADMIN.STATUS_MAX_CHARS,
+        f"连刷 12 次后面板仍有长度上限 -> {len(_status)} 字",
+    )
+    check(
+        _status.count("上次操作：") == 1 and _status.count("玩家数：") == 1,
+        f"面板不再自我嵌套（上次操作只出现 1 次）-> {_status.count('上次操作：')} 次",
+    )
+    check(
+        st_plugin._data_status == "手动存档：2026-09-21_1208.json",
+        "「上次操作」只存那一句短的（不再是整段面板）",
+    )
+    check(
+        getattr(st_plugin.config, "saved", 0) == 1,
+        f"内容没变就不重复写盘（连刷 12 次只写了 {getattr(st_plugin.config, 'saved', 0)} 次）",
+    )
+
+    # =====================================================================
+    print("\n[10x] 道具重设：13 件、带解锁等级、heal 能用（v1.18.16）")
+    item_plugin = make_plugin()
+    check(
+        len(item_plugin.items) == 13,
+        f"出厂 {len(item_plugin.items)} 件道具（重设前 7 件）",
+    )
+    _gated = {
+        iid: int(it.get("unlock_level", 1))
+        for iid, it in item_plugin.items.items()
+        if int(it.get("unlock_level", 1)) > 1
+    }
+    check(
+        len(_gated) >= 10,
+        f"后期道具都带等级门槛 -> {len(_gated)} 件",
+    )
+    _prices = {iid: int(it["price"]) for iid, it in item_plugin.items.items()}
+    check(
+        _prices["lucky_jade"] == 6000
+        and abs(mod._safe_number(
+            item_plugin.items["lucky_jade"]["effects"].get("buff_quality"), 0
+        ) - 0.20) < 1e-9,
+        f"锦鲤玉佩已削弱：+20% 手气、6000 金（原 +30%/500 金）-> "
+        f"{_prices['lucky_jade']} 金",
+    )
+    check(
+        _prices["pill_quality"] == 2500 and _prices["coral_deco"] == 3000,
+        f"洗髓丹/珊瑚造景也跟着重定价 -> {_prices['pill_quality']}/"
+        f"{_prices['coral_deco']}",
+    )
+    check(
+        all(it.get("unlock_level", 1) >= 1 for it in item_plugin.items.values())
+        and item_plugin.items["hot_soup"]["unlock_level"] == 3,
+        "每件道具都有解锁等级（老配置没写第七段时的兜底是 1 级）",
+    )
+    # 老道具行的迁移登记（否则站长那边永远是旧价）
+    _fix_keys = [f[0] for f in mod.LOCAL_CONTENT_ROW_FIXES]
+    check(
+        all(k == "item_defs" for k in _fix_keys) and len(mod.LOCAL_CONTENT_ROW_FIXES) >= 7,
+        f"老道具行登记了 {len(mod.LOCAL_CONTENT_ROW_FIXES)} 条迁移（旧价 -> 新价）",
+    )
+
+    # --- 姜汤（heal）：回体力、满了不扣、体力没开时不消耗 ---
+    soup_plugin = make_plugin(dict(
+        _CFG, stamina_regen_seconds=45, stamina_max=20
+    ))
+    sp2 = mod._default_player("89202")
+    sp2["items"] = {"hot_soup": 3}
+    sp2["stamina"] = 5
+    sp2["stamina_ts"] = int(time.time())
+    await soup_plugin._save_player(sp2)
+    out = await cmd(soup_plugin, FakeEvent("89202"), "用", "姜汤", "")
+    sp2 = await soup_plugin._load_player("89202")
+    check(
+        sp2["stamina"] == 15 and sp2["items"]["hot_soup"] == 2,
+        f"姜汤 +10 体力、扣 1 个 -> 体力 {sp2['stamina']}／剩 {sp2['items']['hot_soup']}",
+    )
+    check("体力" in text_of(out), f"回复里写明体力变化 -> {text_of(out).splitlines()[1][:26]}")
+    sp2["stamina"] = 20
+    sp2["stamina_ts"] = int(time.time())
+    await soup_plugin._save_player(sp2)
+    out = await cmd(soup_plugin, FakeEvent("89202"), "用", "姜汤", "")
+    sp2 = await soup_plugin._load_player("89202")
+    check(
+        sp2["items"]["hot_soup"] == 2 and "已经满" in text_of(out),
+        "体力已满时不消耗道具（只提示）",
+    )
+    no_stam = make_plugin(dict(_CFG, stamina_regen_seconds=0))
+    np2 = mod._default_player("89203")
+    np2["items"] = {"hot_soup": 1}
+    await no_stam._save_player(np2)
+    out = await cmd(no_stam, FakeEvent("89203"), "用", "姜汤", "")
+    np2 = await no_stam._load_player("89203")
+    check(
+        np2["items"]["hot_soup"] == 1 and "没开体力" in text_of(out),
+        "本服没开体力时也不浪费道具",
     )
 
     # =====================================================================

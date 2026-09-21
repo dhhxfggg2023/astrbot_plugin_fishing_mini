@@ -18,6 +18,10 @@ import os
 import time
 from typing import Any
 
+#: 状态面板（`data_status`，只给人看的那段文字）的最大长度。
+#: ⚠️ 一定要有上限：这段文字会写进插件配置，历史上因为它自我嵌套膨胀过几十 KB。
+STATUS_MAX_CHARS = 1200
+
 
 class DataAdminMixin:
     """数据管理相关方法（由 FishingPlugin 继承，见 main.py 的类定义）。"""
@@ -388,7 +392,15 @@ class DataAdminMixin:
         await self._refresh_data_status(extra=result)
 
     async def _refresh_data_status(self, extra: str = "") -> None:
-        """刷新状态面板：玩家数、存档数量、最近快照、目录。"""
+        """刷新状态面板：玩家数、存档数量、最近快照、目录。
+
+        ⚠️ v1.18.16 修的坑：这里以前把**上一版面板**（`self._data_status` 里存的整段）
+        又嵌进新面板的「上次操作」行里，然后 `self._data_status = 面板`，
+        于是每 60 秒刷一次就把自己复制一遍 —— 站长的配置里那段文字已经膨胀成几十 KB，
+        WebUI 的「数据状态」彻底没法看（而且每 60 秒写一次配置）。
+        现在：`self._data_status` **只存「上一次操作」那一句短的**（由 `_set_status` 写），
+        面板每次现拼、限长，**内容没变就不写盘**。
+        """
         store = getattr(self, "backup_store", None)
         if store is None:
             return
@@ -414,11 +426,15 @@ class DataAdminMixin:
             if extra:
                 lines.append(f"结果：{extra}")
             text = "\n".join(lines)
+            # 限长：面板只给人看，多余的直接截断（绝不把它再喂回自己）
+            if len(text) > STATUS_MAX_CHARS:
+                text = text[:STATUS_MAX_CHARS] + "…"
+            if str(self.config.get("data_status") or "") == text:
+                return                      # 没变就不写盘，省掉每分钟一次的配置写入
             self.config["data_status"] = text
             save = getattr(self.config, "save_config", None)
             if callable(save):
                 save()
-            self._data_status = text
         except Exception as e:  # pragma: no cover
             logger.debug(f"刷新数据状态失败：{e}")
 

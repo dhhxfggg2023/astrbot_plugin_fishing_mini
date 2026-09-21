@@ -434,16 +434,22 @@
   },
   "item_defs": {
     "invisible": true,
-    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)。喂鱼类效果键：meat/spirit/sheen/value_up；装饰类：decorate（摆进鱼缸，耐久内加成挂机产出）；其他：feed_bonus（提升这条鱼的投喂上限）、buff_quality（钓手手气 buff）、heal",
+    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)|解锁等级（最后一段可省略 = 1 级）。喂鱼类效果键：meat/spirit/sheen/value_up；装饰类：decorate（摆进鱼缸，耐久内加成挂机产出）；其他：feed_bonus（提升这条鱼的投喂上限）、buff_quality（钓手手气 buff，持续 buff_cast_count 竿）、quality_reroll（重掷个体品质取更好的那次）、heal（回复体力，体力已满时不消耗）。⚠️ 道具是一口价、收益却随鱼价上涨，所以后期道具靠解锁等级卡「什么时候买才划算」。",
     "type": "list",
     "default": [
-      "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1",
-      "feed_premium|高级饲料|🍖|80|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3",
-      "feed_divine|仙露|💧|300|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600",
-      "growth_tonic|育灵水|🌱|500|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5",
-      "pill_quality|洗髓丹|🔮|1200|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3",
-      "lucky_jade|锦鲤玉佩|🎐|500|带在身上：接下来 20 竿手气更好|buff_quality=0.30",
-      "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20"
+      "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1|1",
+      "feed_premium|高级饲料|🍖|90|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3|6",
+      "feed_divine|仙露|💧|420|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600|14",
+      "growth_tonic|育灵水|🌱|800|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5|18",
+      "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3|20",
+      "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
+      "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+      "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
+      "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
+      "feed_mythic|龙涎饲料|🐲|1500|喂鱼：三维各 +18，估值 +2000（永久）|meat=18;spirit=18;sheen=18;value_up=2000|45",
+      "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
+      "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
+      "hot_soup|姜汤|🍲|400|喝一口：回复体力（体力已满时不消耗）|heal=10|3"
     ]
   },
   "data_status": {
@@ -611,9 +617,9 @@
   },
   "location_hook_factors": {
     "invisible": true,
-    "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图，新手期绝不空竿）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理",
+    "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理。v1.18.16 重定阶梯：从 1.0 平滑降到 0.82（原来最深只有 0.54，拿最好的饵也有一半空竿）——现在最深的地图用最好的饵有 82% 中鱼，用中档饵（蚯蚓 0.70）才是 57%。",
     "type": "string",
-    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,night:0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,trench:0.65,glacier:0.62,aurora:0.60,starfall:0.58,void_sea:0.56,dragon_palace:0.54"
+    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,night:0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,trench:0.86,glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,dragon_palace:0.82"
   },
   "rarity_spawn_weights": {
     "invisible": true,
@@ -715,25 +721,25 @@
     "invisible": true,
     "description": "杂物定义（没中鱼时可能钩上来的东西）。每行：id|名称|emoji|权重|价值|说明；权重越大越常见，价值是卖店价。加一条 = 加一行；# 开头是注释。",
     "type": "text",
-    "default": "seaweed|海草|🌿|30|2|缠在钩上的水草，晒干能当柴烧\nold_boot|破靴子|🥾|22|1|谁把靴子扔水里了……\ntin_can|铁皮罐|🥫|18|3|锈迹斑斑，卖废铁也能换点钱\ndrift_bottle|漂流瓶|🍾|16|5|瓶里好像塞着什么……\nstarry_shell|星纹贝|🐚|8|25|壳上有星形纹路，挺好看\nsunken_coin|沉水古币|🪙|4|60|不知道是哪个朝代的\ntreasure_chest|沉船宝箱|🎁|2|200|锈死了，但摇一摇里面叮当作响"
+    "default": "seaweed|海草|🌿|30|2|缠在钩上的一把水草，晒干了能当柴烧\nold_boot|破靴子|🥾|22|1|左脚。没人知道右脚在哪儿\ntin_can|铁皮罐|🥫|18|3|锈得看不出原来装什么，废铁站肯收\ndrift_bottle|漂流瓶|🍾|16|5|瓶口封着蜡，里面好像有东西\nstarry_shell|星纹贝|🐚|8|25|壳上落着一小片星形的纹，握久了发温\nsunken_coin|沉水古币|🪙|4|60|字都被水磨平了，只认得出是钱\ntreasure_chest|沉船宝箱|🎁|2|200|锁早锈死了，摇一摇，里头叮当响"
   },
   "variant_defs": {
     "invisible": true,
     "description": "变异个体定义。每行：id|名称|emoji|相对权重|价值倍率|说明；价值倍率直接乘在鱼价上（例如 1.30 = 贵 30%）。",
     "type": "text",
-    "default": "golden|黄金|🌟|34|1.3|通体流金，鳞片像鎏过一样\nalbino|白化|❄️|24|1.45|雪白通透，眼睛泛着淡红\ncrimson|赤焰|🔥|18|1.6|鳍边像烧着一样红\njade|翡翠|💚|13|1.85|青碧欲滴，像是玉雕出来的\nabyss|幽冥|🌑|8|2.3|颜色深得发黑，只有眼睛有一点光\nprismatic|虹彩|🌈|3|3.2|随光线变化七种颜色，极其罕见"
+    "default": "golden|黄金|🌟|34|1.3|鳞片像鎏过一层金，出水时晃眼\nalbino|白化|❄️|24|1.45|白得透光，鳍里能看见淡淡的血\ncrimson|赤焰|🔥|18|1.6|鳍边红得像刚贴在火上烤过\njade|翡翠|💚|13|1.85|通体青碧，像从玉里凿出来的\nabyss|幽冥|🌑|8|2.3|黑得看不见鳞，只有眼睛有一点光\nprismatic|虹彩|🌈|3|3.2|偏一下角度换一种颜色，七种都齐"
   },
   "weather_defs": {
     "invisible": true,
     "description": "天气定义。每行：id|名称|emoji|权重|稀有度倍率|窗口倍率|运气|逃脱倍率|说明；稀有度倍率写成 少见:1.4,稀有:1.5,传说:1.3（留空 = 该天气不额外加成）；窗口倍率越小拉线窗口越短、运气越高越容易出好鱼、逃脱倍率越大越容易跑鱼。",
     "type": "text",
-    "default": "sunny|晴朗|☀️|30||1.0|0.0|1.0|风和日丽，什么都有可能上钩\ncloudy|多云|⛅|24||1.05|0.02|0.95|天光柔和，鱼口不错\nrain|下雨|🌧️|16|少见:1.4,稀有:1.5,传说:1.3|0.9|0.04|1.0|雨天鱼更活跃，少见以上的鱼变多\nfog|起雾|🌫️|12|稀有:1.6,传说:1.8,神话:1.5|0.85|0.03|1.1|雾里看不清浮漂，但大鱼敢靠岸\nmoon|月夜|🌙|10|传说:1.7,神话:2.0|0.92|0.06|1.05|月华之下，传说与神话之鱼会浮上来\nwind|大风|💨|8|少见:1.3,稀有:1.4|0.75|0.02|1.25|风大浪急，拉线窗口更短、更容易跑鱼"
+    "default": "sunny|晴朗|☀️|30||1.0|0.0|1.0|水面平得像镜子，什么都可能来咬\ncloudy|多云|⛅|24||1.05|0.02|0.95|光柔和，鱼口顺，拉线也从容些\nrain|下雨|🌧️|16|少见:1.4,稀有:1.5,传说:1.3|0.9|0.04|1.0|雨点一落鱼就活泛，少见以上的鱼变多\nfog|起雾|🌫️|12|稀有:1.6,传说:1.8,神话:1.5|0.85|0.03|1.1|十步外看不清漂，可大鱼敢贴着岸走\nmoon|月夜|🌙|10|传说:1.7,神话:2.0|0.92|0.06|1.05|月华压着水面，传说与神话的鱼会浮上来\nwind|大风|💨|8|少见:1.3,稀有:1.4|0.75|0.02|1.25|浪一层压一层，拉线的空当短，也更容易跑鱼"
   },
   "easter_egg_defs": {
     "invisible": true,
     "description": "上鱼后的彩蛋定义。每行：id|权重|文案|效果；效果写成 gold=12 / luck=0.08 / note=1（给漂流瓶纸条）/ heal_bait=1（返还鱼饵），分号分隔多个。",
     "type": "text",
-    "default": "coin_in_fish|22|🪙 鱼肚子里居然有一枚硬币！|gold=12\nold_map|16|🗺️ 鱼鳞上沾着一张湿透的旧地图碎片……|note=1\nlucky_scale|18|✨ 摘下一片闪着光的鱼鳞，手感很吉利。|luck=0.08\nfriend|14|🐟 它在你手里安静待了一会儿才松开，像是认识你。|luck=0.05\nbait_back|12|🪱 收线时鱼饵还好好地挂在钩上。|heal_bait=1\npearl_in_mouth|10|🦪 鱼嘴里含着一颗小珍珠！|gold=35\nlost_ring|5|💍 鱼线上缠着一枚旧戒指，不知道是谁的。|gold=80"
+    "default": "coin_in_fish|22|🪙 鱼肚子里滚出一枚硬币，还带着体温。|gold=12\nold_map|16|🗺️ 鱼鳞上粘着一角湿透的纸，画着几条线。|note=1\nlucky_scale|18|✨ 一片鳞在手里亮了一下，你把它塞进口袋。|luck=0.08\nfriend|14|🐟 它在你手心躺了一会儿才松开尾巴，像认得你。|luck=0.05\nbait_back|12|🪱 收线一看，饵还牢牢挂在钩上，一点没动。|heal_bait=1\npearl_in_mouth|10|🦪 它嘴里含着一颗小珍珠，吐在你掌心上。|gold=35\nlost_ring|5|💍 线上缠着一枚旧戒指，内圈刻着两个字母。|gold=80"
   },
   "button_defs": {
     "invisible": true,
