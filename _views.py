@@ -36,6 +36,17 @@ class ViewsMixin:
         rod = self._rod(player)
         return f"{rod.get('emoji', '')}{rod.get('name', '鱼竿')}"
 
+    def _title_label(self, player: dict[str, Any]) -> str:
+        """玩家当前戴的称号（v1.18.17，没戴返回空串）。
+
+        称号纯炫耀、不加任何属性，所以展示处（档案 / 排行榜 / 称号列表）直接用这个。
+        """
+        tid = str(player.get("title") or "")
+        title = (getattr(self, "title_by_id", None) or {}).get(tid)
+        if not title:
+            return ""
+        return f"{title.get('emoji', '')}{title.get('name', '')}"
+
     def _location_label(self, player: dict[str, Any]) -> str:
         loc = self._location(player)
         return f"{loc.get('emoji', '')}{loc.get('name', '钓点')}"
@@ -79,7 +90,7 @@ class ViewsMixin:
         return list(BUTTONS.get(scene) or [])
 
     def _scene_source(self, scene: str) -> str:
-        """该场景按钮的来源：``config`` / ``inherit`` / ``default`` / ``none`` / ``off``。
+        """该场景按钮的来源：``config`` / ``inherit`` / ``default`` / ``group`` / ``none`` / ``off``。
 
         编辑器页面用它显示「这组按钮是哪来的」，排查「为什么这里没按钮」很有用。
         """
@@ -92,10 +103,16 @@ class ViewsMixin:
             return "inherit"
         if _BUILTIN_BUTTONS.get(scene):
             return "default"
+        base = SCENE_BUTTON_BASE.get(scene) or ""
+        if base and (BUTTONS.get(base) or _BUILTIN_BUTTONS.get(base)):
+            return "group"
         return "none"
 
     def _scene_items(self, scene: str) -> list[tuple[str, str, int]]:
-        """取某场景生效的按钮（元组形态）：自己配的 > 继承父场景 > 内置默认。
+        """取某场景生效的按钮（元组形态）。
+
+        优先级（v1.18.17 定稿）：自己配的 > 显式父场景 > **自己的出厂按钮** >
+        同组基础场景（cast.miss_none → cast 那一组）> 空。
 
         ``button_empty_scenes`` 里列出的场景**直接返回空**：站长明确说不要按钮时，
         连「继承父场景」也要断掉（否则删了一个子场景的按钮，父场景的又会冒出来）。
@@ -109,7 +126,12 @@ class ViewsMixin:
             if parent:
                 items = BUTTONS.get(parent) or _BUILTIN_BUTTONS.get(parent) or []
         if not items:
+            # 自己的出厂按钮优先于「同组兜底」：bag.empty 有自己的按钮就别用 bag 的
             items = _BUILTIN_BUTTONS.get(scene) or []
+        if not items:
+            base = SCENE_BUTTON_BASE.get(scene) or ""
+            if base:
+                items = BUTTONS.get(base) or _BUILTIN_BUTTONS.get(base) or []
         return list(items)
 
     def _scene_rows(self, scene: str) -> list[list[dict[str, Any]]]:
@@ -514,6 +536,15 @@ class ViewsMixin:
             )
         if expired:
             lines.append(f"　（清理了 {expired} 个已失效的装饰）")
+        # 香火供奉（v1.18.17 的后期金币回收口）：生效中就把剩余时间写出来
+        offering_until = _safe_int(player.get("offering_ts"), 0, 0)
+        if offering_until > now_ts:
+            left_h = (offering_until - now_ts) / 3600.0
+            lines.append(
+                f"🕯️ 香火供奉中　挂机 +{_offering_bonus(player, self.cfg, now_ts):.0%}"
+                f"　手气 +{_offering_luck(player, self.cfg, now_ts):.2f}"
+                f"　剩 {left_h:.1f} 小时"
+            )
         # 收益提示（与「/钓鱼 领」的结算口径完全一致：同一份 _pond_income）
         est = int(_pond_income(player, self.cfg, now_ts)["income"])
         if est > 0:
@@ -873,15 +904,16 @@ class ViewsMixin:
                 "背包与买卖",
                 [
                     "　/钓鱼 背包　　　　 看背包（带序号和价格）",
-                    "　/钓鱼 卖 1 2　　　 卖掉第 1、2 条（也能 卖 鲤鱼 / 卖 全部）",
+                    "　/钓鱼 卖 1 2 3…　 卖掉这些序号（不限个数，也能 卖 鲤鱼 / 卖 全部）",
                     "　/钓鱼 卖光光　　　 一次清空（锁定的会留着）",
                     "　/钓鱼 锁定 1　　　 锁定不想卖的鱼（/钓鱼 解锁 1 取消）",
-                    "　/钓鱼 鱼竿　　　　 鱼竿店（买竿 / 换竿）",
+                    "　/钓鱼 鱼竿　　　　 鱼竿店（买竿 / 换竿；装备 不带名字 = 换最好的）",
                     "　/钓鱼 道具　　　　 道具店（饲料 / 育灵水 / 洗髓丹…）",
                     "　/钓鱼 鱼饵　　　　 鱼饵店（面包屑 / 蚯蚓 / 红虫…）",
                     "　/钓鱼 买 蚯蚓 20　 懒得记店名就用它（自动认）",
                     "　/钓鱼 装备 星辉竿　换鱼竿（/钓鱼 鱼竿 看全部）",
                     "　/钓鱼 换饵 蚯蚓　　换当前鱼饵（/钓鱼 换饵 空钩 = 不挂饵）",
+                    "　/钓鱼 自动 玉佩　　饵/手气道具用完自动买（/钓鱼 自动 看设置）",
                     "　/钓鱼 扩建背包　　 背包扩容",
                     f"　背包上限 {base_cap} 条起，不能无限囤货",
                 ],
@@ -891,17 +923,31 @@ class ViewsMixin:
                 [
                     "　/钓鱼 签到　　　　 每天领一笔金币",
                     "　/钓鱼 今日　　　　 今日天气 + 鱼市行情",
-                    "　/钓鱼 订单　　　　 订单（按当前钓点刷新，比卖店赚一倍）",
+                    "　/钓鱼 订单　　　　 订单（按当前钓点刷新，价随你的收入涨）",
                     "　/钓鱼 交 1 2　　　 交单（交过的不再收）",
                     "　— 鱼缸（挂机收益）—",
                     "　/钓鱼 水族馆　　　 看鱼缸",
-                    "　/钓鱼 放 1 3　　　 把背包第 1、3 条放进缸",
-                    "　/钓鱼 取 1　　　　 取回来",
+                    "　/钓鱼 放 1 3 5…　 把背包这些序号放进缸（不限个数，放 全部 也行）",
+                    "　/钓鱼 取 1　　　　 取回来（取 全部 也行）",
                     "　/钓鱼 领　　　　　 领挂机收益（鱼在缸里待得越久越多）",
                     "　/钓鱼 喂 高级饲料 1　投喂：涨三维、直接涨价",
                     "　/钓鱼 洗 2　　　　 洗髓丹：重掷第 2 条的个体品质（极小概率洗出神品）",
                     "　/钓鱼 用 珊瑚造景　 摆装饰：72 小时内挂机产出 +20%",
-                    "　/钓鱼 水族馆 扩建　 花金币扩容鱼缸",
+                    "　/钓鱼 水族馆 扩建　 花金币扩容鱼缸（越往后越贵、加得越多）",
+                    "　/钓鱼 供奉　　　　 香火：花一笔大钱换 24 小时加成（后期钱多就点它）",
+                ],
+            ),
+            (
+                "称号与收集",
+                [
+                    "　/钓鱼 称号　　　　 称号清单（纯炫耀、不加属性，钱多就买一个）",
+                    "　/钓鱼 称号 买 老钓手　买下并戴上",
+                    "　/钓鱼 图鉴　　　　 各钓点的收集进度",
+                    "　/钓鱼 图鉴 详　　　 完整鱼名单（可翻页）",
+                    "　/钓鱼 查 <名字>　　 鱼/钓点/鱼饵/鱼竿/道具/杂物/变异/天气/成就 都能查",
+                    "　/钓鱼 杂物　　　　 杂物与纸条收集",
+                    "　/钓鱼 排行　　　　 群内排行榜（称号会显示在这里）",
+                    "　/钓鱼 档案　　　　 等级、金币、统计、称号",
                 ],
             ),
         ]
@@ -960,15 +1006,15 @@ class ViewsMixin:
         pages.extend(
             [
                 (
-                    "钓点与收集",
+                    "钓点与图鉴",
                     [
+                        "　/钓鱼 钓点　　　　　 全部钓点 + 解锁条件（含你还差什么）",
+                        "　/钓鱼 去 <钓点名>　 前往（写简称也行）",
+                        "　/钓鱼 解锁 <钓点名> 满足条件后一键解锁并前往",
                         "　/钓鱼 图鉴　　　　　 各钓点的收集进度",
                         "　/钓鱼 图鉴 详　　　 完整鱼名单（可翻页）",
                         "　/钓鱼 查 <鱼名>　　 这鱼在哪些钓点、要不要拉线",
                         "　/钓鱼 查 <钓点名>　 这个钓点有哪些鱼",
-                        "　/钓鱼 杂物　　　　　 杂物与纸条收集",
-                        "　/钓鱼 排行　　　　　 群内排行榜（金币 / 图鉴 / 最贵）",
-                        "　/钓鱼 档案　　　　　 等级、金币、统计",
                     ],
                 ),
                 (
@@ -980,6 +1026,7 @@ class ViewsMixin:
                         "　🎯完美 > 👍良好 > 😅偏差，超时鱼会跑",
                         f"　图鉴 {len(FISH_POOL)} 种　成就 {len(ACHIEVEMENTS)} 个",
                         "　累计钓获 1/10/25/50/100… 有里程碑",
+                        "　小鱼缸养久了还有挂机收益，见上一页",
                     ],
                 ),
             ]

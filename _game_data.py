@@ -1835,39 +1835,320 @@ lost_ring|5|💍 线上缠着一枚旧戒指，内圈刻着两个字母。|gold=
 #   点击后发送必须是本插件认识的指令（/钓鱼 …），否则这一行会被跳过
 # =============================================================================
 
-# 按钮排布原则（v1.18.0 重排）：**每一屏只放「下一步最可能做的事」**，
+# 按钮排布原则（v1.18.17 大扩充）：**每一屏只放「下一步最可能做的事」**，
 # 文案短到一眼能看完，指令一律 /钓鱼 开头（短写法优先）。
 # 每行默认 4 个（见 _calc.BUILTIN_BUTTONS_PER_ROW），所以 4 个刚好一行不折行。
+#
+# 站长要求「所有需要的地方都加上玩家可能去点的按钮」，于是：
+#   * 每个分组都有一个**基础场景**（cast / bag / shop.list / aquarium.view …），
+#     同组其它场景没单独配按钮时自动继承它（见 _calc.SCENE_BUTTON_BASE）；
+#   * 下面再给「下一步动作不一样」的场景单独写行（例如空竿该去换饵、
+#     背包满了该去卖/放、没金币该去签到）。
 BUTTON_DEFS_DEFAULT: str = """\
 cast|再来一竿|/钓鱼|default
 cast|看背包|/钓鱼 背包|default
-cast|水族馆|/钓鱼 水族馆|default
+cast|换饵|/钓鱼 换饵|default
 cast|卖光光|/钓鱼 卖光光|default
-pull|拉线！|/钓鱼 拉|primary
+cast.hit|再来一竿|/钓鱼|default
+cast.hit|看背包|/钓鱼 背包|default
+cast.hit|放缸|/钓鱼 放 全部|default
+cast.hit|卖光光|/钓鱼 卖光光|default
+cast.no_stamina|体力|/钓鱼 体力|default
+cast.no_stamina|喝姜汤|/钓鱼 用 姜汤|default
+cast.no_stamina|看背包|/钓鱼 背包|default
+cast.no_stamina|帮助|/钓鱼 帮助|default
+cast.no_gold|签到|/钓鱼 签到|default
+cast.no_gold|卖光光|/钓鱼 卖光光|default
+cast.no_gold|看背包|/钓鱼 背包|default
+cast.bag_full|卖光光|/钓鱼 卖光光|primary
+cast.bag_full|放缸里|/钓鱼 放 全部|default
+cast.bag_full|扩建背包|/钓鱼 扩建背包|default
+cast.bag_full|看背包|/钓鱼 背包|default
+cast.multi_summary|再来一竿|/钓鱼|default
+cast.multi_summary|看背包|/钓鱼 背包|default
+cast.multi_summary|水族馆|/钓鱼 水族馆|default
+cast.multi_summary|卖光光|/钓鱼 卖光光|default
+cast.achievement|再来一竿|/钓鱼|default
+cast.achievement|我的档案|/钓鱼 档案|default
+cast.milestone|再来一竿|/钓鱼|default
+cast.milestone|我的档案|/钓鱼 档案|default
+pull|再来一竿|/钓鱼|default
+pull|换饵|/钓鱼 换饵|default
+pull|看背包|/钓鱼 背包|default
+pull|帮助|/钓鱼 帮助|default
+pull.hook|拉线！|/钓鱼 拉|primary
+pull.timeout|再来一竿|/钓鱼|primary
+pull.timeout|换饵|/钓鱼 换饵|default
+pull.timeout|看背包|/钓鱼 背包|default
+pull.escape|再来一竿|/钓鱼|primary
+pull.escape|换饵|/钓鱼 换饵|default
+pull.escape|看背包|/钓鱼 背包|default
+pull.none|下竿|/钓鱼|primary
+pull.none|看背包|/钓鱼 背包|default
+pull.none|帮助|/钓鱼 帮助|default
+bag|卖光光|/钓鱼 卖光光|primary
+bag|放缸里|/钓鱼 放 全部|default
+bag|扩建背包|/钓鱼 扩建背包|default
 bag|再来一竿|/钓鱼|default
-bag|水族馆|/钓鱼 水族馆|default
-bag|卖光光|/钓鱼 卖光光|default
-bag|帮助|/钓鱼 帮助|default
+bag.empty|下竿|/钓鱼|primary
+bag.empty|鱼饵店|/钓鱼 鱼饵|default
+bag.empty|图鉴|/钓鱼 图鉴|default
+bag.empty|帮助|/钓鱼 帮助|default
+sell.result|再来一竿|/钓鱼|default
+sell.result|看背包|/钓鱼 背包|default
+sell.result|水族馆|/钓鱼 水族馆|default
+sell.result|卖光光|/钓鱼 卖光光|default
+shop.list|鱼竿店|/钓鱼 鱼竿|default
+shop.list|道具店|/钓鱼 道具|default
+shop.list|鱼饵店|/钓鱼 鱼饵|default
+shop.list|看背包|/钓鱼 背包|default
+shop.no_gold_bait|签到|/钓鱼 签到|default
+shop.no_gold_item|签到|/钓鱼 签到|default
+shop.not_found|鱼竿店|/钓鱼 鱼竿|default
+shop.not_found|道具店|/钓鱼 道具|default
+shop.not_found|鱼饵店|/钓鱼 鱼饵|default
+shop.locked|我的档案|/钓鱼 档案|default
+shop.locked|再来一竿|/钓鱼|default
+backpack.upgraded|看背包|/钓鱼 背包|default
+backpack.upgraded|水族馆|/钓鱼 水族馆|default
+backpack.upgraded|再来一竿|/钓鱼|default
+backpack.no_gold|签到|/钓鱼 签到|default
+backpack.no_gold|卖光光|/钓鱼 卖光光|default
+rod.list|自动装备|/钓鱼 装备|primary
+rod.list|鱼饵店|/钓鱼 鱼饵|default
+rod.list|看背包|/钓鱼 背包|default
+rod.list|再来一竿|/钓鱼|default
+rod.no_gold|签到|/钓鱼 签到|default
+rod.no_gold|卖光光|/钓鱼 卖光光|default
+rod.level_low|我的档案|/钓鱼 档案|default
+rod.level_low|再来一竿|/钓鱼|default
+rod.not_owned|鱼竿店|/钓鱼 鱼竿|default
+rod.not_owned|看背包|/钓鱼 背包|default
+bait.equipped|再来一竿|/钓鱼|default
+bait.equipped|看背包|/钓鱼 背包|default
+bait.equipped|水族馆|/钓鱼 水族馆|default
+bait.empty|鱼饵店|/钓鱼 鱼饵|primary
+bait.empty|看背包|/钓鱼 背包|default
+bait.empty|帮助|/钓鱼 帮助|default
+bait.not_owned|鱼饵店|/钓鱼 鱼饵|primary
+bait.not_owned|我的档案|/钓鱼 档案|default
+bait.locked|我的档案|/钓鱼 档案|default
+bait.locked|再来一竿|/钓鱼|default
+bait.not_found|鱼饵店|/钓鱼 鱼饵|default
+bait.not_found|帮助|/钓鱼 帮助|default
 location|再来一竿|/钓鱼|default
 location|查图鉴|/钓鱼 图鉴|default
 location|水族馆|/钓鱼 水族馆|default
 location|看天气|/钓鱼 今日|default
-aquarium.view|再来一竿|/钓鱼|default
-aquarium.view|领收益|/钓鱼 领|primary
-aquarium.view|看背包|/钓鱼 背包|default
-aquarium.view|卖光光|/钓鱼 卖光光|default
-orders.list|再来一竿|/钓鱼|default
+location.unlock_need|查图鉴|/钓鱼 图鉴|default
+location.unlock_need|钓点|/钓鱼 钓点|default
+location.unlock_need|签到|/钓鱼 签到|default
+location.unlock_need|看背包|/钓鱼 背包|default
+location.moved|再来一竿|/钓鱼|primary
+location.moved|看订单|/钓鱼 订单|default
+location.moved|查图鉴|/钓鱼 图鉴|default
+location.moved|水族馆|/钓鱼 水族馆|default
+location.not_found|钓点|/钓鱼 钓点|default
+location.not_found|再来一竿|/钓鱼|default
 orders.list|看背包|/钓鱼 背包|default
+orders.list|再来一竿|/钓鱼|default
 orders.list|卖光光|/钓鱼 卖光光|default
+orders.list|帮助|/钓鱼 帮助|default
+orders.submit_result|再来一竿|/钓鱼|default
+orders.submit_result|看订单|/钓鱼 订单|default
+orders.submit_result|看背包|/钓鱼 背包|default
+orders.locked|我的档案|/钓鱼 档案|default
+orders.locked|再来一竿|/钓鱼|default
+aquarium.view|领收益|/钓鱼 领|primary
+aquarium.view|放全部|/钓鱼 放 全部|default
+aquarium.view|取全部|/钓鱼 取 全部|default
+aquarium.view|扩建|/钓鱼 水族馆 扩建|default
+aquarium.full|扩建|/钓鱼 水族馆 扩建|primary
+aquarium.full|取全部|/钓鱼 取 全部|default
+aquarium.full|卖光光|/钓鱼 卖光光|default
+aquarium.full|看背包|/钓鱼 背包|default
+aquarium.put_done|领收益|/钓鱼 领|primary
+aquarium.put_done|放全部|/钓鱼 放 全部|default
+aquarium.put_done|看看缸|/钓鱼 水族馆|default
+aquarium.put_done|再来一竿|/钓鱼|default
+aquarium.take_done|卖光光|/钓鱼 卖光光|primary
+aquarium.take_done|看背包|/钓鱼 背包|default
+aquarium.take_done|放全部|/钓鱼 放 全部|default
+aquarium.take_done|再来一竿|/钓鱼|default
+aquarium.income|再来一竿|/钓鱼|default
+aquarium.income|放全部|/钓鱼 放 全部|default
+aquarium.income|看看缸|/钓鱼 水族馆|default
+aquarium.income|看背包|/钓鱼 背包|default
+aquarium.income_wait|看看缸|/钓鱼 水族馆|default
+aquarium.income_wait|再来一竿|/钓鱼|default
+aquarium.income_empty|放全部|/钓鱼 放 全部|primary
+aquarium.income_empty|看背包|/钓鱼 背包|default
+aquarium.max|看看缸|/钓鱼 水族馆|default
+aquarium.max|再来一竿|/钓鱼|default
+aquarium.no_gold|签到|/钓鱼 签到|default
+aquarium.no_gold|卖光光|/钓鱼 卖光光|default
+aquarium.upgraded|放全部|/钓鱼 放 全部|primary
+aquarium.upgraded|看看缸|/钓鱼 水族馆|default
+aquarium.upgraded|领收益|/钓鱼 领|default
+aquarium.upgraded|再来一竿|/钓鱼|default
+aquarium.sell_done|再来一竿|/钓鱼|default
+aquarium.sell_done|看看缸|/钓鱼 水族馆|default
+aquarium.sell_done|看背包|/钓鱼 背包|default
+aquarium.put_usage|看背包|/钓鱼 背包|default
+aquarium.put_usage|再来一竿|/钓鱼|default
+aquarium.take_usage|看看缸|/钓鱼 水族馆|default
+aquarium.take_usage|看背包|/钓鱼 背包|default
+aquarium.feed_usage|道具店|/钓鱼 道具|default
+aquarium.feed_usage|看看缸|/钓鱼 水族馆|default
+aquarium.sell_usage|看看缸|/钓鱼 水族馆|default
+aquarium.sell_usage|看背包|/钓鱼 背包|default
+aquarium.bad_slot|看看缸|/钓鱼 水族馆|default
+aquarium.bad_slot|再来一竿|/钓鱼|default
+aquarium.usage|再来一竿|/钓鱼|default
+aquarium.usage|看看缸|/钓鱼 水族馆|default
+aquarium.usage|帮助|/钓鱼 帮助|default
 item.used|再来一竿|/钓鱼|default
 item.used|看背包|/钓鱼 背包|default
 item.used|水族馆|/钓鱼 水族馆|default
-stamina.view|再来一竿|/钓鱼|default
+item.used|道具店|/钓鱼 道具|default
+item.feed_done|再来一竿|/钓鱼|default
+item.feed_done|水族馆|/钓鱼 水族馆|default
+item.feed_done|道具店|/钓鱼 道具|default
+item.feed_done|看背包|/钓鱼 背包|default
+item.reroll_done|水族馆|/钓鱼 水族馆|default
+item.reroll_done|道具店|/钓鱼 道具|default
+item.reroll_done|再来一竿|/钓鱼|default
+item.deco_used|看看缸|/钓鱼 水族馆|default
+item.deco_used|领收益|/钓鱼 领|default
+item.deco_used|道具店|/钓鱼 道具|default
+item.feed_no_fish|水族馆|/钓鱼 水族馆|default
+item.feed_no_fish|放缸里|/钓鱼 放 全部|default
+item.feed_no_fish|看背包|/钓鱼 背包|default
+item.reroll_no_fish|水族馆|/钓鱼 水族馆|default
+item.reroll_no_fish|看背包|/钓鱼 背包|default
+item.breed_no_fish|水族馆|/钓鱼 水族馆|default
+item.breed_no_fish|放缸里|/钓鱼 放 全部|default
+item.usage|道具店|/钓鱼 道具|default
+item.usage|看背包|/钓鱼 背包|default
+item.usage|帮助|/钓鱼 帮助|default
+item.empty|道具店|/钓鱼 道具|primary
+item.empty|再来一竿|/钓鱼|default
+item.missing|道具店|/钓鱼 道具|default
+item.missing|看背包|/钓鱼 背包|default
+item.feed_full|水族馆|/钓鱼 水族馆|default
+item.feed_full|道具店|/钓鱼 道具|default
+item.deco_full|看看缸|/钓鱼 水族馆|default
+item.deco_full|再来一竿|/钓鱼|default
+item.deco_disabled|看看缸|/钓鱼 水族馆|default
+item.deco_disabled|帮助|/钓鱼 帮助|default
+item.breed_failed|水族馆|/钓鱼 水族馆|default
+item.breed_failed|道具店|/钓鱼 道具|default
+item.reroll_failed|水族馆|/钓鱼 水族馆|default
+item.reroll_failed|再来一竿|/钓鱼|default
+item.breed_done|水族馆|/钓鱼 水族馆|default
+item.breed_done|再来一竿|/钓鱼|default
+collection.view|再来一竿|/钓鱼|default
+collection.view|钓点|/钓鱼 钓点|default
+collection.view|今日|/钓鱼 今日|default
+collection.view|看背包|/钓鱼 背包|default
+collection.detail|再来一竿|/钓鱼|default
+collection.detail|图鉴|/钓鱼 图鉴|default
+collection.detail|钓点|/钓鱼 钓点|default
+collection.location|去钓点|/钓鱼 钓点|primary
+collection.location|再来一竿|/钓鱼|default
+collection.location|图鉴|/钓鱼 图鉴|default
+fishinfo.detail|再来一竿|/钓鱼|default
+fishinfo.detail|钓点|/钓鱼 钓点|default
+fishinfo.detail|图鉴|/钓鱼 图鉴|default
+fishinfo.detail|看背包|/钓鱼 背包|default
+fishinfo.location_detail|再来一竿|/钓鱼|default
+fishinfo.location_detail|图鉴|/钓鱼 图鉴|default
+fishinfo.location_detail|钓点|/钓鱼 钓点|default
+fishinfo.multi_match|再来一竿|/钓鱼|default
+fishinfo.multi_match|图鉴|/钓鱼 图鉴|default
+fishinfo.multi_match|帮助|/钓鱼 帮助|default
+fishinfo.not_found|图鉴|/钓鱼 图鉴|default
+fishinfo.not_found|帮助|/钓鱼 帮助|default
+fishinfo.not_found|再来一竿|/钓鱼|default
+collectibles.view|再来一竿|/钓鱼|default
+collectibles.view|看背包|/钓鱼 背包|default
+collectibles.view|帮助|/钓鱼 帮助|default
+profile.view|排行榜|/钓鱼 排行|default
+profile.view|称号|/钓鱼 称号|default
+profile.view|再来一竿|/钓鱼|default
+profile.view|看背包|/钓鱼 背包|default
+profile.renamed|我的档案|/钓鱼 档案|default
+profile.renamed|再来一竿|/钓鱼|default
+stamina.view|再来一竿|/钓鱼|primary
+stamina.view|喝姜汤|/钓鱼 用 姜汤|default
 stamina.view|看背包|/钓鱼 背包|default
+stamina.view|帮助|/钓鱼 帮助|default
+sign.done|再来一竿|/钓鱼|default
+sign.done|看背包|/钓鱼 背包|default
+sign.done|今日|/钓鱼 今日|default
+sign.result|再来一竿|/钓鱼|default
+sign.result|看背包|/钓鱼 背包|default
+today.view|再来一竿|/钓鱼|default
+today.view|看订单|/钓鱼 订单|default
+today.view|钓点|/钓鱼 钓点|default
+today.view|看背包|/钓鱼 背包|default
+rank.view|我的档案|/钓鱼 档案|default
+rank.view|再来一竿|/钓鱼|default
+rank.view|看背包|/钓鱼 背包|default
+rank.empty|再来一竿|/钓鱼|default
+rank.empty|看背包|/钓鱼 背包|default
+rank.no_data|再来一竿|/钓鱼|default
+rank.no_data|看背包|/钓鱼 背包|default
 help.page|开始钓鱼|/钓鱼|primary
 help.page|看背包|/钓鱼 背包|default
 help.page|水族馆|/钓鱼 水族馆|default
 help.page|我的档案|/钓鱼 档案|default
+help.unknown|帮助|/钓鱼 帮助 1|primary
+help.unknown|再来一竿|/钓鱼|default
+auto.view|鱼饵店|/钓鱼 鱼饵|default
+auto.view|道具店|/钓鱼 道具|default
+auto.view|看背包|/钓鱼 背包|default
+auto.view|再来一竿|/钓鱼|default
+auto.on|再来一竿|/钓鱼|primary
+auto.on|看背包|/钓鱼 背包|default
+auto.on|鱼饵店|/钓鱼 鱼饵|default
+auto.off|再来一竿|/钓鱼|default
+auto.off|看背包|/钓鱼 背包|default
+auto.bad|道具店|/钓鱼 道具|default
+auto.bad|再来一竿|/钓鱼|default
+title.list|排行榜|/钓鱼 排行|default
+title.list|我的档案|/钓鱼 档案|default
+title.list|再来一竿|/钓鱼|default
+title.list|水族馆|/钓鱼 水族馆|default
+title.bought|我的档案|/钓鱼 档案|default
+title.bought|称号|/钓鱼 称号|default
+title.bought|再来一竿|/钓鱼|default
+title.equipped|我的档案|/钓鱼 档案|default
+title.equipped|排行榜|/钓鱼 排行|default
+title.equipped|再来一竿|/钓鱼|default
+title.owned|称号|/钓鱼 称号|default
+title.owned|我的档案|/钓鱼 档案|default
+title.not_owned|称号|/钓鱼 称号|primary
+title.not_owned|再来一竿|/钓鱼|default
+title.not_found|称号|/钓鱼 称号|default
+title.not_found|再来一竿|/钓鱼|default
+title.no_gold|签到|/钓鱼 签到|default
+title.no_gold|卖光光|/钓鱼 卖光光|default
+title.disabled|再来一竿|/钓鱼|default
+title.disabled|帮助|/钓鱼 帮助|default
+offering.done|领收益|/钓鱼 领|primary
+offering.done|看看缸|/钓鱼 水族馆|default
+offering.done|再来一竿|/钓鱼|default
+offering.no_gold|卖光光|/钓鱼 卖光光|default
+offering.no_gold|看背包|/钓鱼 背包|default
+system.error|帮助|/钓鱼 帮助|default
+system.error|再来一竿|/钓鱼|default
+broadcast.catch|再来一竿|/钓鱼|default
+broadcast.catch|我的档案|/钓鱼 档案|default
+broadcast.catch|看背包|/钓鱼 背包|default
+story.result|继续钓|/钓鱼|primary
+story.result|看背包|/钓鱼 背包|default
+story.result|我的档案|/钓鱼 档案|default
 story|{label}|/钓鱼 事件 {n}|default"""
 
 

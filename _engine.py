@@ -44,6 +44,135 @@ class EngineMixin:
         except Exception as e:
             logger.debug(f"更新最佳渔获记录失败：{e}")
 
+    def _auto_supply(
+        self, player: dict[str, Any], *, times: int = 1, wanted: str = ""
+    ) -> tuple[str, list[str]]:
+        """下竿前的**自动补给**（v1.18.17，站长要的「用完了自动花钱补 + 自动装备」）。
+
+        干三件事，全部**只花玩家自己的金币**，钱不够就什么都不买（绝不透支）：
+
+        1. **自动挂饵**：玩家从没选过饵（``equipped_bait`` 为空）而背包里有饵时，
+           挂上手气最高的那款 —— 自己选过空钩的人（``"none"``）不会被偷偷换掉；
+        2. **自动补饵**：当前饵不够这一竿（连钓就是不够 N 竿）时按单价补齐，
+           差多少买多少（买得起几个买几个）；
+        3. **自动补手气道具**：玩家用 ``/钓鱼 自动 <道具名>`` 指定过的话，
+           buff 用光时自动买 1 个并**立刻用上**（不指定就绝不替他买，
+           免得一觉醒来被自动买掉一个 1.2 万的玉髓灯）。
+
+        返回 ``(这一竿实际用的饵 id, 要写进结果里的说明行)``。
+        """
+        cfg = self.cfg
+        notes: list[str] = []
+        gold = _safe_int(player.get("gold"), 0, 0)
+        stock_map = player.setdefault("baits", {})
+
+        def stock_of(bait_id: str) -> int:
+            return _safe_int(stock_map.get(bait_id), 0, 0)
+
+        # ---- 1. 自动挂饵（只补「从没选过」的人，不覆盖玩家的选择）----
+        # 玩家这一竿**点名**了饵（`/钓鱼 蚯蚓`）时不做自动挂饵：他的意图很明确。
+        equipped = player.get("equipped_bait")
+        if not isinstance(equipped, str):
+            equipped = ""
+        if not equipped and not wanted and _cfg_bool(cfg, "auto_equip_bait", True):
+            owned = [(bid, stock_of(bid)) for bid in self._bait_list() if bid != "none"]
+            owned = [(bid, n) for bid, n in owned if n > 0]
+            if owned:
+                owned.sort(
+                    key=lambda kv: -_safe_number(self.baits[kv[0]].get("luck"), 0.0)
+                )
+                equipped = owned[0][0]
+                player["equipped_bait"] = equipped
+                notes.append(
+                    f"🎣 自动挂上「{self.baits[equipped]['name']}」"
+                    f"（还剩 {stock_of(equipped)} 个；不想用就 /钓鱼 换饵 空钩）"
+                )
+
+        # ---- 2. 这一竿用哪种饵 ----
+        bait_id = "none"
+        if wanted:
+            matched = self._find_bait(wanted)
+            if matched is not None:
+                bait_id = matched
+        elif equipped and equipped in self.baits and equipped != "none":
+            bait_id = equipped
+
+        # ---- 3. 自动补饵：差多少买多少（连钓按 N 竿算）----
+        if bait_id != "none":
+            need = max(1, times)
+            have = stock_of(bait_id)
+            want_more = need - have
+            if want_more > 0 and _cfg_bool(cfg, "auto_supply_bait", True):
+                price = self._bait_cost(bait_id)
+                name = self.baits[bait_id]["name"]
+                if price <= 0:
+                    want_more = 0  # 免费饵不需要补
+                buy = min(want_more, gold // price) if price > 0 else 0
+                if buy > 0:
+                    cost = buy * price
+                    gold -= cost
+                    player["gold"] = gold
+                    stock_map[bait_id] = have + buy
+                    notes.append(
+                        f"🛒 自动补货 {buy} 个「{name}」（-{_fmt_gold(cost)} 金，"
+                        f"余额 {_fmt_gold(gold)}）"
+                    )
+                elif want_more > 0:
+                    notes.append(
+                        f"💸 「{name}」不够了，金币也不够自动补货"
+                        f"（缺 {want_more} 个，需 {_fmt_gold(want_more * price)}）"
+                    )
+            if stock_of(bait_id) <= 0:
+                # 补不到（没开自动补给 / 买不起）→ 退回空钩，并说清楚怎么固定
+                bait_id = "none"
+                if not notes:
+                    notes.append(
+                        f"🎒 {self._bait_label(equipped or 'none')} 用完了，这一竿改用空钩"
+                        f"（/钓鱼 鱼饵 买 可以补货，或 /钓鱼 换饵 空钩 固定用空钩）"
+                    )
+
+        # ---- 4. 自动补 + 自动用手气道具（要玩家先指定用哪一件）----
+        auto_item = str(player.get("auto_buff_item") or "").strip()
+        if (
+            auto_item
+            and _cfg_bool(cfg, "auto_supply_buff", True)
+            and _safe_int(player.get("buff_casts_left"), 0, 0) <= 0
+        ):
+            item = self.items.get(auto_item)
+            effects = (item or {}).get("effects") or {}
+            if item and _safe_number(effects.get("buff_quality"), 0.0) > 0:
+                bag = player.setdefault("items", {})
+                have = _safe_int(bag.get(auto_item), 0, 0)
+                price = _safe_int(item.get("price"), 0, 0)
+                if have <= 0 and price > 0 and gold >= price:
+                    gold -= price
+                    player["gold"] = gold
+                    bag[auto_item] = 1
+                    have = 1
+                    notes.append(
+                        f"🛒 自动补货 1 个「{item['name']}」"
+                        f"（-{_fmt_gold(price)} 金，余额 {_fmt_gold(gold)}）"
+                    )
+                if have > 0:
+                    bag[auto_item] = have - 1
+                    player["buff_casts_left"] = max(
+                        1, _safe_int(cfg.get("buff_cast_count"), 20, 1)
+                    )
+                    player["buff_quality"] = _safe_number(
+                        effects.get("buff_quality"), 0.0
+                    )
+                    notes.append(
+                        f"🎐 自动用上「{item['name']}」"
+                        f"（手气 +{_safe_number(effects.get('buff_quality'), 0.0):.0%}，"
+                        f"{player['buff_casts_left']} 竿）"
+                    )
+                elif not notes or notes[-1].find("自动补货 1 个") < 0:
+                    notes.append(
+                        f"💸 「{item['name']}」用完了，金币不够自动补货"
+                        f"（需 {_fmt_gold(price)}）"
+                    )
+        return bait_id, notes
+
     async def _do_cast(self, event: AstrMessageEvent, user_id: str, bait_name: str):
         """执行一次抛竿（含互动玩法）。"""
         broadcast_catch: dict[str, Any] | None = None
@@ -78,7 +207,7 @@ class EngineMixin:
             if self._ensure_weather(player) or self._ensure_market(player):
                 await self._save_player(player)
 
-            # --- 选鱼饵 ---
+            # --- 选鱼饵（含自动挂饵 / 自动补货 / 自动用手气道具，见 _auto_supply）---
             bait_id = "none"
             bait_note = ""
             if bait_name:
@@ -90,35 +219,11 @@ class EngineMixin:
                         )):
                         yield _r
                     return
-                bait_id = matched
-                if bait_id != "none":
-                    owned = _safe_int((player.get("baits") or {}).get(bait_id), 0, 0)
-                    if owned <= 0:
-                        # 没货也不打断这一竿：直接用空钩，并说清楚怎么固定成空钩
-                        bait_id = "none"
-                        bait_note = (
-                            f"🎒 {self._bait_label(matched)} 用完了，这一竿改用空钩"
-                            f"（/钓鱼 鱼饵 买 {self.baits[matched]['name']} 补货，"
-                            f"或 /钓鱼 换饵 空钩 固定用空钩）"
-                        )
-            else:
-                equipped = player.get("equipped_bait", "none")
-                if (
-                    isinstance(equipped, str)
-                    and equipped in self.baits
-                    and equipped != "none"
-                ):
-                    if _safe_int((player.get("baits") or {}).get(equipped), 0, 0) > 0:
-                        bait_id = equipped
-                    else:
-                        # 用完就真的换掉：写进存档，别每竿都偷偷回退一次
-                        bait_id = "none"
-                        player["equipped_bait"] = "none"
-                        bait_note = (
-                            f"🎒 {self._bait_label(equipped)} 用完了，"
-                            f"已自动换回空钩（/钓鱼 鱼饵 买 {self.baits[equipped]['name']} "
-                            f"可补货）"
-                        )
+                bait_name = str(self.baits[matched]["name"])
+            bait_id, _supply_notes = self._auto_supply(
+                player, times=1, wanted=bait_name
+            )
+            bait_note = "\n".join(_supply_notes)
 
             # --- 体力（取代原来的冷却时间：每钓一次 1 点，攒着最多 stamina_max 点）---
             limited = _stamina_enabled(cfg)
@@ -222,7 +327,7 @@ class EngineMixin:
             # 手气 = 一次性储备 + 玉佩这类「持续 N 竿」的加成，两者**叠加**
             # （来源不同、寿命不同，见 _calc._effective_luck）；
             # 本次抛竿读一次，收尾时消耗（一次性清空 + 玉佩竿数 -1，见 _consume_luck）
-            luck = _effective_luck(player)
+            luck = _effective_luck(player, cfg)
             gear_luck = _safe_number(rod.get("luck_bonus"), 0.0)
             player["last_fish_time"] = int(now)
             await self._save_player(player)
@@ -397,29 +502,19 @@ class EngineMixin:
                         yield _r
                     return
 
-            # --- 鱼饵：用当前装备的那一种；空钩不消耗饵 ---
-            bait_id = "none"
-            equipped = player.get("equipped_bait", "none")
-            if (
-                isinstance(equipped, str)
-                and equipped in self.baits
-                and equipped != "none"
-            ):
-                owned = _safe_int((player.get("baits") or {}).get(equipped), 0, 0)
-                if owned <= 0:
-                    # 和单竿一样：没货就真的换回空钩，写进存档
-                    player["equipped_bait"] = "none"
-                elif owned < times:
+            # --- 鱼饵：当前装备的那一种（用完会自动补货 / 补不到就退回空钩）---
+            bait_id, _supply_notes = self._auto_supply(player, times=times)
+            if bait_id != "none":
+                owned = _safe_int((player.get("baits") or {}).get(bait_id), 0, 0)
+                if owned < times:
                     async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
-                            f"🎒 {self._bait_label(equipped)}只剩 {owned} 个，"
+                            f"🎒 {self._bait_label(bait_id)}只剩 {owned} 个，"
                             f"连钓 {times} 次要 {times} 个\n"
-                            f"　/钓鱼 鱼饵 买 {self.baits[equipped]['name']} 补货，"
+                            f"　/钓鱼 鱼饵 买 {self.baits[bait_id]['name']} 补货，"
                             f"或先 /钓鱼 {owned} 把这几个用掉"
                         )):
                         yield _r
                     return
-                else:
-                    bait_id = equipped
 
             # --- 钓费 / 背包容量 ---
             unit_cost = max(0, _safe_int(cfg["fish_cost"], 0, 0))
@@ -470,6 +565,8 @@ class EngineMixin:
             buff_before = _safe_int(player.get("buff_casts_left"), 0, 0)
 
             lines = [f"🎣 连钓 {planned} 次"]
+            # 自动补给说明（自动挂饵 / 自动补货 / 自动用手气道具，见 _auto_supply）
+            lines.extend(_supply_notes)
             if truncated:
                 lines.append(
                     f"⚠️ 背包只剩 {free} 个位置，本次只钓 {planned} 次"
@@ -484,7 +581,7 @@ class EngineMixin:
             for index in range(1, planned + 1):
                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
-                luck = _effective_luck(player)
+                luck = _effective_luck(player, cfg)
                 _consume_luck(player)
                 outcome, drop = self._roll_cast_outcome(
                     bait_id,

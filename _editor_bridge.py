@@ -95,6 +95,7 @@ CONTENT_TABLES: dict[str, type] = {
     "variant_defs": str,
     "weather_defs": str,
     "easter_egg_defs": str,
+    "title_defs": list,   # 称号表（v1.18.17 的后期金币回收口）
     "button_defs": str,   # 场景|文案|点击后发送|样式（回复里的按钮）
     "command_aliases": str,   # 规范子命令|别名,别名（命令别名）
     "custom_commands": str,   # 命令名|动作:内容（自定义命令）
@@ -492,6 +493,11 @@ class EditorApiMixin:
             parent = SCENE_PARENT.get(scene) or ""
             if parent:
                 items = _BUILTIN_BUTTONS.get(parent) or []
+        if not items:
+            # v1.18.17：整组兜底到「组内基础场景」（cast.miss_none → cast）
+            base = SCENE_BUTTON_BASE.get(scene) or ""
+            if base:
+                items = _BUILTIN_BUTTONS.get(base) or []
         return [[label, data, style] for label, data, style in items]
 
     def _editor_scene_entry(self, scene: str) -> dict[str, Any]:
@@ -507,6 +513,10 @@ class EditorApiMixin:
             samples = dict(text_lib.SAMPLES.get(scene) or {"原文": ""})
             dynamic = scene in set(text_lib.DYNAMIC)
         parent = SCENE_PARENT.get(scene) or ""
+        source = self._scene_source(scene)
+        if source == "group":
+            # 同组兜底：把「兜底场景」也写进 parent，页面就能显示「继承自 aquarium.view」
+            parent = SCENE_BUTTON_BASE.get(scene) or parent
         override = str(TEXT_OVERRIDES.get(scene) or "")
         preview = ""
         if text_lib is not None:
@@ -520,7 +530,7 @@ class EditorApiMixin:
             "parent": parent,
             "parent_label": parent,
             "group": SCENE_GROUP.get(scene) or "system",
-            "source": self._scene_source(scene),
+            "source": source,
             "per_row": scene_rows_per_row(scene),
             "default_buttons": self._editor_default_buttons(scene),
             "buttons": [

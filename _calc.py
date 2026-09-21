@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """数值计算与配置解析。
 
 这一层决定「鱼值多少钱、长多少属性、等级怎么算、配置怎么写坏都不崩」，
@@ -151,6 +151,8 @@ def _pond_income(
     rate = max(0.0, _safe_number(cfg.get("pond_income_per_hour"), 0.02))
     cap_coins = _safe_int(cfg.get("pond_income_cap_coins"), 5000, 0)
     bonus = 1.0 + _decoration_bonus(player, now=now)
+    # 香火供奉（v1.18.17）：花大钱换的限时加成，和装饰加成**相加**（都是「鱼缸更好」）
+    bonus += _offering_bonus(player, cfg, now=now)
 
     raw = 0.0
     hours = 0.0
@@ -338,6 +340,33 @@ def _parse_item_defs(raw: Any) -> dict[str, dict[str, Any]]:
             "unlock_level": max(1, _to_int(parts[6], 1)) if len(parts) > 6 else 1,
         }
     return items
+
+def _parse_titles(raw: Any) -> list[dict[str, Any]]:
+    """解析称号表（v1.18.17 的后期金币回收口）。
+
+    格式：``id|名称|emoji|价格|说明``。称号**纯炫耀、不加任何属性** ——
+    它的作用就是让后期钱多到没处花的人有个能买的东西，所以不需要平衡数值。
+    """
+    titles: list[dict[str, Any]] = []
+    entries = raw if isinstance(raw, list) else DEFAULTS.get("title_defs") or []
+    for entry in entries:
+        if not isinstance(entry, str):
+            continue
+        parts = [p.strip() for p in entry.split("|")]
+        if len(parts) < 4 or not parts[0] or not parts[1]:
+            continue
+        titles.append(
+            {
+                "id": parts[0],
+                "name": parts[1],
+                "emoji": parts[2],
+                "price": max(0, _to_int(parts[3], 0)),
+                "desc": parts[4] if len(parts) > 4 else "",
+            }
+        )
+    titles.sort(key=lambda t: t["price"])
+    return titles
+
 
 def _parse_aquarium_slots(raw: Any) -> list[dict[str, Any]]:
     """解析水族馆扩建栏位：``名字|价格`` 或 ``名字|价格|加几个位``。
@@ -848,8 +877,13 @@ def _default_player(user_id: str) -> dict[str, Any]:
         "aquarium": [],        # 水族馆（鱼实例列表）
         "collection": {},      # fish_id -> {count,best_value,first_ts}
         "baits": {},           # bait_id -> 数量
-        "equipped_bait": "none",
+        # 装备的鱼饵：空串 = 从没选过（插件会自动挂最好的），"none" = 玩家自己选了空钩
+        "equipped_bait": "",
         "items": {},           # item_id -> 数量（含商店道具与钓上来的杂物）
+        "auto_buff_item": "",  # 自动补给并激活的手气道具 id（空 = 不自动）
+        "title": "",           # 当前佩戴的称号 id（纯炫耀，v1.18.17）
+        "titles": [],          # 已买下的称号 id 列表
+        "offering_ts": 0,      # 香火供奉到期时间戳（0 = 没有供奉）
         "decorations": [],     # 水族馆装饰：[{id, rate, ts, expire_ts}]（耐久到点自动失效）
         "buff_casts_left": 0,  # 钓手手气 buff 还剩几竿（0 = 没有 buff）
         "aquarium_slots": [],  # 已解锁的水族馆扩建栏位名
@@ -867,8 +901,6 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # 这批订单是按哪个钓点抽的（"" = 没按钓点）；以及本周期换钓点换过几次
         "order_location": "",
         "order_move_rerolls": 0,
-        # 「原来这家伙是狠角色」——在缸里吃过鱼的鱼种（玩家自己的见闻，靠被吃慢慢攒）
-        "hostiles_seen": [],
         # 正在等玩家决定的随机小插曲：{"id": ..., "ts": ...}
         "event": None,
         # 每日天气 / 鱼市行情（按日期缓存，全天不变）
@@ -937,7 +969,37 @@ def _default_player(user_id: str) -> dict[str, Any]:
 #: 指数项负责「越往后越难」（把最高进度玩家卡在下一级之前），
 #: 二次项默认 0，留着做微调。base/ratio/growth 都能在 WebUI 里改。
 
-def _effective_luck(player: dict[str, Any]) -> float:
+def _offering_bonus(
+    player: dict[str, Any], cfg: dict[str, Any], now: int | None = None
+) -> float:
+    """香火供奉还在生效时的挂机产出加成（v1.18.17）。
+
+    供奉是后期金币回收口：花一笔大钱换 24 小时的「挂机产出 +50%」。
+    过期的（``offering_ts <= now``）一律算 0，不用手动清字段。
+    """
+    until = _safe_int(player.get("offering_ts"), 0, 0)
+    if until <= 0:
+        return 0.0
+    now = int(now if now is not None else time.time())
+    if until <= now:
+        return 0.0
+    return max(0.0, _safe_number((cfg or {}).get("offering_income_bonus"), 0.5))
+
+
+def _offering_luck(
+    player: dict[str, Any], cfg: dict[str, Any], now: int | None = None
+) -> float:
+    """香火供奉还在生效时的手气加成（同上，过期即 0）。"""
+    until = _safe_int(player.get("offering_ts"), 0, 0)
+    if until <= 0:
+        return 0.0
+    now = int(now if now is not None else time.time())
+    if until <= now:
+        return 0.0
+    return max(0.0, _safe_number((cfg or {}).get("offering_luck_bonus"), 0.05))
+
+
+def _effective_luck(player: dict[str, Any], cfg: dict[str, Any] | None = None) -> float:
     """本次抛竿实际吃到的手气加成。
 
     **两种不同来源的手气，叠加**（站长 v1.18.11 明确要求）：
@@ -966,7 +1028,10 @@ def _effective_luck(player: dict[str, Any]) -> float:
         if casts > 0
         else 0.0
     )
-    return once + buff
+    # 香火供奉的限时手气（v1.18.17）：和上面两种一样是「这一竿吃到的运气」，
+    # 所以一起相加；没传 cfg 时按 0 处理（纯函数调用方不用管它）。
+    offering = _offering_luck(player, cfg) if cfg else 0.0
+    return once + buff + offering
 
 
 def _consume_luck(player: dict[str, Any]) -> None:
@@ -1207,31 +1272,6 @@ def _compute_value(
         ),
     )
 
-
-#: 名字里带这些字的多半是狠角色（敌对生物）。玩家看不到任何标记或提示，
-#: 只有把两条放在同一个缸里才会「出事」——保持神秘感。
-
-def _is_hostile(fish_id: str) -> bool:
-    """这条鱼是不是「不好惹」的（内部判定，玩家侧无任何显示）。"""
-    fish = FISH_BY_ID.get(fish_id)
-    if fish is None:
-        return False
-    name = str(fish.get("name") or "")
-    return any(word in name for word in HOSTILE_KEYWORDS)
-
-def _fish_power(instance: dict[str, Any]) -> int:
-    """一条鱼的综合实力：三维 + 个体品质 + 鱼种品质 + 变异 + 养成。
-
-    敌对冲突就看这个值：高的一方活下来，低的一方没了。
-    """
-    attrs = instance.get("attrs") or {}
-    power = sum(_safe_int(attrs.get(k), 0, 0) for k in ATTR_WEIGHTS)
-    power += int(_safe_number(instance.get("quality_mult"), 1.0) * 60)
-    power += RARITY_RANK.get(_fish_rarity(instance.get("fish_id", "")), 0) * 45
-    power += int(_variant_mult(instance.get("variant")) * 40)
-    feed = _safe_int(instance.get("feed_uses"), 0, 0)
-    power += feed * 6
-    return power
 
 def _feed_cap(instance: dict[str, Any], cfg: dict[str, Any]) -> int:
     """这条鱼的投喂上限 = 全局基础值 + 育灵水加成。"""
@@ -1706,14 +1746,8 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         player["order_move_rerolls"] = max(
             0, _safe_int(raw.get("order_move_rerolls"), 0, 0)
         )
-        # 见过它吃鱼（玩家见闻）：只留还认得的鱼种 id，去重、保序
-        seen_raw = raw.get("hostiles_seen")
-        seen: list[str] = []
-        if isinstance(seen_raw, list):
-            for fid in seen_raw:
-                if isinstance(fid, str) and fid in FISH_BY_ID and fid not in seen:
-                    seen.append(fid)
-        player["hostiles_seen"] = seen
+        # ⚠️ v1.18.17 起删掉了「狠角色」那套相处机制（站长：没意思、还容易造成巨大损失），
+        # 老存档里的 hostiles_seen 字段读档时直接丢弃、不再写回。
         raw_orders = raw.get("orders")
         orders: list[dict[str, Any]] = []
         if isinstance(raw_orders, list):
@@ -1806,6 +1840,19 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
 
         equipped = raw.get("equipped_bait")
         player["equipped_bait"] = equipped if isinstance(equipped, str) else "none"
+
+        # --- 自动补给 / 称号 / 香火（v1.18.17）---
+        auto_buff = raw.get("auto_buff_item")
+        player["auto_buff_item"] = auto_buff if isinstance(auto_buff, str) else ""
+        title = raw.get("title")
+        player["title"] = title if isinstance(title, str) else ""
+        raw_titles = raw.get("titles")
+        player["titles"] = (
+            [t for t in raw_titles if isinstance(t, str)]
+            if isinstance(raw_titles, list)
+            else []
+        )
+        player["offering_ts"] = _safe_int(raw.get("offering_ts"), 0, 0)
 
         # --- 道具 ---
         raw_items = raw.get("items")
@@ -2267,6 +2314,7 @@ SCENE_GROUPS: tuple[tuple[str, str, str], ...] = (
     ("rank", "📊 排行", "群内排行榜"),
     ("help", "❓ 帮助", "帮助分页与用法提示"),
     ("custom", "🧩 自定义", "站长自定义命令"),
+    ("extras", "🏷 称号与供奉", "自动补给 / 称号 / 香火供奉（v1.18.17 的后期金币回收口）"),
     ("system", "⚙️ 通用", "兜底报错、群播报与共用按钮组"),
 )
 
@@ -2463,6 +2511,21 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("custom.send", "custom", "自定义命令「发送:」的回复", ""),
     ("system.error", "system", "操作出错的兜底回复", ""),
     ("broadcast.catch", "system", "群播报：有人钓到了鱼", ""),
+    # ---- 自动补给 / 称号 / 香火供奉（v1.18.17 的后期玩法与金币回收口）----
+    ("auto.view", "extras", "自动补给设置与可选项", ""),
+    ("auto.on", "extras", "设定好自动补给的手气道具", ""),
+    ("auto.off", "extras", "关掉手气道具的自动补给", ""),
+    ("auto.bad", "extras", "指定的自动补给道具不合法", ""),
+    ("title.list", "extras", "称号清单（后期金币回收）", ""),
+    ("title.bought", "extras", "买下并戴上称号", ""),
+    ("title.owned", "extras", "这个称号早就买过了", ""),
+    ("title.not_found", "extras", "没有这个称号", ""),
+    ("title.no_gold", "extras", "金币不够买称号", ""),
+    ("title.not_owned", "extras", "还没买这个称号就想戴", ""),
+    ("title.equipped", "extras", "换上称号", ""),
+    ("title.disabled", "extras", "本服没配称号表", ""),
+    ("offering.done", "extras", "香火供奉成功（限时挂机 + 手气加成）", ""),
+    ("offering.no_gold", "extras", "金币不够供奉", ""),
 )
 
 #: 场景 id 列表（button_defs / text_overrides 只认这些键）
@@ -2480,6 +2543,45 @@ SCENE_PARENT: dict[str, str] = {
 SCENE_DESC: dict[str, str] = {row[0]: row[2] for row in REPLY_SCENES}
 SCENE_GROUP: dict[str, str] = {row[0]: row[1] for row in REPLY_SCENES}
 SCENE_LABEL: dict[str, str] = {row[0]: row[2] for row in REPLY_SCENES}
+
+#: 每个分组「基础场景」：整组没单独配按钮时都回退到它（v1.18.17，站长要
+#: 「所有需要的地方都加按钮」）。以前只有手写的十几条父子关系，于是
+#: ``cast.miss_none`` / ``aquarium.full`` / ``item.feed_done`` 这类场景**一个按钮都没有**。
+BUTTON_BASE_BY_GROUP: dict[str, str] = {
+    "cast": "cast",
+    "pull": "pull",
+    "story": "story.result",     # story.prompt 自己有动态按钮（{label}/{n}），不受影响
+    "bag": "bag",
+    "sell": "sell.result",
+    "shop": "shop.list",
+    "backpack": "backpack.upgraded",
+    "rod": "rod.list",
+    "bait": "bait.equipped",
+    "location": "location",
+    "orders": "orders.list",
+    "aquarium": "aquarium.view",
+    "item": "item.used",
+    "collection": "collection.view",
+    "fishinfo": "fishinfo.detail",
+    "collectibles": "collectibles.view",
+    "profile": "profile.view",
+    "stamina": "stamina.view",
+    "sign": "sign.done",
+    "today": "today.view",
+    "rank": "rank.view",
+    "help": "help.page",
+    "custom": "",
+    "extras": "title.list",
+    "system": "cast",            # 报错 / 群播报：给「再来一竿 / 看背包」最实用
+}
+
+#: 场景 -> 按钮兜底场景（自己 → 同组基础场景；基础场景本身不需要兜底）
+SCENE_BUTTON_BASE: dict[str, str] = {
+    scene_id: base
+    for scene_id, group in SCENE_GROUP.items()
+    for base in (BUTTON_BASE_BY_GROUP.get(group, ""),)
+    if base and base != scene_id and base in SCENE_GROUP
+}
 
 #: 继承关系反查：父场景 -> 子场景（编辑器要提示「这几个场景在共用它」）
 SCENE_CHILDREN: dict[str, tuple[str, ...]] = {}
@@ -2569,7 +2671,12 @@ BUTTON_STYLE_ALIASES: dict[str, int] = {
 
 #: 按钮点击后发送的指令，第一个词必须在这里（否则点了没反应，属于死按钮）。
 #: 与 main.py 子命令分派的 keyword 对齐；`/钓鱼` 单独出现与 `/钓鱼 <数字>` 也算合法。
-BUTTON_COMMAND_WORDS: frozenset[str] = frozenset({
+#:
+#: ⚠️ 这是**可变集合**：main.py 定义完 ``SUBCOMMAND_KEYWORDS`` 之后会把整张子命令表
+#: 并进来（见 `_sync_button_command_words`），所以「路由认识的写法」与「按钮能指向的
+#: 写法」永远不会再各写一份（v1.18.17 之前就是各写一份，于是 `/钓鱼 称号` 这种新命令
+#: 的按钮会被当死按钮丢掉）。
+BUTTON_COMMAND_WORDS: set[str] = {
     "帮助", "菜单", "指令", "背包", "包", "bag", "鱼篓",
     "卖", "卖鱼", "卖光光", "卖光", "清空", "全卖", "空背包", "sellall", "一键卖出",
     "图鉴", "收集", "collection", "水族馆", "馆", "缸", "aquarium",
@@ -2595,7 +2702,7 @@ BUTTON_COMMAND_WORDS: frozenset[str] = frozenset({
     "放", "养", "取", "拿", "领", "收租", "喂", "洗", "洗髓",
     # 「买」是智能买（自动认三家店），按钮可以直接用它
     "交", "交单", "交货", "购买", "买", "装备", "换竿", "换鱼竿",
-})
+}
 
 
 def _fill_button_text(template: Any, label: str, n: int = 0) -> str:

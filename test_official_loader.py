@@ -128,12 +128,16 @@ try:
     check(len(plugin.baits) == 10, f"鱼饵解析 {len(plugin.baits)} 种（v1.18.15 加了深渊饵/龙涎）")
     check(len(plugin.items) == 13, f"道具解析 {len(plugin.items)} 种（v1.18.16 重设后 13 件）")
     check(
-        len(plugin.aquarium_slots) == 6,
-        f"扩建栏位解析 {len(plugin.aquarium_slots)} 个（v1.18.13 加档后）",
+        len(plugin.aquarium_slots) == 9,
+        f"扩建栏位解析 {len(plugin.aquarium_slots)} 个（v1.18.17 再加 3 档终局缸）",
     )
     check(
-        [s.get("add") for s in plugin.aquarium_slots] == [1, 1, 1, 2, 3, 4],
+        [s.get("add") for s in plugin.aquarium_slots] == [1, 1, 1, 2, 3, 4, 5, 6, 8],
         f"每档加几个位也解析出来了 -> {[s.get('add') for s in plugin.aquarium_slots]}",
+    )
+    check(
+        len(plugin.titles) == 6 and plugin.titles[-1]["price"] >= 1_000_000,
+        f"称号表解析 {len(plugin.titles)} 档（后期金币回收口）",
     )
     check(plugin.escape_map.get("神话", 0) > 0, f"逃脱率表解析 -> {plugin.escape_map}")
     check(

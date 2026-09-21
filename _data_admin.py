@@ -480,6 +480,6 @@ class DataAdminMixin:
 
     #: 会被「自动合并」的内容型配置项（按每行第一个 | 前的 id 去重）
     CONTENT_LIST_KEYS: tuple[str, ...] = (
-        "location_defs", "rod_defs", "bait_defs", "item_defs",
+        "location_defs", "rod_defs", "bait_defs", "item_defs", "title_defs",
     )
 

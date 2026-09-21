@@ -310,12 +310,35 @@ class CommandsMixin:
         extra = [f for f in pool if f["rarity"] not in rarities]
         return preferred, extra
 
+    def _order_income_factor(self, player: dict[str, Any]) -> float:
+        """订单奖励的**动态系数**（v1.18.17）：让订单价跟上玩家自己的收入。
+
+        站长报「订单价格太低」—— 原来的订单价只看鱼的基准价，完全没算玩家身上
+        那堆加成（鱼竿价值加成、当前钓点的价值倍率、等级带来的收益成长），
+        于是后期一条订单还不如随手卖两条鱼。现在：
+
+            系数 = 钓点倍率 × (1 + 鱼竿价值加成) × (1 + order_level_growth × (等级-1))
+
+        再钳到 ``[1.0, order_factor_max]``。默认 62 级龙宫 + 归墟竿 ≈ 6.0（封顶），
+        也就是订单单价约等于卖店的 4~5 倍；1 级新手仍然是「比卖店赚一倍」。
+        """
+        rod = self._rod(player)
+        loc = self._location(player)
+        level = max(1, _player_level(player))
+        gear = 1.0 + max(0.0, _safe_number(rod.get("value_bonus"), 0.0))
+        place = max(1.0, _safe_number(loc.get("value_mult"), 1.0))
+        growth = max(0.0, _safe_number(self.cfg.get("order_level_growth"), 0.02))
+        factor = gear * place * (1.0 + growth * (level - 1))
+        cap = max(1.0, _safe_number(self.cfg.get("order_factor_max"), 6.0))
+        return _clamp(factor, 1.0, cap)
+
     def _roll_orders(
-        self, level: int, location_id: str | None = None
+        self, level: int, location_id: str | None = None, player: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         """生成一批订单。越贵的鱼要得越少。
 
         ``location_id`` = 按这个钓点抽鱼；``None`` = 不按钓点（老行为，全鱼池）。
+        ``player`` = 用来算动态系数（鱼竿 / 钓点 / 等级），拿不到就退回 1.0。
         """
         preferred, extra = self._order_pools(level, location_id)
         total = len(preferred) + len(extra)
@@ -325,6 +348,7 @@ class CommandsMixin:
             picked += random.sample(extra, count - len(picked))
 
         mult = float(self.cfg["order_reward_mult"])
+        factor = self._order_income_factor(player) if player is not None else 1.0
         orders: list[dict[str, Any]] = []
         for fish in picked:
             if _fish_value(fish) <= 10:
@@ -341,7 +365,7 @@ class CommandsMixin:
                     "fish_id": fish["id"],
                     "need": need,
                     "have": 0,
-                    "reward": max(1, int(unit * need * mult)),
+                    "reward": max(1, int(unit * need * mult * factor)),
                     "done": False,
                 }
             )
@@ -389,7 +413,7 @@ class CommandsMixin:
         rerolls = _safe_int(player.get("order_move_rerolls"), 0, 0)
         if moved and rerolls >= self._order_move_limit():
             return False
-        player["orders"] = self._roll_orders(_player_level(player), location)
+        player["orders"] = self._roll_orders(_player_level(player), location, player)
         player["order_next_ts"] = self._next_order_ts(now)
         player["order_date"] = self._today_text()  # 只用于展示「这是哪天接的单」
         player["order_location"] = location or ""
@@ -667,10 +691,15 @@ class CommandsMixin:
                     yield _r
                 return
 
-            # ---- 查看 ----
-            # 已解锁：完整信息（价值倍率 + 描述）；未解锁：只留 🔒 + 名称，
-            # 不提前报图鉴进度/金币/等级（想看还差什么就写 解锁 <名>，那边会详细说明）
-            lines = [f"🗺️ 钓点　当前 {self._location_label(player)}　等级 {level}"]
+            # ---- 查看（v1.18.17：锁着的钓点也把解锁条件写全，站长要的）----
+            # 已解锁：名称 + 价值倍率 + 描述；未解锁：把「等级 / 金币 / 上一张图的图鉴」
+            # 三项条件和**你现在的进度**一起写出来，够条件了就直接提示可以解锁。
+            ratio = _clamp(
+                _safe_number(self.cfg.get("location_codex_gate"), 0.8), 0.0, 1.0
+            )
+            gold_now = _safe_int(player.get("gold"), 0, 0)
+            ready: list[str] = []
+            rows_all: list[str] = []
             for loc in sorted(
                 self.locations,
                 key=lambda l: (_safe_int(l.get("level_gate"), 1, 1),
@@ -678,14 +707,64 @@ class CommandsMixin:
             ):
                 if loc["id"] in unlocked:
                     here = "📍" if loc["id"] == current else "　"
-                    lines.append(
+                    rows_all.append(
                         f"{here}{loc['emoji']}{loc['name']}　×{loc['value_mult']:.2f}"
                         f"　{loc['desc']}"
                     )
+                    continue
+                prev_id = self._prev_location_id(loc["id"])
+                prev_cfg = self.location_by_id.get(prev_id) or {} if prev_id else {}
+                got = need = 0
+                if prev_id:
+                    got, need = self._location_codex_progress(player, prev_id)
+                codex_need = int(need * ratio + 0.999)
+                price = _safe_int(loc.get("gold_gate"), 0, 0)
+                gate = _safe_int(loc.get("level_gate"), 1, 1)
+                conds = [f"{gate} 级"]
+                if price:
+                    conds.append(f"{_fmt_gold(price)} 金")
+                if prev_id and need:
+                    conds.append(f"「{prev_cfg.get('name', prev_id)}」图鉴 {codex_need} 种")
+                lacks = []
+                if level < gate:
+                    lacks.append(f"差 {gate - level} 级")
+                if price > gold_now:
+                    lacks.append(f"差 {_fmt_gold(price - gold_now)} 金")
+                if prev_id and need and got < codex_need:
+                    lacks.append(f"图鉴 {got}/{codex_need}")
+                if lacks:
+                    rows_all.append(
+                        f"🔒{loc['emoji']}{loc['name']}　需 " + "・".join(conds)
+                        + "　（" + "，".join(lacks) + "）"
+                    )
                 else:
-                    lines.append(f"🔒{loc['emoji']}{loc['name']}")
-            lines.append("💡 点按钮看图鉴，或写：/钓鱼 去 <钓点名>")
-            async for reply in self._say(event, "\n".join(lines), "location.list"):
+                    ready.append(loc["name"])
+                    rows_all.append(
+                        f"🔓{loc['emoji']}{loc['name']}　需 " + "・".join(conds)
+                        + "　✅ 条件已满足"
+                    )
+
+            # 19 个钓点一行一个太长：每页 10 个（正文 ≤16 行的老规矩）
+            per_page = 10
+            chunks = [
+                rows_all[i:i + per_page] for i in range(0, len(rows_all), per_page)
+            ] or [[]]
+            page = _to_int(a3 or a2, 1)
+            page = int(_clamp(page, 1, len(chunks)))
+            title = "🗺️ 钓点" if len(chunks) == 1 else f"🗺️ 钓点 {page}/{len(chunks)}"
+            body = [
+                f"{title}　当前 {self._location_label(player)}　等级 {level}"
+            ] + chunks[page - 1]
+            if ready:
+                body.append(
+                    "💡 可以解锁：" + "、".join(ready[:4])
+                    + ("…" if len(ready) > 4 else "")
+                    + "　发 /钓鱼 解锁 <钓点名>"
+                )
+            body.append("💡 /钓鱼 去 <钓点名> 前往，/钓鱼 图鉴 <钓点名> 看收集进度")
+            if len(chunks) > 1:
+                body.append(f"　翻页：/钓鱼 钓点 {page % len(chunks) + 1}")
+            async for reply in self._say(event, "\n".join(body), "location.list"):
                 yield reply
 
     async def _cmd_rods(
@@ -745,7 +824,35 @@ class CommandsMixin:
                 return
 
             if sub in ("用", "装备", "换", "use", "equip"):
-                rod = self._find_rod(a3 or a2)
+                # 不带名字 = 自动换上「已拥有里价值加成最高的那根」（按钮用得上）
+                want = (a3 or a2 or "").strip()
+                if not want:
+                    pool = [r for r in self.rods if r["id"] in owned] or list(self.rods)
+                    best = max(
+                        pool,
+                        key=lambda r: (
+                            _safe_number(r.get("value_bonus"), 0.0),
+                            _safe_number(r.get("luck_bonus"), 0.0),
+                        ),
+                    )
+                    if best["id"] == equipped:
+                        async for _r in self._say_msg(event, "rod.equipped", event.plain_result(
+                                f"✅ 你现在用的就是最好的那根：{self._rod_label(player)}"
+                        )):
+                            yield _r
+                        return
+                    player["equipped_rod"] = best["id"]
+                    saved = await self._save_player(player)
+                    lines = [
+                        f"✅ 自动换上最好的竿：{self._rod_label(player)}"
+                        f"（价值+{best['value_bonus']:.0%}）",
+                    ]
+                    if not saved:
+                        lines.append("⚠️ 保存失败")
+                    async for _r in self._say_msg(event, "rod.equipped", event.plain_result("\n".join(lines))):
+                        yield _r
+                    return
+                rod = self._find_rod(want)
                 if rod is None:
                     async for _r in self._say_msg(event, "rod.not_found", event.plain_result("🤔 没有这款鱼竿")):
                         yield _r
@@ -916,6 +1023,10 @@ class CommandsMixin:
                 fish = FISH_BY_ID.get(entry.get("best_fish", ""))
                 if fish:
                     extra = f"（{fish['name']}）"
+            # 称号（v1.18.17）：排行榜是称号最主要的展示位之一
+            title_label = self._title_label(entry)
+            if title_label:
+                extra += f"　🏷{title_label}"
             lines.append(f"{medal} {name[:12]}　{_fmt_gold(value)} {unit}{extra}{mark}")
         if my_rank is None:
             lines.append("　你还没有上榜，加油！")
@@ -1322,9 +1433,8 @@ class CommandsMixin:
                 f"{_fish_emoji(one)} {one['name']}　{self._rarity_name(one['rarity'])}"
                 f"　基准价 {_fmt_gold(one['value'])} 金币",
             ]
-            # 见闻过的狠角色才标注：一开始谁都不知道，被它吃过鱼之后 /钓鱼 查 才看得到
-            if one["id"] in (player.get("hostiles_seen") or []):
-                out.append("　⚠️ 狠角色（在你缸里吃过鱼，别跟比它弱的放一块）")
+            # ⚠️ v1.18.17：「狠角色」那套相处机制已按站长的要求整体删掉
+            # （没意思，而且容易把玩家养了很久的鱼吃掉造成巨大损失），鱼卡不再有那行标注。
             out.append(
                 f"　上钩难易："
                 f"{'要拉线（会跑，手要快）' if one['rarity'] in self.interactive_rarities else '直接上钩，不用拉线'}"
@@ -1768,21 +1878,6 @@ class CommandsMixin:
                     lines.append(f"　{_instance_line(instance)}")
                 if len(accepted) > 5:
                     lines.append(f"　… 其余 {len(accepted) - 5} 条已放入")
-                # 缸里的相处结果（机制对玩家不可见，只给现象）
-                duel_lines, changed, caught = self._resolve_tank_conflicts(aquarium)
-                if caught:
-                    # 「原来这家伙是狠角色」—— 当着他的面吃过鱼才算见闻
-                    seen = player.get("hostiles_seen")
-                    if not isinstance(seen, list):
-                        seen = []
-                    for fid in caught:
-                        if fid not in seen:
-                            seen.append(fid)
-                    player["hostiles_seen"] = seen
-                if changed:
-                    player["aquarium"] = aquarium
-                    await self._save_player(player)
-                lines.extend(duel_lines)
                 lines.append(f"　水族馆 {len(aquarium)}/{capacity}")
                 if skipped:
                     lines.append(
@@ -1881,103 +1976,9 @@ class CommandsMixin:
                     "　/钓鱼 用 <道具> 1　　　投喂 / 洗髓 / 培育\n"
                     "　/钓鱼 水族馆 领　　　　 领取挂机收益\n"
                     "　/钓鱼 水族馆 扩建　　　 花金币扩容\n"
-                    "　💤 养在缸里的鱼按「各自待了多久」产出金币，养得越久越多\n"
-                    "　🙈 缸里的鱼之间会发生什么，自己观察"
+                    "　💤 养在缸里的鱼按「各自待了多久」产出金币，养得越久越多"
                 )):
                 yield _r
-
-    def _tank_conflict_line(
-        self, winner: dict[str, Any], loser: dict[str, Any], *, duel: bool
-    ) -> str:
-        """相处结果的一句话（只说现象，不说规则）。"""
-        win_fish = FISH_BY_ID.get(winner.get("fish_id", ""), {})
-        win_name = _fish_name(winner.get("fish_id", ""))
-        lose_name = _fish_name(loser.get("fish_id", ""))
-        if duel:
-            # 两个狠角色碰上：打一架
-            return (
-                f"　…缸里有点动静，{_fish_emoji(win_fish)}{win_name} 和 "
-                f"{lose_name} 打了一架，{lose_name} 没了"
-            )
-        return (
-            f"　…缸里有点动静，{_fish_emoji(win_fish)}{win_name} 把 "
-            f"{lose_name} 吃掉了"
-        )
-
-    def _resolve_tank_conflicts(
-        self, aquarium: list[dict[str, Any]]
-    ) -> tuple[list[str], bool, list[str]]:
-        """结算水族馆里的「相处结果」：只有狠角色会下嘴，而且**咬得动才吃**。
-
-        **刻意不做任何提示**：不告诉玩家哪种鱼凶、也不告诉判定规则，
-        只给出结果（水浑了 / 少了一条），让玩家自己摸规律。
-
-        现实一点的规则（v1.15.0，之前是「谁综合实力低谁没」，才会出现
-        「藤壶把章鱼吃了」这种笑话）：
-
-        * 温和的鱼**永远不会**主动伤害别人 —— 藤壶 / 海星 / 水母 / 海龟
-          就算养得再肥，也只是被吃的命；
-        * **同类不相食**：会吃鱼的鱼也不会吃自己的同类（两条章鱼放一起是安全的）；
-        * 狠角色只有比对手强才下得了嘴：小章鱼挨着一条养肥的大鱼时，
-          既吃不动对方、也不会反过来被吃掉 —— 相安无事；
-        * 两个**不同种**的狠角色碰上，壮的吃弱的。
-
-        返回 ``(要追加的文案, 是否改动了缸内内容, 这次被看破的鱼种 id)``。
-        第三个值 = 当着玩家的面吃过鱼的「凶手」，调用方记进 ``hostiles_seen``：
-        玩家一开始不知道谁是狠角色，**被吃了才认识**，之后 /钓鱼 查 就能看到标注。
-        """
-        lines: list[str] = []
-        caught: list[str] = []
-        changed = False
-        try:
-            # 每轮最多淘汰一条（去掉一条就重新找下一个狠角色）
-            for _ in range(len(aquarium)):
-                acted = False
-                for i_h, hunter in enumerate(list(aquarium)):
-                    if not _is_hostile(hunter.get("fish_id", "")):
-                        continue
-                    # 它的对手：另一个狠角色，或者紧挨着的邻居
-                    rival_idx = None
-                    for j, other in enumerate(aquarium):
-                        if j == i_h:
-                            continue
-                        if _is_hostile(other.get("fish_id", "")) or j in (
-                            i_h - 1,
-                            i_h + 1,
-                        ):
-                            rival_idx = j
-                            break
-                    if rival_idx is None:
-                        continue
-                    rival = aquarium[rival_idx]
-                    # 同类不相食：会吃鱼的鱼也不吃自己的同类（站长要求，也更符合直觉）
-                    if str(rival.get("fish_id") or "") == str(hunter.get("fish_id") or ""):
-                        continue
-                    duel = _is_hostile(rival.get("fish_id", ""))
-                    hunter_power = _fish_power(hunter)
-                    rival_power = _fish_power(rival)
-                    # 温和的鱼不会被冤枉：狠角色咬不动比自己壮的温和鱼时，谁也不少
-                    if not duel and hunter_power < rival_power:
-                        continue
-                    if hunter_power >= rival_power:
-                        loser, winner = rival, hunter
-                    else:
-                        loser, winner = hunter, rival  # 两条狠角色，壮的吃弱的
-                    aquarium.remove(loser)
-                    changed = True
-                    acted = True
-                    winner_id = str(winner.get("fish_id") or "")
-                    if winner_id and winner_id not in caught:
-                        caught.append(winner_id)
-                    lines.append(self._tank_conflict_line(winner, loser, duel=duel))
-                    break
-                if not acted:
-                    break
-        except Exception as e:  # pragma: no cover
-            logger.debug(f"水族馆相处结算失败：{e}")
-        return lines, changed, caught
-
-
 
     # =========================================================================
     # 商店（v1.18.13 起拆成三家：鱼竿店 / 道具店 / 鱼饵店）
@@ -2745,6 +2746,224 @@ class CommandsMixin:
                 yield _r
 
     # =========================================================================
+    # 自动补给 / 称号 / 供奉（v1.18.17）
+    # =========================================================================
+
+    async def _cmd_auto_supply(
+        self, event: AstrMessageEvent, user_id: str, spec: str
+    ):
+        """``/钓鱼 自动 [手气道具名|关]``：设定「用完自动补 + 自动用」的那件道具。
+
+        * 不带参数 = 看当前设置与可选项；
+        * ``关`` / ``关掉`` / ``off`` = 取消自动；
+        * 写了道具名 = 只认**手气类**道具（玉佩 / 潮汐香 / 玉髓灯这种带
+          ``buff_quality`` 的），别的道具（饲料之类）不给设 —— 免得把喂鱼的道具
+          当成自动消耗品每竿买一个。
+        """
+        async with self._lock_for(user_id):
+            player = await self._load_player(user_id)
+            want = (spec or "").strip()
+            buff_items = [
+                (iid, item)
+                for iid, item in self.items.items()
+                if _safe_number((item.get("effects") or {}).get("buff_quality"), 0.0) > 0
+            ]
+            buff_items.sort(key=lambda kv: _safe_int(kv[1].get("unlock_level"), 1, 1))
+
+            if not want:
+                current = str(player.get("auto_buff_item") or "")
+                lines = ["🤖 自动补给"]
+                lines.append(
+                    "　当前："
+                    + (
+                        f"{self._item_label(current)}（鱼饵用光会自动买）"
+                        if current
+                        else "只自动补鱼饵（手气道具没指定）"
+                    )
+                )
+                lines.append("　可指定：")
+                for iid, item in buff_items:
+                    gate = _safe_int(item.get("unlock_level"), 1, 1)
+                    locked = "" if _player_level(player) >= gate else f"（{gate} 级解锁）"
+                    lines.append(
+                        f"　　{self._item_label(iid)}　{_fmt_gold(item.get('price', 0))} 金"
+                        f"　手气 +{_safe_number((item.get('effects') or {}).get('buff_quality'), 0.0):.0%}"
+                        f"{locked}"
+                    )
+                lines.append("　写法：/钓鱼 自动 锦鲤玉佩　｜　/钓鱼 自动 关")
+                async for _r in self._say_msg(event, "auto.view", event.plain_result("\n".join(lines))):
+                    yield _r
+                return
+
+            if want in ("关", "关掉", "取消", "off", "none", "无"):
+                player["auto_buff_item"] = ""
+                await self._save_player(player)
+                async for _r in self._say_msg(event, "auto.off", event.plain_result(
+                        "✅ 已关掉手气道具的自动补给（鱼饵照旧自动补）"
+                )):
+                    yield _r
+                return
+
+            target = None
+            for iid, _item in buff_items:
+                if want == iid or want == str(_item.get("name") or ""):
+                    target = iid
+                    break
+            if target is None:
+                names = "、".join(str(item.get("name")) for _i, item in buff_items)
+                async for _r in self._say_msg(event, "auto.bad", event.plain_result(
+                        f"🤔 只能指定手气类道具（{names}）\n　发了 /钓鱼 自动 看清单"
+                )):
+                    yield _r
+                return
+            player["auto_buff_item"] = target
+            saved = await self._save_player(player)
+            item = self.items[target]
+            lines = [
+                f"✅ 自动补给已设为 {self._item_label(target)}",
+                f"　buff 用光时自动买 1 个并立刻用上（现在 "
+                f"{_safe_int((player.get('items') or {}).get(target), 0, 0)} 个，"
+                f"单价 {_fmt_gold(item.get('price', 0))}）",
+                "　金币不够就什么都不买（不会透支）；/钓鱼 自动 关 可以取消",
+            ]
+            if not saved:
+                lines.append("⚠️ 保存失败")
+            async for _r in self._say_msg(event, "auto.on", event.plain_result("\n".join(lines))):
+                yield _r
+
+    async def _cmd_titles(self, event: AstrMessageEvent, user_id: str, spec: str):
+        """``/钓鱼 称号 [买 <名字>|戴 <名字>]``：后期金币回收（纯炫耀、无属性）。
+
+        称号是给「钱多到没处花」的玩家准备的目标：一次性买断、随时换着戴，
+        展示在 `/钓鱼 档案` 与群排行榜里，**不影响任何数值**（不破坏平衡）。
+        """
+        if not self.titles:
+            async for _r in self._say_msg(event, "title.disabled", event.plain_result(
+                    "🏷 本服没有配置称号（title_defs 留空）"
+            )):
+                yield _r
+            return
+        async with self._lock_for(user_id):
+            player = await self._load_player(user_id)
+            owned = [t for t in (player.get("titles") or []) if isinstance(t, str)]
+            current = str(player.get("title") or "")
+            sub, _, arg = (spec or "").strip().partition(" ")
+            sub = sub.strip()
+            arg = arg.strip()
+
+            def find(name: str) -> dict[str, Any] | None:
+                name = (name or "").strip()
+                for t in self.titles:
+                    if name and (name == t["id"] or name == t["name"]):
+                        return t
+                return None
+
+            if sub in ("买", "购买", "buy"):
+                title = find(arg or "")
+                if title is None:
+                    async for _r in self._say_msg(event, "title.not_found", event.plain_result(
+                            "🤔 没有这个称号，发 /钓鱼 称号 看清单"
+                    )):
+                        yield _r
+                    return
+                if title["id"] in owned:
+                    async for _r in self._say_msg(event, "title.owned", event.plain_result(
+                            f"✅ 你已经有「{title['name']}」了（/钓鱼 称号 戴 {title['name']}）"
+                    )):
+                        yield _r
+                    return
+                price = _safe_int(title.get("price"), 0, 0)
+                gold = _safe_int(player.get("gold"), 0, 0)
+                if gold < price:
+                    async for _r in self._say_msg(event, "title.no_gold", event.plain_result(
+                            f"💸 「{title['name']}」要 {_fmt_gold(price)} 金币，"
+                            f"你还差 {_fmt_gold(price - gold)}"
+                    )):
+                        yield _r
+                    return
+                player["gold"] = gold - price
+                owned.append(title["id"])
+                player["titles"] = owned
+                player["title"] = title["id"]
+                saved = await self._save_with_notices(player, [])
+                lines = [
+                    f"🏷 买下称号「{title['emoji']}{title['name']}」并戴上了！",
+                    f"　{title['desc']}",
+                    f"　💰 余额 {_fmt_gold(player['gold'])}",
+                ]
+                if not saved:
+                    lines.append("⚠️ 保存失败")
+                async for _r in self._say_msg(event, "title.bought", event.plain_result("\n".join(lines))):
+                    yield _r
+                return
+
+            if sub in ("戴", "佩戴", "换", "use", "equip"):
+                title = find(arg or "")
+                if title is None or title["id"] not in owned:
+                    async for _r in self._say_msg(event, "title.not_owned", event.plain_result(
+                            "🎒 你还没买这个称号（/钓鱼 称号 买 <名字>）"
+                    )):
+                        yield _r
+                    return
+                player["title"] = title["id"]
+                await self._save_player(player)
+                async for _r in self._say_msg(event, "title.equipped", event.plain_result(
+                        f"✅ 已戴上「{title['emoji']}{title['name']}」"
+                )):
+                    yield _r
+                return
+
+            lines = [f"🏷 称号　当前：{self._title_label(player) or '（没戴）'}"]
+            gold = _safe_int(player.get("gold"), 0, 0)
+            for t in self.titles:
+                have = t["id"] in owned
+                here = "📍" if t["id"] == current else "　"
+                tag = "已拥有" if have else f"{_fmt_gold(t['price'])}金"
+                lines.append(
+                    f"{here}{t['emoji']}{t['name']}　{tag}　{t['desc']}"
+                )
+            lines.append(f"💰 你有 {_fmt_gold(gold)}")
+            lines.append("💡 /钓鱼 称号 买 <名字>　｜　/钓鱼 称号 戴 <名字>")
+            async for _r in self._say_msg(event, "title.list", event.plain_result("\n".join(lines))):
+                yield _r
+
+    async def _cmd_offering(self, event: AstrMessageEvent, user_id: str):
+        """``/钓鱼 供奉``：花一笔大钱换 24 小时的挂机产出 + 手气加成（后期金币回收）。
+
+        这是**主动**的钱坑：越到后期越划算，钱少的人不买也不亏。
+        可重复供奉（时间不叠加，直接续到「现在 + offering_hours」）。
+        """
+        async with self._lock_for(user_id):
+            player = await self._load_player(user_id)
+            now = int(time.time())
+            price = max(0, _safe_int(self.cfg.get("offering_price"), 200000, 0))
+            hours = max(1, _safe_int(self.cfg.get("offering_hours"), 24, 1))
+            income_bonus = max(0.0, _safe_number(self.cfg.get("offering_income_bonus"), 0.5))
+            luck_bonus = max(0.0, _safe_number(self.cfg.get("offering_luck_bonus"), 0.05))
+            until = _safe_int(player.get("offering_ts"), 0, 0)
+            gold = _safe_int(player.get("gold"), 0, 0)
+            if gold < price:
+                async for _r in self._say_msg(event, "offering.no_gold", event.plain_result(
+                        f"💸 供奉一次要 {_fmt_gold(price)} 金币，"
+                        f"你还差 {_fmt_gold(price - gold)}\n"
+                        f"　供奉效果：{hours} 小时内挂机产出 +{income_bonus:.0%}、"
+                        f"手气 +{luck_bonus:.2f}"
+                )):
+                    yield _r
+                return
+            player["gold"] = gold - price
+            player["offering_ts"] = now + hours * 3600
+            lines = [
+                f"🕯️ 供奉成功！接下来 {hours} 小时：",
+                f"　挂机产出 +{income_bonus:.0%}　手气 +{luck_bonus:.2f}",
+                f"　💰 余额 {_fmt_gold(player['gold'])}",
+                "　（可重复供奉续时间，不叠加效果）",
+            ]
+            saved = await self._save_with_notices(player, lines)
+            async for _r in self._say_msg(event, "offering.done", event.plain_result("\n".join(lines))):
+                yield _r
+
+    # =========================================================================
     # 档案 / 签到 / 管理员
     # =========================================================================
 
@@ -2797,7 +3016,8 @@ class CommandsMixin:
         aq_cap = self._aquarium_capacity(player)
 
         lines = [
-            "📇 档案",
+            "📇 档案"
+            + (f"　🏷 {self._title_label(player)}" if self._title_label(player) else ""),
             f"💰 {_fmt_gold(player.get('gold', 0))}　🎣 {self._rod_label(player)}"
             f"　📍 {self._location_label(player)}",
         ]

@@ -193,12 +193,21 @@ SUBCOMMAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     "钓点": ("钓点", "地点", "地图", "map", "location"),
     "鱼竿": ("鱼竿", "竿", "rod"),
     "杂物": ("杂物", "漂流瓶", "收集品", "collect"),
+    # v1.18.17：自动补给设置 / 称号（后期金币回收）/ 香火供奉
+    "自动": ("自动", "自动补给", "auto"),
+    "称号": ("称号", "头衔", "title"),
+    "供奉": ("供奉", "香火", "上香", "offering"),
 }
 
 #: 全部内置写法（含规范名本身）：自定义命令不许与它们重名（内置永远优先）
 BUILTIN_COMMAND_WORDS: frozenset[str] = frozenset(
     word for words in SUBCOMMAND_KEYWORDS.values() for word in words
 )
+
+#: 按钮白名单与「子命令总表」保持同步（v1.18.17）：凡是路由认识的写法，
+#: 按钮都能指向它。以前两份表各写各的，于是 `/钓鱼 称号` 这类新命令的按钮
+#: 会被当成「点了没反应的死按钮」丢掉（写按钮表时还看不到任何报错）。
+CALC.BUTTON_COMMAND_WORDS.update(BUILTIN_COMMAND_WORDS)
 
 #: 运行时的「别名 → 规范子命令」表：**只装站长新加的别名**，
 #: 内置写法一个都不装（分派链自己认），所以默认配置下它是空的、行为零变化。
@@ -307,7 +316,15 @@ DEFAULTS: dict[str, Any] = {
     "item_drop_chance": 0.14,
     "bottle_note_chance": 0.30,
     "order_count": 3,
-    "order_reward_mult": 2.2,
+    # v1.18.17：订单价改成**跟着玩家的收入走**（站长报「订单价格太低」）——
+    #   订单单价 = 鱼基准价 × 1.3 × order_reward_mult × 动态系数
+    #   动态系数 = 钓点价值倍率 × (1 + 鱼竿价值加成) × (1 + order_level_growth × (等级-1))，
+    #   再钳到 [1.0, order_factor_max]。
+    # 基准倍率因此从 2.2 降到 1.6（1 级新手仍然是「比卖店赚一倍」），
+    # 后期靠动态系数追上来：62 级龙宫 + 归墟竿 ≈ 卖店的 4~5 倍。
+    "order_reward_mult": 1.6,
+    "order_level_growth": 0.02,
+    "order_factor_max": 6.0,
     "order_unlock_level": 3,
     "order_refresh_min_hours": 3,
     "order_refresh_max_hours": 6,
@@ -316,6 +333,23 @@ DEFAULTS: dict[str, Any] = {
     "order_move_rerolls": 1,
     # 隐藏生物（大肥鱼）能不能被点单；默认能 = v1.14.0 之前的行为
     "order_include_hidden": True,
+    # ---- 后期金币回收（v1.18.17）：站长说终局金币溢出，得给钱找个去处 ----
+    # 称号：纯炫耀、无属性（不会推高收益），一次性买断、可随时换着戴。
+    # 格式：id|名称|emoji|价格|说明（越往后越贵，给后期玩家一个「花得掉」的目标）
+    "title_defs": [
+        "novice|钓鱼新手|🎣|0|刚拿到竿子的第一天",
+        "regular|常客|🪑|20000|老板已经记住你的脸了",
+        "veteran|老钓手|🧢|80000|一坐就是一下午",
+        "tycoon|一掷千金|💰|300000|钱对你来说只是数字",
+        "deep_lord|深海领主|🔱|1200000|海沟以下都归你管",
+        "void_master|归墟之主|🕳️|5000000|连声音都被吞掉的地方，你去过",
+    ],
+    # 供奉香火：花一笔大钱换 24 小时的挂机产出与手气加成（可重复买，天天供奉天天强）。
+    # 这是**主动**的回收口：越到后期越划算，钱多的人有地方花，钱少的人不买也不亏。
+    "offering_price": 200000,
+    "offering_hours": 24,
+    "offering_income_bonus": 0.5,
+    "offering_luck_bonus": 0.05,
     # 鱼竿：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级）
     # 后两段（可选）是**拉线手感**：拉线窗口加成 / 逃脱率系数（见 _calc._parse_rod_defs）
     # v1.18.15 加了两档后期竿：不堆数值，改卖「手感 + 收金币」——
@@ -397,18 +431,33 @@ DEFAULTS: dict[str, Any] = {
     # 现在改成「馆藏越值钱，挂机越多」，同时 10 万/次 ≈ 终局 30 竿，只是补充不是捷径
     #（站长要的是「越往后越慢」，所以仍然保留封顶，不让挂机替代主动钓鱼）。
     "pond_income_per_hour": 0.02,
-    "pond_income_cap_hours": 12,
+    # v1.18.17：单次最多累计 12 -> 24 小时（睡一觉 + 上一天班回来都还在攒），
+    # 真正的天花板仍然是下面的金币封顶，不是小时数。
+    "pond_income_cap_hours": 24,
     "pond_income_cap_coins": 100000,
     # 水族馆装饰：同时可摆几个、每个耐久多少小时（到点自动失效）
     "decoration_slots": 3,
     "decoration_hours": 72,
     # 钓手本人的手气 buff 持续多少竿
     "buff_cast_count": 20,
+    # ---- 自动补给（v1.18.17，站长要的「用完了自动花钱补」）----
+    # 下竿时如果当前鱼饵用光了：按单价自动买 1 个继续钓（金币不够就退回空钩）。
+    "auto_supply_bait": True,
+    # 没挂饵但背包里有饵时，自动挂上「手气最高的那款」——只在你**从没选过饵**
+    # （equipped_bait 为空）时生效；自己选过空钩的人不会被偷偷换成花钱的饵。
+    "auto_equip_bait": True,
+    # 手气道具（玉佩/潮汐香/玉髓灯）用完了自动买 + 自动激活：
+    # 要先让玩家自己指定用哪一件（`/钓鱼 自动 锦鲤玉佩`），插件不替他挑，
+    # 免得一觉醒来被自动买掉一个 1.2 万的玉髓灯。
+    "auto_supply_buff": True,
     # 水族馆：`名字|价格` 或 `名字|价格|加几个位`（第三段省略 = 1 个）。
     # v1.18.13 从 3 档加到 6 档：后面几档一次加 2~4 个位，价格也成倍往上走。
+    # v1.18.17 再加 3 档终局缸（一次 +5/+6/+8 位）：站长说后期金币溢出，
+    # 这几档就是专门给「钱多到没处花」的人准备的（39 个位要全买 ≈ 300 万）。
     "aquarium_slots": [
         "精致缸|1600", "生态缸|5400", "深海缸|16000",
         "珊瑚宫殿|38000|2", "龙宫别苑|88000|3", "水晶宫|190000|4",
+        "琉璃龙宫|420000|5", "星海神殿|900000|6", "归墟海眼|1800000|8",
     ],
     # 鱼饵：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明
     # 「需要鱼竿」填鱼竿 id 或名称，表示**拥有**那根竿才能买；解锁等级是新号也能用的门槛
@@ -479,8 +528,6 @@ DEFAULTS: dict[str, Any] = {
     # 上钩率解析失败时的兜底值、未列出品质的默认逃脱率
     "hook_rate_fallback": 0.30,
     "default_escape_rate": 0.25,
-    # 水族馆隐藏的「不好惹」判定关键词
-    "hostile_keywords": "鳄,鲨,蛇,鳗,鳝,乌贼,章鱼,食人,水虎,龙鱼,巨齿,利维坦,归墟,古龙,鲸,鮟鱇,电鳗,鳄雀",
     # 物价总开关：全局倍率 + 单条覆盖（鱼名或 id 均可）
     "fish_value_mult": 1.0,
     "fish_value_overrides": "",
@@ -532,6 +579,8 @@ DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
         "rod_defs",
         "bait_defs",
         "item_defs",
+        # 称号表（v1.18.17 的后期金币回收口）：内容表，站长改过的称号不许被升级覆盖
+        "title_defs",
         # 命令别名 / 自定义命令也是「站长自己写的内容」，同样不许被升级覆盖
         "command_aliases",
         "custom_commands",
@@ -552,6 +601,10 @@ CONTENT_TEXT_KEYS: tuple[str, ...] = (
     "variant_defs",
     "weather_defs",
     "easter_egg_defs",
+    # 按钮表（v1.18.17 加）：官方给每个回复场景都补了按钮，老配置里**缺的那些场景**
+    # 必须能自己补进来。按「场景 id」去重，所以站长自己配过的场景一行都不动
+    # （他的排版、样式、文案优先级全都保留），只补他完全没有的场景。
+    "button_defs",
 )
 
 
@@ -613,6 +666,7 @@ DEFAULTS_MERGE_LIST_KEYS: tuple[str, ...] = (
     "codex_bonus_per_rarity",
     "backpack_upgrades",
     "aquarium_slots",
+    "title_defs",
 )
 
 #: 这些键是「,」分隔的数字文本（列表型）：同样按长度补尾巴
@@ -1814,9 +1868,6 @@ def _builtin_defaults() -> dict[str, Any]:
             _LOCATION_TEMPLATE_ONE,
             "内置默认",
         ),
-        "hostile_keywords": _parse_word_list(
-            str(DEFAULTS.get("hostile_keywords") or ""), (), "内置默认"
-        ),
     }
 
 
@@ -2462,11 +2513,6 @@ def _apply_tunable_config(cfg: dict[str, Any]) -> None:
         _cfg_str(cfg, "fish_value_overrides"), "fish_value_overrides"
     )
 
-    HOSTILE_KEYWORDS = _parse_word_list(
-        _cfg_str(cfg, "hostile_keywords"), BUILTIN["hostile_keywords"],
-        "hostile_keywords"
-    )
-
     # 派生表：鱼池权重依赖稀有度权重/价值因子/属性范围，必须重建
     LOCATION_WEIGHTS = _rebuild_location_weights()
 
@@ -2750,7 +2796,30 @@ class FishingPlugin(
         )
         cfg["order_count"] = int(_clamp(_safe_int(cfg["order_count"], 3, 1), 1, 8))
         cfg["order_reward_mult"] = _clamp(
-            _safe_number(cfg["order_reward_mult"], 2.2), 1.0, 10.0
+            _safe_number(cfg["order_reward_mult"], 1.6), 1.0, 10.0
+        )
+        # 订单的动态系数（v1.18.17）：等级成长 + 封顶
+        cfg["order_level_growth"] = _clamp(
+            _safe_number(cfg.get("order_level_growth"), 0.02), 0.0, 1.0
+        )
+        cfg["order_factor_max"] = _clamp(
+            _safe_number(cfg.get("order_factor_max"), 6.0), 1.0, 100.0
+        )
+        # 自动补给开关 / 供奉数值（v1.18.17）
+        cfg["auto_supply_bait"] = _cfg_bool(cfg, "auto_supply_bait", True)
+        cfg["auto_equip_bait"] = _cfg_bool(cfg, "auto_equip_bait", True)
+        cfg["auto_supply_buff"] = _cfg_bool(cfg, "auto_supply_buff", True)
+        cfg["offering_price"] = int(
+            _clamp(_safe_int(cfg.get("offering_price"), 200000, 0), 0, 1_000_000_000)
+        )
+        cfg["offering_hours"] = int(
+            _clamp(_safe_int(cfg.get("offering_hours"), 24, 1), 1, 720)
+        )
+        cfg["offering_income_bonus"] = _clamp(
+            _safe_number(cfg.get("offering_income_bonus"), 0.5), 0.0, 20.0
+        )
+        cfg["offering_luck_bonus"] = _clamp(
+            _safe_number(cfg.get("offering_luck_bonus"), 0.05), 0.0, 5.0
         )
         cfg["order_refresh_min_hours"] = int(
             _clamp(_safe_int(cfg.get("order_refresh_min_hours"), 3, 1), 1, 72)
@@ -2938,6 +3007,9 @@ class FishingPlugin(
         self.backpack_upgrades = _parse_backpack_upgrades(cfg.get("backpack_upgrades"))
         # 让 _backpack_capacity 这种纯函数也能拿到扩容表
         cfg["_backpack_upgrades"] = self.backpack_upgrades
+        # 称号表（v1.18.17）：后期金币回收口，纯炫耀；解析结果按价格升序
+        self.titles = _parse_titles(cfg.get("title_defs"))
+        self.title_by_id = {t["id"]: t for t in self.titles}
 
     def _item_list(self) -> list[str]:
         """道具 id 列表（按单价升序，界面上先看到便宜的）。"""
@@ -3764,6 +3836,33 @@ class FishingPlugin(
                 return word, text[len(word) :]
         return None
 
+    @staticmethod
+    def _command_args(event: AstrMessageEvent) -> list[str]:
+        """从原始消息里取「指令名之后的全部参数」——**不限个数**（v1.18.17）。
+
+        AstrBot 的 ``CommandFilter`` 是「一个形参吃一个 token」的：handler 声明到
+        ``a6``，那么第 7 个及以后的 token 会被**直接丢掉**。于是
+        ``/钓鱼 水族馆 放 1 2 3 4 5`` 只能放进 4 条鱼（站长报的那个「一次最多四条」），
+        ``/钓鱼 卖 1 2 3 4 5 6 7`` 也卖不全。
+
+        这里绕开形参，直接从 ``event.get_message_str()`` 里切：唤醒前缀（``/``）
+        在 waking 阶段已经被 AstrBot 去掉了，所以消息形如 ``钓鱼 水族馆 放 1 2 3``。
+        第一个 token 含「钓鱼」就丢掉它，剩下的就是子命令 + 参数。
+
+        拿不到消息文本时返回空列表，调用方回退到形参（单测直接调 handler 的情况）。
+        """
+        try:
+            text = str(event.get_message_str() or "")
+        except Exception:  # pragma: no cover - 极少数事件没有消息文本
+            return []
+        text = " ".join(text.split())
+        if not text:
+            return []
+        tokens = [t for t in text.split(" ") if t]
+        if tokens and "钓鱼" in tokens[0]:
+            tokens = tokens[1:]
+        return tokens
+
     def _parse_indices(self, spec: str, pool: list[Any]) -> list[int]:
         """把 ``"1 3 5"`` / ``"1-5"`` / ``"全部"`` 解析成 1-based 序号列表。
 
@@ -4029,22 +4128,44 @@ class FishingPlugin(
 
         所有子命令都挂在 /钓鱼 下，只注册 1 个指令名，避免与别的插件撞名。
 
-        **空格容错**：AstrBot 按空格依次填充形参，这里声明到 a6 并把
-        a2~a6 统一交给各子命令用 `_tokens()` 解析，因此
-        `/钓鱼 卖 1 2 3`、`/钓鱼 卖  1   2`、`/钓鱼 卖 1 2 3 4 5 6`
-        都能正确工作。
+        **参数个数不限**（v1.18.17）：参数是从原始消息里现取的，不是 AstrBot 填的
+        形参（形参只有 a1~a6，多出来的会被框架丢掉）。所以
+        `/钓鱼 卖 1 2 3 4 5 6 7 8`、`/钓鱼 水族馆 放 1-20` 这类写法全都认；
+        形参仍然保留，纯粹是给「直接调用 handler」的单测当兜底。
         """
         user_id = str(event.get_sender_id())
-        a1 = (a1 or "").strip()
+        # ---- v1.18.17：参数直接读原始消息，**不再受形参个数限制** ----
+        # AstrBot 的 CommandFilter 按形参个数逐个塞参数，多出来的 token 会被直接丢掉：
+        # `/钓鱼 水族馆 放 1 2 3 4 5` 永远只能放 4 条（站长报的「一次最多四条」就是它）。
+        # 这里从 message_str 里取「指令名之后的全部 token」，想写多少个就写多少个；
+        # 拿不到原始消息时（单测直接调 handler）退回形参 a1~a6，行为与以前一致。
+        raw_args = self._command_args(event)
+        if raw_args:
+            args = raw_args
+        else:
+            args = [
+                str(x).strip()
+                for x in (a1, a2, a3, a4, a5, a6)
+                if str(x or "").strip()
+            ]
+        a1 = args[0] if args else ""
         # ---- 少打空格的容错：/钓鱼 卖1、/钓鱼 帮助2 ----
-        # 把粘连的写法拆成「子命令 + 参数」，并整体后移写回 a2~a6，
+        # 把粘连的写法拆成「子命令 + 参数」，并整体后移写回参数列表，
         # 这样各子命令拿到的参数与正常写法完全一致。
-        # （`/钓鱼 卖1 2` 会被拆成 a1="卖"、a2="1"、a3="2"）
+        # （`/钓鱼 卖1 2` 会被拆成 a1="卖"、参数 ["1", "2"]）
         peeled = self._peel_subcommand(a1)
+        rest = args[1:]
         if peeled:
             a1, glued = peeled
-            a2, a3, a4, a5, a6 = glued, a2 or "", a3 or "", a4 or "", a5 or ""
-        rest = [a2 or "", a3 or "", a4 or "", a5 or "", a6 or ""]
+            rest = [glued] + rest
+        # 各子命令的形参（a2~a6）与 rest 对齐：a2 = 子命令后的第一个参数……
+        # 分派链里不少 handler 直接吃 `a2`（例如 `_cmd_rods(event, a2, after_first)`），
+        # 所以这里必须把「粘连写法拆出来的那一段」也写回去。
+        a2 = rest[0] if len(rest) > 0 else ""
+        a3 = rest[1] if len(rest) > 1 else ""
+        a4 = rest[2] if len(rest) > 2 else ""
+        a5 = rest[3] if len(rest) > 3 else ""
+        a6 = rest[4] if len(rest) > 4 else ""
         key = a1.lower()
         # ---- 命令别名归一化（配置 command_aliases，见 _apply_command_config）----
         # 表里**只有站长新加的别名**：内置写法原样流下去走老分派链，
@@ -4225,7 +4346,18 @@ class FishingPlugin(
                 handler = self._cmd_bait_shop(event, user_id, "买", after_sub)
         elif handler is None and key in ("装备", "换竿", "换鱼竿"):
             # /钓鱼 装备 星辉竿 == /钓鱼 竿 用 星辉竿
+            # v1.18.17：不带名字（`/钓鱼 装备`）= **自动换上最好的竿**（已拥有里
+            # 价值加成最高的那根）—— 按钮没法带名字，得有这么一条无参写法。
             handler = self._cmd_rods(event, user_id, "用", after_sub)
+        elif handler is None and key in ("自动", "自动补给", "auto"):
+            # /钓鱼 自动 锦鲤玉佩 = 手气道具用完自动买 + 自动用；/钓鱼 自动 关 = 关掉
+            handler = self._cmd_auto_supply(event, user_id, after_sub)
+        elif handler is None and key in ("称号", "头衔", "title"):
+            # 称号（v1.18.17 的后期金币回收口）：/钓鱼 称号 [买|戴 <名字>]
+            handler = self._cmd_titles(event, user_id, after_sub)
+        elif handler is None and key in ("供奉", "香火", "上香", "offering"):
+            # 香火供奉：花大钱换 24 小时的挂机产出与手气加成
+            handler = self._cmd_offering(event, user_id)
 
         if handler is None:
             # ---- 自定义命令（配置 custom_commands）----
@@ -4238,7 +4370,8 @@ class FishingPlugin(
                 return
             async for _r in self._say_msg(event, "help.unknown", event.plain_result(
                     f"🤔 不认识「{a1}」这个用法\n"
-                    f"　发 /钓鱼 帮助 1 看全部指令（共 7 页）\n"
+                    f"　发 /钓鱼 帮助 1 看全部指令"
+                    f"（共 {len(self._help_pages())} 页）\n"
                     f"　最常用：/钓鱼 下竿 ｜ /钓鱼 背包 ｜ /钓鱼 卖 ｜ /钓鱼 今日"
                 )):
                 yield _r

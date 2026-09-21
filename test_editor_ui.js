@@ -197,7 +197,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 17, "标签页数量 = 17（12 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
+  check(Object.keys(T.TAB_BY_ID).length === 18, "标签页数量 = 18（13 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个（离线演示数据，与线上 19 个无关）", (T.state.data.locations || []).length);
@@ -304,8 +304,8 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 16,
-    "16 个标签入口都有条目数徽标（12 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
+  check(tabsHtml.split("tab-count").length - 1 === 17,
+    "17 个标签入口都有条目数徽标（13 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     tabsHtml.split("tab-count").length - 1);
   check(tabsHtml.indexOf('data-tab="replies"') > 0, "标签栏里有「💬 回复」入口");
   check(T.TAB_BY_ID.buttons.label.indexOf("原始文本") > 0,
@@ -477,11 +477,11 @@ function runAssertions() {
 
   console.log("\n[8] 保存载荷与存档动作");
   const payload = T.buildPayload();
-  check(["fish", "locations", "baits", "rods", "items", "collectibles", "variants", "weather",
+  check(["fish", "locations", "baits", "rods", "items", "collectibles", "titles", "variants", "weather",
     "numbers", "buttons", "aliases", "custom"]
-    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 12 张表");
+    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 13 张表");
   check(!!payload.autoBackup && payload.autoBackup.dailyHour === 4, "载荷带上自动备份设置");
-  check(Object.keys(payload).length === 14, "载荷字段数 = 14（12 表 + numbers + autoBackup）", Object.keys(payload).length);
+  check(Object.keys(payload).length === 15, "载荷字段数 = 15（13 表 + numbers + autoBackup）", Object.keys(payload).length);
   check(payload.players === undefined, "玩家页的数据不进「内容表」载荷（走独立接口）");
 
   const snapWithNote = T.renderSnapCard({ kind: "manual", note: "改物价前", time: "2026-09-18 18:20", players: 35, size: "131 KB" }, 0);
@@ -533,8 +533,8 @@ function runAssertions() {
    ============================================================================= */
 async function channelHelpers() {
   console.log("\n[12] 数据通道：配置 <-> 表格 的转换");
-  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,buttons,aliases,custom",
-    "12 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
+  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,titles,buttons,aliases,custom",
+    "13 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
   check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
     "fish_defs 是文本表（多行），其余是字符串数组");
   check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
@@ -646,6 +646,46 @@ async function channelHelpers() {
     "全角冒号也认（站长用中文输入法写配置是常态）");
   check(customDef.parse("没有动作") === null && customDef.parse("甲|发送:") === null,
     "缺动作/空内容的行解析成 null");
+
+  /* ---- v1.18.17：称号表（title_defs，后期金币回收口）---- */
+  const titleDef = T.TABLE_DEFS.titles;
+  check(!!titleDef && titleDef.configKey === "title_defs" && titleDef.configType === "list",
+    "称号表写回 title_defs（字符串数组，与 _editor_bridge.CONTENT_TABLES 的口径一致）");
+  const titleRow = titleDef.parse("deep_lord|深海领主|🔱|1200000|海沟以下都归你管");
+  check(titleRow.id === "deep_lord" && titleRow.name === "深海领主" && titleRow.emoji === "🔱"
+    && titleRow.price === 1200000 && titleRow.desc === "海沟以下都归你管",
+    "称号行 5 段解析正确（id|名称|emoji|价格|说明）", JSON.stringify(titleRow));
+  check(titleDef.serialize(titleRow) === "deep_lord|深海领主|🔱|1200000|海沟以下都归你管"
+    && titleDef.serialize(titleRow).split("|").length === 5,
+    "称号行序列化回 5 段（往返不漂）", titleDef.serialize(titleRow));
+  const titleNoDesc = titleDef.parse("deep_lord|深海领主|🔱|1200000");
+  check(titleNoDesc !== null && titleNoDesc.desc === "" && titleNoDesc.price === 1200000,
+    "说明那一段可以省略（省略 = 没有说明，价格照样解析出来）");
+  check(titleDef.parse("deep_lord|深海领主|🔱") === null
+    && titleDef.parse("|深海领主|🔱|1200000|说明") === null
+    && titleDef.parse("deep_lord||🔱|1200000|说明") === null,
+    "缺段 / 缺 id / 缺名称的残缺行解析成 null（保存时不会悄悄改写）");
+  const titleTab = T.TAB_BY_ID.titles;
+  check(!!titleTab && titleTab.keyField === "id" && titleTab.columns.length === 5 &&
+    titleTab.columns.filter(function (c) { return c.valueKey; })[0].key === "price",
+    "「🏷 称号」标签页就位，「价格」是排序/批量改价用的 valueKey 列");
+  check(titleTab.sortOptions.map(function (p) { return p[0]; }).join(",") === "default,name,valueAsc,valueDesc",
+    "称号页的排序只认现成的 sorters（价格两栏走 valueAsc / valueDesc）",
+    titleTab.sortOptions.map(function (p) { return p[0]; }).join(","));
+  const keepSort = T.state.sort, keepTabId = T.state.tab;
+  T.state.tab = "titles";
+  T.state.sort = "valueAsc";
+  const byPrice = T.visibleRows(titleTab).map(function (it) { return it.row.price; });
+  T.state.sort = keepSort;
+  T.state.tab = keepTabId;
+  check(byPrice.length === 6 && byPrice[0] === 0 && byPrice[5] === 5000000,
+    "按价格排序真的读到了 price（valueKey 列配上了，不是读空的 value 字段）", byPrice.join(" < "));
+  const titleNew = titleTab.makeRow();
+  check(titleNew.id.indexOf("new_title_") === 0 && titleNew.price === 10000,
+    "「新增一行」给的是 new_title_xxx + 价格 10000", JSON.stringify(titleNew));
+  check((T.state.data.titles || []).length === 6,
+    "离线演示也带 6 个称号样例（首屏就能看到长什么样）", (T.state.data.titles || []).length);
+
   check(T.canonicalCommands().length === 29 && T.canonicalCommands().indexOf("背包") >= 0
     && T.canonicalCommands().indexOf("道具") >= 0 && T.canonicalCommands().indexOf("鱼饵") >= 0,
     "页面知道 29 个规范子命令（v1.18.13 商店拆成三家 + 买；离线用演示清单，在线以插件回写的为准）",
@@ -681,8 +721,8 @@ async function channelHelpers() {
 
   // 序列化
   const serialized = T.serializeContentTables();
-  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,button_defs,command_aliases,custom_commands",
-    "序列化输出 12 张配置表", Object.keys(serialized).join(","));
+  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,title_defs,button_defs,command_aliases,custom_commands",
+    "序列化输出 13 张配置表", Object.keys(serialized).join(","));
   check(typeof serialized.fish_defs === "string"
     && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
     "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",
@@ -725,14 +765,14 @@ async function channelHelpers() {
     "拿不到白名单时不擅自过滤（退回全发，由插件侧最终把关）");
   T.state.data.numbers = before;
 
-  // 文本行（狠角色关键词表）：不能当数字处理，也不能被判「需要是数字」
-  const kwRow = { key: "hostile_keywords", label: "狠角色关键词", value: "", unit: "逗号分隔", text: true };
+  // 文本行（逗号/竖线分隔的名单）：不能当数字处理，也不能被判「需要是数字」
+  const kwRow = { key: "fish_value_overrides", label: "单条鱼改价", value: "", unit: "鱼:id=价", text: true };
   T.state.data.numbers = [kwRow];
-  const kwPayload = T.numberValuesFromPage({ numbers_editable: ["hostile_keywords"] });
+  const kwPayload = T.numberValuesFromPage({ numbers_editable: ["fish_value_overrides"] });
   check(Object.keys(kwPayload).length === 0,
-    "文本行留空 = 不提交（插件侧「留空」等于用内置默认名单）", JSON.stringify(kwPayload));
-  kwRow.value = "鳄,鲨,章鱼";
-  check(T.numberValuesFromPage({ numbers_editable: ["hostile_keywords"] }).hostile_keywords === "鳄,鲨,章鱼",
+    "文本行留空 = 不提交（插件侧「留空」等于不改动这一项）", JSON.stringify(kwPayload));
+  kwRow.value = "锦鲤:3000,鲲:25000";
+  check(T.numberValuesFromPage({ numbers_editable: ["fish_value_overrides"] }).fish_value_overrides === "锦鲤:3000,鲲:25000",
     "文本行提交的是字符串，不是 NaN/0");
   check(Object.keys(T.validateRow(T.TAB_BY_ID.numbers, kwRow)).length === 0,
     "文本行不会被判「需要是数字」", JSON.stringify(T.validateRow(T.TAB_BY_ID.numbers, kwRow)));
@@ -1351,9 +1391,17 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 113, "配置 schema 里是 113 个键", schemaKeys.length);
+  check(schemaKeys.length === 122, "配置 schema 里是 122 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
+  check(pageKeys.indexOf("hostile_keywords") < 0,
+    "NUMBER_KEYS 里已经没有 hostile_keywords（v1.18.17 狠角色那套设定整体删除）");
+  const newKeys = ["order_level_growth", "order_factor_max", "auto_supply_bait", "auto_equip_bait",
+    "auto_supply_buff", "title_defs", "offering_price", "offering_hours",
+    "offering_income_bonus", "offering_luck_bonus"];
+  const missingNew = newKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
+  check(missingNew.length === 0, "v1.18.17 新增的 10 个键全都登记在 NUMBER_KEYS 里",
+    missingNew.join(",") || "10/10 都在");
   const missingPage = schemaKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
   const extraPage = pageKeys.filter(function (k) { return schemaKeys.indexOf(k) < 0; });
   check(missingPage.length === 0, "schema 里的键页面上全部登记了（没有遗漏）",
@@ -1369,9 +1417,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 113 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 113,
-    "113 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 122 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 122,
+    "122 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1379,18 +1427,18 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "113/113 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "122/122 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/113 条 ≥30 字");
+    longDoc.length + "/122 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
     fish_defs: "fish", rod_defs: "rods", bait_defs: "baits", item_defs: "items",
     location_defs: "locations", collectible_defs: "collectibles", variant_defs: "variants",
-    weather_defs: "weather", easter_egg_defs: "easter_eggs",
+    weather_defs: "weather", easter_egg_defs: "easter_eggs", title_defs: "titles",
     button_defs: "replies", text_overrides: "replies", button_layout: "replies",
     button_style_mode: "replies", button_default_style: "replies", button_empty_scenes: "replies",
     command_aliases: "aliases", custom_commands: "custom",
@@ -1401,8 +1449,8 @@ async function configKeysCoverage() {
   const wrongJump = Object.keys(expectTab).filter(function (k) {
     return cov.entries[k] !== ("tab:" + expectTab[k]);
   });
-  check(wrongJump.length === 0, "23 个「在别的页改」的键都指向正确的标签页（点得到）",
-    wrongJump.length ? wrongJump.map(function (k) { return k + "=" + cov.entries[k]; }).join(" ") : "23/23 正确");
+  check(wrongJump.length === 0, "24 个「在别的页改」的键都指向正确的标签页（点得到）",
+    wrongJump.length ? wrongJump.map(function (k) { return k + "=" + cov.entries[k]; }).join(" ") : "24/24 正确");
   check(T.keyEntryLabel("tab:fish").indexOf("鱼池") > 0 &&
     T.keyEntryLabel("tab:snapshots").indexOf("存档") > 0 &&
     T.keyEntryLabel("panel").indexOf("只读") > 0,
@@ -1419,12 +1467,12 @@ async function configKeysCoverage() {
     "backup_export_file,backup_import_file,data_action,data_confirm,data_status,data_target,editor_status",
     "插件面板只读的键正好是这 7 个（Python 侧再放开白名单时这里跟着改）", panelKeys.join(","));
 
-  /* 数值页：113 个键铺成 113 行，入口行给跳转按钮、只读行不给输入框 */
+  /* 数值页：122 个键铺成 122 行，入口行给跳转按钮、只读行不给输入框 */
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 113 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 113 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 122 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 122 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
@@ -1468,7 +1516,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 113, "清空搜索词 -> 又看到全部 113 个键");
+  check(T.keysFilteredRows().length === 122, "清空搜索词 -> 又看到全部 122 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -1511,9 +1559,20 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 113 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 113 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 122 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 122 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
+  const noDemo = T.NUMBER_KEYS.filter(function (item) {
+    return T.DEMO_NUMBER_VALUES[item[0]] === undefined;
+  }).map(function (item) { return item[0]; });
+  check(noDemo.length === 0, "演示值表覆盖每一个键（不会出现「这行是空的」）",
+    noDemo.join(",") || "122/122 都有演示值");
+  const staleDemo = ["order_reward_mult", "pond_income_cap_hours", "aquarium_slots", "button_defs",
+    "command_aliases"].concat(newKeys).filter(function (k) {
+    return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) !== JSON.stringify(schema[k].default);
+  });
+  check(staleDemo.length === 0, "刷新过的 5 个 + 新增的 10 个演示值 == _conf_schema.json 的默认值",
+    staleDemo.join(",") || "15/15 与 schema 一致");
   check(T.DEMO_NUMBER_VALUES.stamina_max === 20 && T.DEMO_NUMBER_VALUES.level_xp_ratio === 1.08 &&
     T.DEMO_NUMBER_VALUES.quality_myth_chance === 0.0025,
     "演示值就是 _conf_schema.json 里的真实默认值（体力 20 / 曲线 1.08 / 洗髓 0.0025）",

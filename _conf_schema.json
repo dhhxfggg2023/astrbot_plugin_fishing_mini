@@ -16,6 +16,12 @@
     "type": "string",
     "default": "auto"
   },
+  "user_edited_keys": {
+    "invisible": true,
+    "description": "站长自己改过的配置键（插件自动记录）。升级时这些键**不会被新版默认值覆盖**，免得每次更新都要重新改一遍；想恢复出厂值就在编辑器里手动改回去或选 defaults_sync_mode=all",
+    "type": "list",
+    "default": []
+  },
   "initial_gold": {
     "invisible": true,
     "description": "新玩家初始金币",
@@ -27,6 +33,74 @@
     "description": "每次抛竿的固定钓费（默认 0：空钩免费下竿，花钱只在买鱼饵）",
     "type": "int",
     "default": 0
+  },
+  "fish_defs": {
+    "invisible": true,
+    "description": "鱼池定义（一行一条鱼）：id|名称|稀有度|基准价|分布|说明。分布 = 钓点:权重，逗号分隔（支持中文钓点名，* = 所有钓点），权重越高越常见；稀有度填 常见/少见/稀有/传说/神话；说明可省略。留空 = 用内置鱼池。注意：改这里会整体接管鱼池（稀有度权重 rarity_spawn_weights 仍会乘上去），单条改价也可以继续用 fish_value_overrides。",
+    "type": "text",
+    "default": "white_bait|白条|常见|6|novice:1.1104|细长的小鱼，抢饵最积极\nsmall_crucian|小鲫鱼|常见|4|novice:0.2143|最常见的鱼，脾气很好\nriver_shrimp|河虾|常见|21|night:0.8785|半透明的小家伙，弹跳力惊人\nmud_snail|田螺|常见|5|novice:1.1482|慢吞吞地贴在钩上，懒得挣扎\nloach|泥鳅|常见|5|novice:0.9217,night:1.0711|滑不溜手，抓它得有点耐心\ncrucian|河鲫|常见|5|novice:0.2143|银光闪闪，成群结队\ncarp|鲤鱼|少见|14|novice:1.0111,lake:0.9595|力气不小，尾巴拍水很响\ntopmouth_culter|翘嘴鲌|常见|8|novice:0.2143|喜欢在水面追着小鱼跑\ngrass_carp|草鱼|常见|10|lake:1.0102|吃草长大的，肉厚实\ncatfish|鲶鱼|少见|24|lake:0.9697,night:2.9723|躲在淤泥里，胡须很灵敏\nsnakehead|黑鱼|稀有|63|reed:1.0183|水中恶霸，牙齿很锋利\nriver_crab|河蟹|少见|30|reed:1.0804|横着走，钳子夹人很疼\nbass|鳜鱼|稀有|69|lake:0.9709|肉食性，专挑小鱼下手\nbighead_carp|鳙鱼|少见|28|lake:1.0216|脑袋特别大，游得慢\nsoftshell|甲鱼|稀有|83|reed:0.8659|咬住就不松口，小心取钩\neel|河鳗|少见|51|lake:0.4348|细长有力，缠线一把好手\nmandarin_fish|鳜花鱼|稀有|85|lake:0.7368|花纹华美，肉嫩刺少\ngiant_salamander|娃娃鱼|稀有|40|bamboo:0.8704|叫声像婴儿，脾气却很大\npearl_shell|珍珠贝|稀有|108|sea:0.7368|壳里偶尔藏着好东西\nseahorse|海马|稀有|119|dock:0.9175|游泳姿势相当优雅\ncuttlefish|墨鱼|稀有|136|sea:0.7368|被抓住就喷你一脸墨\nsturgeon|中华鲟|稀有|170|sea:0.7368|活化石级别的大家伙\nkoi|锦鲤|稀有|27|novice:1.1311|据说见到它会有好运气\ngolden_turtle|金龟|传说|363|swamp:0.5|背甲泛着金光，慢吞吞地划水\ndiscus|七彩神仙鱼|传说|431|swamp:0.5|水族箱里的活宝石\nmoon_jellyfish|月华水母|传说|500|swamp:0.5|半透明伞盖泛着淡蓝月光\narowana|金龙鱼|传说|624|sea:0.5|鳞片如金甲，游动雍容华贵\ndeep_anglerfish|深海鮟鱇|神话|907|abyss:1|额前挂着一盏幽蓝小灯\ndragon_koi|龙鲤|神话|1247|swamp:1|传说跃过龙门就会化龙\nabyss_whale|深渊鲸|神话|1701|abyss:1|深海巨影，一次摆尾掀起暗流\nkun|鲲|神话|2552|abyss:1|北冥有鱼，其名为鲲\nboot_carp|靴子鲤|少见|60|novice:0.4348|有人把破靴子扔进池塘，它就在里面安了家\nbamboo_shrimp|竹节虾|稀有|320|bamboo:0.7368|一节一节的花纹，藏在竹影下面\nlantern_fish|灯笼鱼|少见|61|night:1.0669|成群挂在堤坝边，像一串小灯笼\nghost_jelly|幽灵水母|传说|900|swamp:0.5|半透明得像一缕烟，雾天才会出现\nloach_king|泥鳅王|稀有|204|swamp:1.1323|传说泥鳅活过百年就会长出龙须\npearl_lume|夜明珠贝|传说|1550|sea:0.5|壳缝里透出微光，月夜里最亮\ngolden_hook|金钩鱼|神话|3400|glacier:1|嘴里叼着一枚金色鱼钩——上一任主人的吧\nnovice_crucian|鲫鱼|常见|5|novice:0.9604|池塘里最老实的小家伙\nnovice_stone_moroko|麦穗鱼|常见|5|novice:1.0003,reed:0.8926|身侧一道黑线爱啄钩\nnovice_shrimp|小河虾|常见|5|novice:0.9274|透明得能看见肚里的沙\nnovice_bitterling|鳑鲏|常见|5|novice:0.8971|阳光下闪出彩虹般的鳞\nnovice_yellow_catfish|黄颡鱼|少见|15|novice:1.1068,reed:0.9508|背鳍竖起来扎手的黄胡子\nnovice_mussel|河蚌|少见|12|novice:0.871,lake:1.096|壳缝里吐出一串小气泡\nnovice_turtle|巴西龟|少见|15|novice:1.1164|被人放生后长满了绿藻\nbamboo_chub|溪哥|常见|7|bamboo:1.1251|鳞片闪着溪水的亮光\nbamboo_horsemouth|马口鱼|常见|6|bamboo:0.9244|嘴大贪吃见饵就往前冲\nbamboo_river_snail|山坑螺|常见|6|bamboo:0.9037|吸在石头上扣都扣不动\nbamboo_goby|虾虎鱼|常见|5|bamboo:0.8515|趴在卵石上一动不动\nbamboo_barb|小鲃|常见|5|bamboo:0.8572|竹影下成群游来游去\nbamboo_stream_crab|溪蟹|常见|6|bamboo:0.9472|举着小钳子横着走路\nbamboo_labiobarbus|光唇鱼|少见|17|bamboo:1.0999|嘴唇厚实最爱啃青苔\nbamboo_spiny_eel|刺鳅|少见|14|bamboo:0.8941|浑身细刺钻进石缝里\nbamboo_corbicula|河蚬|少见|15|bamboo:0.9115|沙底上一排小小的纹路\nbamboo_spiny_frog|棘胸蛙|少见|17|bamboo:1.0582|蹲在湿石上鼓着腮帮\nbamboo_peach_jellyfish|桃花水母|稀有|33|bamboo:0.8824|水中漂浮的淡粉色小伞\ncanal_tilapia|罗非鱼|常见|6|canal:0.8545|污水里也活得膘肥体壮\ncanal_crayfish|小龙虾|常见|7|canal:0.9475|举着红钳从石缝里爬出\ncanal_old_boot|破靴子|常见|7|canal:0.9919|靴筒里还藏着两只小虾\ncanal_soda_can|易拉罐|常见|7|canal:0.9709|罐口卡着一只小螃蟹\ncanal_mosquitofish|食蚊鱼|常见|7|canal:0.9094|水面上一群指头长的小鱼\ncanal_mud_carp|鲮鱼|常见|6|canal:0.8989|贴着河底慢慢啃食青泥\ncanal_walking_catfish|塘鲺|少见|19|canal:1.0456|能在湿泥里扭着爬行\ncanal_mitten_crab|中华绒螯蟹|少见|18|canal:0.9667|毛茸茸的钳子夹住鱼线\ncanal_ricefield_eel|黄鳝|少见|19|canal:1.0288,swamp:0.9067|从石阶缝里滑出半条身子\ncanal_silver_carp|鲢鱼|少见|18|canal:0.9817|受惊时跃出水面半米高\ncanal_alligator_snapper|鳄龟|稀有|44|canal:1.0333|咬合力惊人的放生怪物\ncanal_chinese_sucker|胭脂鱼|稀有|39|canal:0.9121|背鳍如帆通体泛着红光\nlake_bream|鳊鱼|常见|12|lake:1.1404|侧扁的身子像一片银叶\nlake_icefish|银鱼|常见|10|lake:1.0276|几乎透明的细软小鱼\nlake_shrimp|湖虾|常见|9|lake:0.9028|长须在水草间轻轻摆动\nlake_whitefish|翘嘴白鱼|常见|11|lake:1.1068,night:0.973|追着小鱼把水面炸开花\nlake_black_carp|青鱼|稀有|61|lake:0.9967|力大得能把竿拉成弓\nlake_giant_softshell|百年老鳖|稀有|54|lake:0.8677|背上刻满岁月的旧纹\nreed_frog|青蛙|常见|14|reed:1.132|扑通一声跳进芦苇丛\nreed_water_snake|水蛇|常见|11|reed:0.8755,swamp:0.3239|贴着水面划出长长波纹\nreed_reed_shrimp|芦苇虾|常见|12|reed:0.9343|攀在苇秆上随波摇晃\nreed_river_snail|螺蛳|常见|13|reed:1.0357|壳上粘着几缕新鲜水草\nreed_leech|蚂蟥|少见|28|reed:0.8797|吸在腿上怎么拽都不松\nreed_freshwater_prawn|青虾|少见|29|reed:0.9154|弹尾一缩窜出半米远\nreed_pearl_mussel|珍珠蚌|稀有|66|reed:0.8926|壳里含着颗温润的珠子\nsea_hairtail|带鱼|常见|16|sea:1.1005|银亮长身像一把快刀\nsea_yellow_croaker|黄鱼|常见|16|sea:1.1314|出水时咕咕叫个不停\nsea_swimming_crab|梭子蟹|常见|13|sea:0.9187|两把尖钳护着满壳蟹黄\nsea_white_shrimp|白虾|常见|15|sea:1.048|一网拉上来活蹦乱跳\nsea_pomfret|鲳鱼|少见|38|sea:1.0159|扁得像面镜子闪着光\nsea_squid|鱿鱼|少见|32|sea:0.8524|喷出一团墨汁就逃走\nsea_spanish_mackerel|鲅鱼|少见|40|sea:1.0945|银蓝背上满是花纹\nsea_jellyfish|海蜇|少见|32|sea:0.8575|半透明地一伸又一缩\nsea_red_seabream|真鲷|稀有|77|sea:0.8947|通体粉红像海里的樱花\nsea_lobster|大龙虾|稀有|97|sea:1.1476|长须一弹溅起一片水花\nsea_tuna|金枪鱼|稀有|79|sea:0.9202|肌肉绷紧拖着鱼线狂奔\nsea_oarfish|皇带鱼|传说|186|sea:0.8584|银带般的身子长得望不到头\ndock_seabass|鲈鱼|常见|19|dock:1.0492|在桥墩阴影里伏击小鱼\ndock_old_tire|旧轮胎|常见|17|dock:0.9451|胎壁里住着一窝小蟹\ndock_shore_crab|小螃蟹|常见|17|dock:0.9304|举着钳子卡住鱼钩不放\ndock_sardine|沙丁鱼|常见|17|dock:0.9475|成群绕着木桩打转\ndock_eel|鳗鱼|少见|51|dock:1.081|缠住鱼线怎么都解不开\ndock_octopus|章鱼|少见|49|dock:1.0231|八条腕抱着鱼饵不撒手\ndock_starfish|海星|少见|54|dock:1.1398|五只角慢慢翻过木桩\ndock_barnacle|藤壶|少见|47|dock:0.9796|密密麻麻糊满整块船板\ndock_black_seabream|黑鲷|稀有|98|dock:0.8827|黑色鳍边一收就钻底\ndock_stonefish|石头鱼|稀有|100|dock:0.9031|装作石块等人踩上去\ndock_megalodon|巨齿鲨|传说|284|dock:1.0339|旧码头外掀起三米巨浪\nnight_opah|月鱼|少见|64|night:1.0534|鳞片映着月色泛出红光\nnight_glow_jellyfish|夜光水母|少见|64|night:1.0561|蓝光一闪一闪浮上来\nnight_giant_catfish|巨型鲶鱼|稀有|143|night:1.0207|拖得鱼竿弯进水里\nnight_moonlit_eel|银月鳗|稀有|129|night:0.9079|银色身子像一道月光\nnight_ghost_lanternfish|幽灵灯笼鱼|稀有|160|night:1.1482|幽绿的光在深处熄灭\nnight_glow_shark|夜光鲨|稀有|129|night:0.9049|背鳍划开墨色的水面\nnight_white_dragon_fish|白龙鱼|传说|339|night:0.9595|月光里跃出一条白影\nmangrove_mudskipper|弹涂鱼|常见|24|mangrove:0.9076|用胸鳍在泥滩上蹦跳\nmangrove_fiddler_crab|招潮蟹|常见|29|mangrove:1.1173|举着一只大钳来回招手\nmangrove_oyster|牡蛎|常见|25|mangrove:0.9346|牢牢粘在红树根上\nmangrove_baby_shark|幼鲨|少见|78|mangrove:1.1428|在浅湾里练习捕猎\nmangrove_mud_snail|泥螺|少见|75|mangrove:1.0948|拖着黏液在泥面爬行\nmangrove_prawn|基围虾|少见|75|mangrove:1.1011|在树根之间弹跳逃窜\nmangrove_mud_crab|青蟹|少见|64|mangrove:0.928|青壳大钳夹得人发麻\nmangrove_horseshoe_crab|中华鲎|稀有|177|mangrove:1.1203|蓝血甲壳像一顶小钢盔\nmangrove_saltwater_crocodile|湾鳄|稀有|138|mangrove:0.8542|浮木般的背脊缓缓移动\nmangrove_giant_python|巨蟒|稀有|157|mangrove:0.9838|从树根间垂下半个身子\nmangrove_dugong|儒艮|稀有|177|mangrove:1.1239|笨拙地抱着水草啃食\nmangrove_flood_dragon|蛟龙|传说|359|mangrove:0.8944|潮水翻涌时探出长角\nswamp_marsh_shrimp|沼虾|常见|32|swamp:0.9847|雾气里挥着细长的钳\nswamp_water_snail|水蜗牛|常见|30|swamp:0.9037|背着壳在浮叶上爬\nswamp_newt|蝾螈|常见|29|swamp:0.8635|橙腹的小东西扭着尾巴\nswamp_marsh_turtle|沼泽龟|少见|74|swamp:0.8581|壳上长满绿毛像块石头\nswamp_toad|蟾蜍|少见|91|swamp:1.0813|鼓着喉咙发出低哑叫声\nswamp_alligator_gar|鳄雀鳝|稀有|221|swamp:1.1428|满口尖牙咬得鱼线发白\nswamp_giant_leech|巨型水蛭|稀有|184|swamp:0.9325|黑亮的身子缠上小腿\nswamp_nine_eyed_fish|九目怪鱼|传说|464|swamp:0.9424|九只眼睛同时转向你\nswamp_ghost_catfish|幽冥巨鲶|传说|517|swamp:1.0615|雾里传来低沉的吞咽声\ncave_blindfish|盲鱼|常见|40|cave:0.9475|没有眼睛也能找到饵\ncave_cave_shrimp|洞穴虾|常见|38|cave:0.9016|通体雪白在暗水里漂\ncave_albino_tadpole|白化蝌蚪|常见|45|cave:1.0747|苍白的小尾巴摆动不停\ncave_cave_snail|洞穴螺|少见|99|cave:0.9001|壳薄得能看见里面的肉\ncave_albino_catfish|白化鲶|少见|119|cave:1.1059|白色长须在黑暗里摸索\ncave_blind_eel|盲眼鳗|少见|103|cave:0.9472|顺着暗流无声地滑过\ncave_olm|洞螈|稀有|230|cave:0.9094|粉白的小龙趴在石上\ncave_albino_giant_salamander|白化巨鲵|稀有|221|cave:0.8695|巨大白影贴着河底移动\ncave_stone_spirit_fish|石灵鱼|稀有|262|cave:1.0498|鳞片像会呼吸的钟乳石\ncave_glow_jellyfish|幽光水母|稀有|238|cave:0.9418|幽蓝冷光点亮整条暗河\ncave_blind_white_dragon|盲眼白龙|传说|608|cave:0.967|无眼的巨首擦过岩壁\ncave_earthcore_sturgeon|地心鲟|传说|591|cave:0.9364|骨板厚重如远古铠甲\nruins_grouper|石斑鱼|常见|49|ruins:0.9832|斑驳的身影守在船舷边\nruins_clownfish|小丑鱼|常见|55|ruins:1.099|在海葵触手间钻来钻去\nruins_sea_turtle|海龟|少见|121|ruins:0.9235|慢悠悠绕过断裂的桅杆\nruins_lionfish|狮子鱼|少见|131|ruins:1.0123,trench:0.9235|张开满身毒鳍缓缓逼近\nruins_sea_urchin|海胆|少见|138|ruins:1.0717|黑刺扎进手套里发麻\nruins_wreck_crab|沉船蟹|少见|125|ruins:0.955|从锈蚀的舱门里爬出\nruins_treasure_chest_fish|宝箱鱼|稀有|336|ruins:1.1326|鳞片像铜锁闪着暗光\nruins_giant_grouper|巨型石斑|稀有|336|ruins:1.1308|一张嘴能吞下整条鱼\nruins_rusty_swordfish|锈剑鱼|稀有|333|ruins:1.1209|长吻上缠着旧船的铁锈\nruins_pearl_king_clam|珍珠王贝|稀有|328|ruins:1.1032|壳里滚出拳头大的珍珠\nruins_ghost_shark|幽灵鲨|传说|847|ruins:1.1425|半透明的影子穿过船骸\nruins_sunken_leviathan|沉船巨鲲|传说|754|ruins:1.006|船体震动它正从下方经过\nabyss_deep_sea_shrimp|深海虾|常见|55|abyss:0.892|苍白细腿在泥底摸索\nabyss_deep_sea_crab|深海蟹|常见|67|abyss:1.1029|盲眼长腿抱着一块腐肉\nabyss_deep_sea_eel|深海鳗|少见|141|abyss:0.8785|张开大口等着一切落下\nabyss_sail_jellyfish|帆水母|少见|162|abyss:1.0225|像一片蓝色小帆漂过去\nabyss_deep_octopus|深海章鱼|少见|163|abyss:1.0288|吸盘在舷边留下圆痕\nabyss_anglerfish|鮟鱇鱼|稀有|405|abyss:1.1122|头顶小灯照出满口尖牙\nabyss_giant_squid|巨型乌贼|稀有|328|abyss:0.8839|触腕上密布着倒钩\nabyss_vampire_squid|吸血乌贼|稀有|343|abyss:0.9274|披着黑红斗篷缓缓飘过\nabyss_dragonfish|深海龙鱼|稀有|386|abyss:1.0549|獠牙长到合不上嘴\nabyss_colossal_squid|大王酸浆鱿|传说|930|abyss:1.0144|眼球比人头还大的家伙\nabyss_megamouth_shark|巨口鲨|传说|811|abyss:0.8731|巨口张开像一张大网\nabyss_leviathan|利维坦|神话|1921|abyss:0.916|海沟深处传来远古咆哮\ntrench_amphipod|端足虫|常见|67|trench:0.8944|指甲盖大的白虫翻着泥\ntrench_ghost_shrimp|幽灵虾|常见|69|trench:0.9199|半透明的影子掠过探照灯\ntrench_sea_pig|海猪|少见|203|trench:1.0558|粉胖的身子用细腿走路\ntrench_glass_sponge|玻璃海绵|少见|203|trench:1.0528|骨架像一件透明工艺品\ntrench_sixgill_shark|六鳃鲨|稀有|460|trench:1.033|远古的轮廓从黑暗中浮出\ntrench_ghost_octopus|幽灵蛸|稀有|417|trench:0.9265|深红斗篷在无光处张开\ntrench_gulper_eel|巨口鳗|稀有|394|trench:0.8698|能把嘴张得比身体还大\ntrench_spider_crab|巨蛛蟹|传说|1212|trench:1.0933|长腿跨过整个探测窗口\ntrench_dark_sea_serpent|无光海蛇|传说|1137|trench:1.0198|黑暗中只有鳞片在反光\ntrench_thousand_eye_fish|万眼鱼|传说|1267|trench:1.1464|每只眼睛都盯着不同方向\ntrench_guixu|归墟|神话|2477|trench:0.9763|万水归处连光都无法逃出\nglacier_cod|鳕鱼|常见|91|glacier:0.9946|冰凉水里肉质格外紧实\nglacier_ice_shrimp|冰虾|常见|82|glacier:0.886|在冰洞下闪着细碎的光\nglacier_arctic_char|冰鲑|少见|231|glacier:0.9643|红腹在冰下格外醒目\nglacier_ice_snail|冰螺|少见|263|glacier:1.1107|壳上结着一层薄薄的冰\nglacier_snow_crab|雪蟹|少见|261|glacier:1.102|白壳长腿在冰底爬行\nglacier_arctic_sturgeon|极地鳇|稀有|571|glacier:1.0405|破冰而出掀起大片水花\nglacier_ice_jellyfish|冰晶水母|稀有|571|glacier:1.0405|冻成晶体的伞盖仍在动\nglacier_ice_turtle|千年冰龟|稀有|603|glacier:1.1026|龟壳冻成了半透明的冰\nglacier_arctic_seal|北极海豹|传说|1530|glacier:1.1218|圆滚滚的家伙抢走鱼饵\nglacier_frozen_whale|冰封巨鲸|传说|1263|glacier:0.9097|冰层下传来悠长的鲸歌\nglacier_cod_king|极光鳕王|传说|1476|glacier:1.0789|鳞片映出整片绿色天光\nglacier_glacier_heart|冰川之心|神话|2762|glacier:0.8743|冰下传来缓慢的搏动声\naurora_aurora_shrimp|极光虾|常见|125|aurora:1.0891|壳上流转着淡淡的绿光\naurora_aurora_cod|极光鳕|少见|320|aurora:1.0735|在光幕下游成一条长线\naurora_stardust_jellyfish|星尘水母|少见|281|aurora:0.9328|触须上落满细小的光点\naurora_crystal_crab|冰晶蟹|少见|295|aurora:0.9826|钳子上凝着蓝白的霜花\naurora_aurora_salmon|极光鲑|稀有|692|aurora:1.0003|逆着光瀑向上游动\naurora_starlight_eel|星辉鳗|稀有|635|aurora:0.9103|身上流转着银河般的纹\naurora_light_pillar_fish|光柱鱼|稀有|669|aurora:0.9643|把极光折成一根根光柱\naurora_sky_whale|天穹巨鲸|传说|1859|aurora:1.0822|影子投在整片极光之上\naurora_aurora_dragonfish|极光龙鱼|传说|1917|aurora:1.1188|鳞片把整片天幕照得发亮\naurora_star_orbit_jellyfish|星轨水母|传说|1941|aurora:1.1341|伞盖旋转如一片星轨\naurora_eternal_night_sturgeon|永夜冰鲟|传说|1829|aurora:1.063|骨板下压着整片永夜\naurora_aurora_primordial_dragon|极光古龙|神话|4257|aurora:1.0942|光幕裂开它缓缓垂下头\nredfin|赤眼鳟|常见|5|novice:0.7|眼睛红红的，喜欢顶水游\npond_snail|塘螺|常见|4|novice:0.7|壳上裹着一层滑溜溜的苔\nstone_carp|石斑吻鰕|常见|5|bamboo:0.7|贴在石头上啃青苔\nbamboo_shrimp2|青虾|少见|18|bamboo:0.7|通体透明，夜里会发一点青\ncanal_guppy|孔雀鱼|常见|7|canal:0.7|尾鳍颜色比运河水还鲜艳\ncanal_eel|运河黄鳝|少见|21|canal:0.7|从水泥缝里钻出来的老住户\nsilver_carp|鲢鱼|常见|10|lake:0.7|成群游动，尾巴一摆一片白\nlake_perch|湖鲈|少见|24|lake:0.7|追着小鱼跑，咬钩很凶\nreed_loach|芦苇鳅|常见|12|reed:0.7|藏在苇根下，身上带花纹\nsea_sardine|沙丁鱼|常见|15|sea:0.7|密密麻麻挤成一片银云\nsea_bream|海鲷|少见|40|sea:0.7|牙口好，能把钩咬断\ndock_goby|虾虎鱼|常见|16|dock:0.7|趴在旧船底一动不动\nnight_moth_fish|夜蛾鱼|常见|24|night:0.7|被灯光引来，围着堤坝转\nnight_ray|月鳐|传说|317|night:0.7|在月光下像一片会飞的黑影\nmangrove_crab|招潮蟹|少见|72|mangrove:0.7|举着一只特别大的钳子\nswamp_leech|水蛭|常见|36|swamp:0.7|黏糊糊地挂在钩上\nswamp_eel|沼泽电鳗|传说|520|swamp:0.7|摸一下能麻半天\ncave_blind_shrimp|盲虾|常见|38|cave:0.7|眼睛退化了，全靠触须\ncave_whitefish|白化鳅|少见|109|cave:0.7|通体雪白，怕光\nruins_porgy|遗迹鲷|常见|55|ruins:0.7|在锈铁皮之间穿来穿去\nruins_lobster|船蛆虾|少见|136|ruins:0.7|住在烂木头里，钳子很硬\nabyss_snailfish|深渊狮子鱼|稀有|342|abyss:0.7|半透明的身体里有微光\nabyss_vampire|吸血乌贼|传说|978|abyss:0.7|张开像一把黑伞\ntrench_grenadier|深渊鼠尾鳕|稀有|418|trench:0.7|尾巴细得像鞭子\nglacier_icefish|冰鱼|常见|95|glacier:0.7|血是透明的，贴着冰面游\nglacier_char|北极红点鲑|传说|1355|glacier:0.7|身上洒满红色小点\naurora_crystal_fish|极光晶鱼|稀有|748|aurora:0.7|鳞片折出的光一直在变色\naurora_ghost_whale|极光幽灵鲸|神话|3607|aurora:0.7|游过时整片冰面都亮了一下\nstarfall_silver_crucian|陨湖银鲫|常见|136|starfall:0.9628|鳞片里嵌着洗不掉的星砂\nstarfall_stardust_goby|星屑虾虎|少见|348|starfall:0.9451|趴在陨石坑边捡碎屑吃\nstarfall_glow_loach|夜光泥鳅|少见|395|starfall:1.0876|受惊时整条泛起淡蓝色的光\nstarfall_iron_catfish|陨铁鲶|少见|391|starfall:1.0759|骨头里像掺了铁，沉得拖不动\nstarfall_meteor_eel|流星鳗|稀有|789|starfall:0.9280|划过水面时留下一道白痕\nstarfall_meteor_grouper|陨石斑|稀有|924|starfall:1.1023|身上的斑点像被砸出来的坑\nstarfall_galaxy_tetra|银河灯鱼|稀有|865|starfall:1.0267|成群游动时像一条旋转的星河\nstarfall_starcore_koi|星核锦鲤|传说|1969|starfall:0.9262|胸口一团光，据说是星核\nstarfall_comet_marlin|彗尾旗鱼|传说|2205|starfall:1.0486|冲刺时拖着几十米长的光尾\nstarfall_fallen_whaleshark|陨落鲸鲨|传说|1947|starfall:0.9151|背上嵌着一整块陨石\nstarfall_stardust_medusa|碎星水母|传说|2078|starfall:0.9826|伞下悬着一片碎掉的星光\nstarfall_meteor_roc|天陨鹏鱼|神话|4457|starfall:0.9250|展鳍如翼，从星陨里游出来\nvoidsea_blindfish|归墟盲鱼|常见|155|void_sea:0.8962|没有眼睛，靠水流认路\nvoidsea_bottomless_eel|无底鳗|少见|447|void_sea:1.0033|尾巴探不到尽头\nvoidsea_still_hydra|静水螅|少见|389|void_sea:0.8602|整片水都停了，只有它在动\nvoidsea_lantern_eye|灯眼鱼|少见|450|void_sea:1.0108|眼眶里点着一盏不会灭的灯\nvoidsea_vortex_turtle|漩涡龟|稀有|978|void_sea:0.9466|游过的地方会自动转起漩涡\nvoidsea_silent_whale|无声鲸|稀有|942|void_sea:0.9079|它唱歌的时候你什么也听不见\nvoidsea_myriad_jelly|万水母|稀有|1083|void_sea:1.0585|触手像天下所有河流的分叉\nvoidsea_elder_whale|归墟祖鲸|传说|2848|void_sea:1.1179|背上的藤壶比船还大\nvoidsea_boat_swallower|吞舟鱼|传说|2889|void_sea:1.1353|张口的瞬间，光都被吞进去\nvoidsea_nether_marlin|幽冥旗鱼|传说|2650|void_sea:1.0339|鳍是半透明的，像一片幽影\nvoidsea_dark_arowana|无光龙鱼|传说|2633|void_sea:1.0267|鳞片把所有照到它的光都吃掉\nvoidsea_abyss_dragon|归墟渊龙|神话|5346|void_sea:0.9100|它一翻身，整片海就换了方向\nvoidsea_chaos_devourer|混沌吞天鱼|神话|6410|void_sea:1.1095|据说它饿的时候会吃掉自己的影子\npalace_glass_lanternfish|琉璃灯鱼|常见|210|dragon_palace:1.0066|身体像一盏会游的宫灯\npalace_coral_maid|珊瑚宫女鱼|少见|605|dragon_palace:1.1227|排着队从珊瑚廊下穿过\npalace_pearl_shellfish|珍珠贝鱼|少见|571|dragon_palace:1.0546|壳里那颗珠子是它的心\npalace_coiled_carp|蟠龙小鲤|少见|604|dragon_palace:1.1209|还没长开，鳞上已有龙纹\npalace_ambergris_whale|龙涎香鲸|稀有|1343|dragon_palace:1.0774|一整片水域都是它的香气\npalace_crystal_barbel|水晶龙须鱼|稀有|1312|dragon_palace:1.0498|两根长须像水晶做的天线\npalace_pillar_fish|定海柱鱼|稀有|1112|dragon_palace:0.8755|沉在水底一动不动，像根柱子\npalace_golden_dragon|敖氏金龙|传说|3361|dragon_palace:1.0783|鳞片上刻着王朝般的纹路\npalace_night_pearl|夜明珠鱼|传说|2759|dragon_palace:0.8683|整座宫殿的光都是它给的\npalace_yaksha|巡海夜叉鱼|传说|3159|dragon_palace:1.0078|提着叉子沿宫墙巡夜\npalace_sky_koi|九霄龙鲤|传说|3073|dragon_palace:0.9778|传说跃过龙门就能化龙\npalace_dragon_king|东海龙王|神话|7740|dragon_palace:1.0969|它一睁眼，整片东海都安静了\npalace_yinglong|应龙|神话|7995|dragon_palace:1.1362|有翼的龙，掌着天下雨水\npalace_zhulong|烛龙|神话|6233|dragon_palace:0.8653|睁眼为昼，闭眼为夜\nbig_fat_fish|大肥鱼|稀有|360|novice:0.1579,bamboo:0.1579,canal:0.1579,lake:0.1579,reed:0.1579,sea:0.1579,dock:0.1579,night:0.1579,mangrove:0.1579,swamp:0.1579,cave:0.1579,ruins:0.1579,abyss:0.1579,trench:0.1579,glacier:0.1579,aurora:0.1579,starfall:0.1579,void_sea:0.1579,dragon_palace:0.1579|原型据说是现实里的 DeepSeek 模型：问它什么都肯答，答得又稳又长，就是偶尔会想很久"
+  },
+  "collectible_defs": {
+    "invisible": true,
+    "description": "杂物定义（没中鱼时可能钩上来的东西）。每行：id|名称|emoji|权重|价值|说明；权重越大越常见，价值是卖店价。加一条 = 加一行；# 开头是注释。",
+    "type": "text",
+    "default": "seaweed|海草|🌿|30|2|缠在钩上的一把水草，晒干了能当柴烧\nold_boot|破靴子|🥾|22|1|左脚。没人知道右脚在哪儿\ntin_can|铁皮罐|🥫|18|3|锈得看不出原来装什么，废铁站肯收\ndrift_bottle|漂流瓶|🍾|16|5|瓶口封着蜡，里面好像有东西\nstarry_shell|星纹贝|🐚|8|25|壳上落着一小片星形的纹，握久了发温\nsunken_coin|沉水古币|🪙|4|60|字都被水磨平了，只认得出是钱\ntreasure_chest|沉船宝箱|🎁|2|200|锁早锈死了，摇一摇，里头叮当响"
+  },
+  "variant_defs": {
+    "invisible": true,
+    "description": "变异个体定义。每行：id|名称|emoji|相对权重|价值倍率|说明；价值倍率直接乘在鱼价上（例如 1.30 = 贵 30%）。",
+    "type": "text",
+    "default": "golden|黄金|🌟|34|1.3|鳞片像鎏过一层金，出水时晃眼\nalbino|白化|❄️|24|1.45|白得透光，鳍里能看见淡淡的血\ncrimson|赤焰|🔥|18|1.6|鳍边红得像刚贴在火上烤过\njade|翡翠|💚|13|1.85|通体青碧，像从玉里凿出来的\nabyss|幽冥|🌑|8|2.3|黑得看不见鳞，只有眼睛有一点光\nprismatic|虹彩|🌈|3|3.2|偏一下角度换一种颜色，七种都齐"
+  },
+  "weather_defs": {
+    "invisible": true,
+    "description": "天气定义。每行：id|名称|emoji|权重|稀有度倍率|窗口倍率|运气|逃脱倍率|说明；稀有度倍率写成 少见:1.4,稀有:1.5,传说:1.3（留空 = 该天气不额外加成）；窗口倍率越小拉线窗口越短、运气越高越容易出好鱼、逃脱倍率越大越容易跑鱼。",
+    "type": "text",
+    "default": "sunny|晴朗|☀️|30||1.0|0.0|1.0|水面平得像镜子，什么都可能来咬\ncloudy|多云|⛅|24||1.05|0.02|0.95|光柔和，鱼口顺，拉线也从容些\nrain|下雨|🌧️|16|少见:1.4,稀有:1.5,传说:1.3|0.9|0.04|1.0|雨点一落鱼就活泛，少见以上的鱼变多\nfog|起雾|🌫️|12|稀有:1.6,传说:1.8,神话:1.5|0.85|0.03|1.1|十步外看不清漂，可大鱼敢贴着岸走\nmoon|月夜|🌙|10|传说:1.7,神话:2.0|0.92|0.06|1.05|月华压着水面，传说与神话的鱼会浮上来\nwind|大风|💨|8|少见:1.3,稀有:1.4|0.75|0.02|1.25|浪一层压一层，拉线的空当短，也更容易跑鱼"
+  },
+  "easter_egg_defs": {
+    "invisible": true,
+    "description": "上鱼后的彩蛋定义。每行：id|权重|文案|效果；效果写成 gold=12 / luck=0.08 / note=1（给漂流瓶纸条）/ heal_bait=1（返还鱼饵），分号分隔多个。",
+    "type": "text",
+    "default": "coin_in_fish|22|🪙 鱼肚子里滚出一枚硬币，还带着体温。|gold=12\nold_map|16|🗺️ 鱼鳞上粘着一角湿透的纸，画着几条线。|note=1\nlucky_scale|18|✨ 一片鳞在手里亮了一下，你把它塞进口袋。|luck=0.08\nfriend|14|🐟 它在你手心躺了一会儿才松开尾巴，像认得你。|luck=0.05\nbait_back|12|🪱 收线一看，饵还牢牢挂在钩上，一点没动。|heal_bait=1\npearl_in_mouth|10|🦪 它嘴里含着一颗小珍珠，吐在你掌心上。|gold=35\nlost_ring|5|💍 线上缠着一枚旧戒指，内圈刻着两个字母。|gold=80"
+  },
+  "button_defs": {
+    "invisible": true,
+    "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。插件里每条回复都有独立的场景键（共 150+ 个，见编辑器页面「💬 回复」页的场景卡片），常用的如 cast.hit=钓到鱼的结果 / cast.miss_none=空竿 / pull.hook=咬钩提示 / bag.list=背包视图 / location.list=钓点视图 / shop.list=商店货架 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）。老的 5 个场景键（cast/pull/bag/location/story）仍然有效：没单独配置的子场景会继承它们，所以升级后默认按钮一字不变。样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
+    "type": "text",
+    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|换饵|/钓鱼 换饵|default\ncast|卖光光|/钓鱼 卖光光|default\ncast.hit|再来一竿|/钓鱼|default\ncast.hit|看背包|/钓鱼 背包|default\ncast.hit|放缸|/钓鱼 放 全部|default\ncast.hit|卖光光|/钓鱼 卖光光|default\ncast.no_stamina|体力|/钓鱼 体力|default\ncast.no_stamina|喝姜汤|/钓鱼 用 姜汤|default\ncast.no_stamina|看背包|/钓鱼 背包|default\ncast.no_stamina|帮助|/钓鱼 帮助|default\ncast.no_gold|签到|/钓鱼 签到|default\ncast.no_gold|卖光光|/钓鱼 卖光光|default\ncast.no_gold|看背包|/钓鱼 背包|default\ncast.bag_full|卖光光|/钓鱼 卖光光|primary\ncast.bag_full|放缸里|/钓鱼 放 全部|default\ncast.bag_full|扩建背包|/钓鱼 扩建背包|default\ncast.bag_full|看背包|/钓鱼 背包|default\ncast.multi_summary|再来一竿|/钓鱼|default\ncast.multi_summary|看背包|/钓鱼 背包|default\ncast.multi_summary|水族馆|/钓鱼 水族馆|default\ncast.multi_summary|卖光光|/钓鱼 卖光光|default\ncast.achievement|再来一竿|/钓鱼|default\ncast.achievement|我的档案|/钓鱼 档案|default\ncast.milestone|再来一竿|/钓鱼|default\ncast.milestone|我的档案|/钓鱼 档案|default\npull|再来一竿|/钓鱼|default\npull|换饵|/钓鱼 换饵|default\npull|看背包|/钓鱼 背包|default\npull|帮助|/钓鱼 帮助|default\npull.hook|拉线！|/钓鱼 拉|primary\nbag|卖光光|/钓鱼 卖光光|primary\nbag|放缸里|/钓鱼 放 全部|default\nbag|扩建背包|/钓鱼 扩建背包|default\nbag|再来一竿|/钓鱼|default\nbag.empty|下竿|/钓鱼|primary\nbag.empty|鱼饵店|/钓鱼 鱼饵|default\nbag.empty|图鉴|/钓鱼 图鉴|default\nbag.empty|帮助|/钓鱼 帮助|default\nsell.result|再来一竿|/钓鱼|default\nsell.result|看背包|/钓鱼 背包|default\nsell.result|水族馆|/钓鱼 水族馆|default\nsell.result|卖光光|/钓鱼 卖光光|default\nshop.list|鱼竿店|/钓鱼 鱼竿|default\nshop.list|道具店|/钓鱼 道具|default\nshop.list|鱼饵店|/钓鱼 鱼饵|default\nshop.list|看背包|/钓鱼 背包|default\nshop.no_gold_bait|签到|/钓鱼 签到|default\nshop.no_gold_item|签到|/钓鱼 签到|default\nshop.not_found|鱼竿店|/钓鱼 鱼竿|default\nshop.not_found|道具店|/钓鱼 道具|default\nshop.not_found|鱼饵店|/钓鱼 鱼饵|default\nshop.locked|我的档案|/钓鱼 档案|default\nshop.locked|再来一竿|/钓鱼|default\nbackpack.upgraded|看背包|/钓鱼 背包|default\nbackpack.upgraded|水族馆|/钓鱼 水族馆|default\nbackpack.upgraded|再来一竿|/钓鱼|default\nbackpack.no_gold|签到|/钓鱼 签到|default\nbackpack.no_gold|卖光光|/钓鱼 卖光光|default\nrod.list|自动装备|/钓鱼 装备|primary\nrod.list|鱼饵店|/钓鱼 鱼饵|default\nrod.list|看背包|/钓鱼 背包|default\nrod.list|再来一竿|/钓鱼|default\nrod.no_gold|签到|/钓鱼 签到|default\nrod.no_gold|卖光光|/钓鱼 卖光光|default\nrod.level_low|我的档案|/钓鱼 档案|default\nrod.level_low|再来一竿|/钓鱼|default\nrod.not_owned|鱼竿店|/钓鱼 鱼竿|default\nrod.not_owned|看背包|/钓鱼 背包|default\nbait.equipped|再来一竿|/钓鱼|default\nbait.equipped|看背包|/钓鱼 背包|default\nbait.equipped|水族馆|/钓鱼 水族馆|default\nbait.empty|鱼饵店|/钓鱼 鱼饵|primary\nbait.empty|看背包|/钓鱼 背包|default\nbait.empty|帮助|/钓鱼 帮助|default\nbait.not_owned|鱼饵店|/钓鱼 鱼饵|primary\nbait.not_owned|我的档案|/钓鱼 档案|default\nbait.locked|我的档案|/钓鱼 档案|default\nbait.locked|再来一竿|/钓鱼|default\nbait.not_found|鱼饵店|/钓鱼 鱼饵|default\nbait.not_found|帮助|/钓鱼 帮助|default\nlocation|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|水族馆|/钓鱼 水族馆|default\nlocation|看天气|/钓鱼 今日|default\nlocation.unlock_need|查图鉴|/钓鱼 图鉴|default\nlocation.unlock_need|钓点|/钓鱼 钓点|default\nlocation.unlock_need|签到|/钓鱼 签到|default\nlocation.unlock_need|看背包|/钓鱼 背包|default\nlocation.moved|再来一竿|/钓鱼|primary\nlocation.moved|看订单|/钓鱼 订单|default\nlocation.moved|查图鉴|/钓鱼 图鉴|default\nlocation.moved|水族馆|/钓鱼 水族馆|default\nlocation.not_found|钓点|/钓鱼 钓点|default\nlocation.not_found|再来一竿|/钓鱼|default\norders.list|看背包|/钓鱼 背包|default\norders.list|再来一竿|/钓鱼|default\norders.list|卖光光|/钓鱼 卖光光|default\norders.list|帮助|/钓鱼 帮助|default\norders.submit_result|再来一竿|/钓鱼|default\norders.submit_result|看订单|/钓鱼 订单|default\norders.submit_result|看背包|/钓鱼 背包|default\norders.locked|我的档案|/钓鱼 档案|default\norders.locked|再来一竿|/钓鱼|default\naquarium.view|领收益|/钓鱼 领|primary\naquarium.view|放全部|/钓鱼 放 全部|default\naquarium.view|取全部|/钓鱼 取 全部|default\naquarium.view|扩建|/钓鱼 水族馆 扩建|default\naquarium.full|扩建|/钓鱼 水族馆 扩建|primary\naquarium.full|取全部|/钓鱼 取 全部|default\naquarium.full|卖光光|/钓鱼 卖光光|default\naquarium.full|看背包|/钓鱼 背包|default\naquarium.put_done|领收益|/钓鱼 领|primary\naquarium.put_done|放全部|/钓鱼 放 全部|default\naquarium.put_done|看看缸|/钓鱼 水族馆|default\naquarium.put_done|再来一竿|/钓鱼|default\naquarium.take_done|卖光光|/钓鱼 卖光光|primary\naquarium.take_done|看背包|/钓鱼 背包|default\naquarium.take_done|放全部|/钓鱼 放 全部|default\naquarium.take_done|再来一竿|/钓鱼|default\naquarium.income|再来一竿|/钓鱼|default\naquarium.income|放全部|/钓鱼 放 全部|default\naquarium.income|看看缸|/钓鱼 水族馆|default\naquarium.income|看背包|/钓鱼 背包|default\naquarium.income_wait|看看缸|/钓鱼 水族馆|default\naquarium.income_wait|再来一竿|/钓鱼|default\naquarium.income_empty|放全部|/钓鱼 放 全部|primary\naquarium.income_empty|看背包|/钓鱼 背包|default\naquarium.max|看看缸|/钓鱼 水族馆|default\naquarium.max|再来一竿|/钓鱼|default\naquarium.no_gold|签到|/钓鱼 签到|default\naquarium.no_gold|卖光光|/钓鱼 卖光光|default\naquarium.upgraded|放全部|/钓鱼 放 全部|primary\naquarium.upgraded|看看缸|/钓鱼 水族馆|default\naquarium.upgraded|领收益|/钓鱼 领|default\naquarium.upgraded|再来一竿|/钓鱼|default\naquarium.sell_done|再来一竿|/钓鱼|default\naquarium.sell_done|看看缸|/钓鱼 水族馆|default\naquarium.sell_done|看背包|/钓鱼 背包|default\naquarium.put_usage|看背包|/钓鱼 背包|default\naquarium.put_usage|再来一竿|/钓鱼|default\naquarium.take_usage|看看缸|/钓鱼 水族馆|default\naquarium.take_usage|看背包|/钓鱼 背包|default\naquarium.feed_usage|道具店|/钓鱼 道具|default\naquarium.feed_usage|看看缸|/钓鱼 水族馆|default\naquarium.sell_usage|看看缸|/钓鱼 水族馆|default\naquarium.sell_usage|看背包|/钓鱼 背包|default\naquarium.bad_slot|看看缸|/钓鱼 水族馆|default\naquarium.bad_slot|再来一竿|/钓鱼|default\naquarium.usage|再来一竿|/钓鱼|default\naquarium.usage|看看缸|/钓鱼 水族馆|default\naquarium.usage|帮助|/钓鱼 帮助|default\nitem.used|再来一竿|/钓鱼|default\nitem.used|看背包|/钓鱼 背包|default\nitem.used|水族馆|/钓鱼 水族馆|default\nitem.used|道具店|/钓鱼 道具|default\nitem.feed_done|再来一竿|/钓鱼|default\nitem.feed_done|水族馆|/钓鱼 水族馆|default\nitem.feed_done|道具店|/钓鱼 道具|default\nitem.feed_done|看背包|/钓鱼 背包|default\nitem.reroll_done|水族馆|/钓鱼 水族馆|default\nitem.reroll_done|道具店|/钓鱼 道具|default\nitem.reroll_done|再来一竿|/钓鱼|default\nitem.deco_used|看看缸|/钓鱼 水族馆|default\nitem.deco_used|领收益|/钓鱼 领|default\nitem.deco_used|道具店|/钓鱼 道具|default\nitem.feed_no_fish|水族馆|/钓鱼 水族馆|default\nitem.feed_no_fish|放缸里|/钓鱼 放 全部|default\nitem.feed_no_fish|看背包|/钓鱼 背包|default\nitem.reroll_no_fish|水族馆|/钓鱼 水族馆|default\nitem.reroll_no_fish|看背包|/钓鱼 背包|default\nitem.breed_no_fish|水族馆|/钓鱼 水族馆|default\nitem.breed_no_fish|放缸里|/钓鱼 放 全部|default\nitem.usage|道具店|/钓鱼 道具|default\nitem.usage|看背包|/钓鱼 背包|default\nitem.usage|帮助|/钓鱼 帮助|default\nitem.empty|道具店|/钓鱼 道具|primary\nitem.empty|再来一竿|/钓鱼|default\nitem.missing|道具店|/钓鱼 道具|default\nitem.missing|看背包|/钓鱼 背包|default\nitem.feed_full|水族馆|/钓鱼 水族馆|default\nitem.feed_full|道具店|/钓鱼 道具|default\nitem.deco_full|看看缸|/钓鱼 水族馆|default\nitem.deco_full|再来一竿|/钓鱼|default\nitem.deco_disabled|看看缸|/钓鱼 水族馆|default\nitem.deco_disabled|帮助|/钓鱼 帮助|default\nitem.breed_failed|水族馆|/钓鱼 水族馆|default\nitem.breed_failed|道具店|/钓鱼 道具|default\nitem.reroll_failed|水族馆|/钓鱼 水族馆|default\nitem.reroll_failed|再来一竿|/钓鱼|default\nitem.breed_done|水族馆|/钓鱼 水族馆|default\nitem.breed_done|再来一竿|/钓鱼|default\ncollection.view|再来一竿|/钓鱼|default\ncollection.view|钓点|/钓鱼 钓点|default\ncollection.view|今日|/钓鱼 今日|default\ncollection.view|看背包|/钓鱼 背包|default\ncollection.detail|再来一竿|/钓鱼|default\ncollection.detail|图鉴|/钓鱼 图鉴|default\ncollection.detail|钓点|/钓鱼 钓点|default\ncollection.location|去钓点|/钓鱼 钓点|primary\ncollection.location|再来一竿|/钓鱼|default\ncollection.location|图鉴|/钓鱼 图鉴|default\nfishinfo.detail|再来一竿|/钓鱼|default\nfishinfo.detail|钓点|/钓鱼 钓点|default\nfishinfo.detail|图鉴|/钓鱼 图鉴|default\nfishinfo.detail|看背包|/钓鱼 背包|default\nfishinfo.location_detail|再来一竿|/钓鱼|default\nfishinfo.location_detail|图鉴|/钓鱼 图鉴|default\nfishinfo.location_detail|钓点|/钓鱼 钓点|default\nfishinfo.multi_match|再来一竿|/钓鱼|default\nfishinfo.multi_match|图鉴|/钓鱼 图鉴|default\nfishinfo.multi_match|帮助|/钓鱼 帮助|default\nfishinfo.not_found|图鉴|/钓鱼 图鉴|default\nfishinfo.not_found|帮助|/钓鱼 帮助|default\nfishinfo.not_found|再来一竿|/钓鱼|default\ncollectibles.view|再来一竿|/钓鱼|default\ncollectibles.view|看背包|/钓鱼 背包|default\ncollectibles.view|帮助|/钓鱼 帮助|default\nprofile.view|排行榜|/钓鱼 排行|default\nprofile.view|称号|/钓鱼 称号|default\nprofile.view|再来一竿|/钓鱼|default\nprofile.view|看背包|/钓鱼 背包|default\nprofile.renamed|我的档案|/钓鱼 档案|default\nprofile.renamed|再来一竿|/钓鱼|default\nstamina.view|再来一竿|/钓鱼|primary\nstamina.view|喝姜汤|/钓鱼 用 姜汤|default\nstamina.view|看背包|/钓鱼 背包|default\nstamina.view|帮助|/钓鱼 帮助|default\nsign.done|再来一竿|/钓鱼|default\nsign.done|看背包|/钓鱼 背包|default\nsign.done|今日|/钓鱼 今日|default\nsign.result|再来一竿|/钓鱼|default\nsign.result|看背包|/钓鱼 背包|default\ntoday.view|再来一竿|/钓鱼|default\ntoday.view|看订单|/钓鱼 订单|default\ntoday.view|钓点|/钓鱼 钓点|default\ntoday.view|看背包|/钓鱼 背包|default\nrank.view|我的档案|/钓鱼 档案|default\nrank.view|再来一竿|/钓鱼|default\nrank.view|看背包|/钓鱼 背包|default\nrank.empty|再来一竿|/钓鱼|default\nrank.empty|看背包|/钓鱼 背包|default\nrank.no_data|再来一竿|/钓鱼|default\nrank.no_data|看背包|/钓鱼 背包|default\nhelp.page|开始钓鱼|/钓鱼|primary\nhelp.page|看背包|/钓鱼 背包|default\nhelp.page|水族馆|/钓鱼 水族馆|default\nhelp.page|我的档案|/钓鱼 档案|default\nhelp.unknown|帮助|/钓鱼 帮助 1|primary\nhelp.unknown|再来一竿|/钓鱼|default\nauto.view|鱼饵店|/钓鱼 鱼饵|default\nauto.view|道具店|/钓鱼 道具|default\nauto.view|看背包|/钓鱼 背包|default\nauto.view|再来一竿|/钓鱼|default\nauto.on|再来一竿|/钓鱼|primary\nauto.on|看背包|/钓鱼 背包|default\nauto.on|鱼饵店|/钓鱼 鱼饵|default\nauto.off|再来一竿|/钓鱼|default\nauto.off|看背包|/钓鱼 背包|default\nauto.bad|道具店|/钓鱼 道具|default\nauto.bad|再来一竿|/钓鱼|default\ntitle.list|排行榜|/钓鱼 排行|default\ntitle.list|我的档案|/钓鱼 档案|default\ntitle.list|再来一竿|/钓鱼|default\ntitle.list|水族馆|/钓鱼 水族馆|default\ntitle.bought|我的档案|/钓鱼 档案|default\ntitle.bought|称号|/钓鱼 称号|default\ntitle.bought|再来一竿|/钓鱼|default\ntitle.equipped|我的档案|/钓鱼 档案|default\ntitle.equipped|排行榜|/钓鱼 排行|default\ntitle.equipped|再来一竿|/钓鱼|default\ntitle.owned|称号|/钓鱼 称号|default\ntitle.owned|我的档案|/钓鱼 档案|default\ntitle.not_owned|称号|/钓鱼 称号|primary\ntitle.not_owned|再来一竿|/钓鱼|default\ntitle.not_found|称号|/钓鱼 称号|default\ntitle.not_found|再来一竿|/钓鱼|default\ntitle.no_gold|签到|/钓鱼 签到|default\ntitle.no_gold|卖光光|/钓鱼 卖光光|default\ntitle.disabled|再来一竿|/钓鱼|default\ntitle.disabled|帮助|/钓鱼 帮助|default\noffering.done|领收益|/钓鱼 领|primary\noffering.done|看看缸|/钓鱼 水族馆|default\noffering.done|再来一竿|/钓鱼|default\noffering.no_gold|卖光光|/钓鱼 卖光光|default\noffering.no_gold|看背包|/钓鱼 背包|default\nsystem.error|帮助|/钓鱼 帮助|default\nsystem.error|再来一竿|/钓鱼|default\nbroadcast.catch|再来一竿|/钓鱼|default\nbroadcast.catch|我的档案|/钓鱼 档案|default\nbroadcast.catch|看背包|/钓鱼 背包|default\nstory.result|继续钓|/钓鱼|primary\nstory.result|看背包|/钓鱼 背包|default\nstory.result|我的档案|/钓鱼 档案|default\nstory|{label}|/钓鱼 事件 {n}|default"
+  },
+  "text_overrides": {
+    "invisible": true,
+    "description": "每一条回复的文案。一行一条：场景|模板。场景键与 button_defs 完全同名（例如 cast.hit 既是「钓到鱼的结果」那条回复的按钮场景，也是它的文案键）。模板里可以用 {原文} 表示插件原本拼好的那段文字（把它放在前后就能加前缀/后缀、改 emoji、换语气），也可以用该场景声明的具体占位符（例如 cast.hit 支持 {鱼名} {品质} {估值} {余额}）。没写到的场景一律用内置文案，所以留空=和以前完全一样。未知场景、占位符写错的行会被跳过并在日志里提示（不会把 {xxx} 发给玩家）。推荐用编辑器页面「💬 回复」页改，那里可以实时预览效果。",
+    "type": "text",
+    "default": "",
+    "hint": "例：cast.miss_none|🪝 水面静悄悄的，连个泡都没有 ｜ pull.hook|{原文}\\n　⚡ 快！{秒数} 秒内发 /钓鱼 拉"
+  },
+  "button_layout": {
+    "invisible": true,
+    "description": "按钮排布：一行一条，格式「场景|每行几个」。场景写 * 表示其余所有场景的默认值。每行个数只能是 1~5。留空=用内置排布（默认每行 3 个，随机插曲 story 每行 1 个），与历史版本逐字一致。",
+    "type": "text",
+    "default": "",
+    "hint": "例：*|2 表示所有场景每行 2 个按钮；story|1 表示插曲每行 1 个"
+  },
+  "button_style_mode": {
+    "type": "string",
+    "description": "按钮样式策略：按按钮表（每行各写各的）/ 统一（全部用下面那个样式）",
+    "default": "按按钮表",
+    "invisible": true
+  },
+  "button_default_style": {
+    "type": "string",
+    "description": "统一样式，也是按钮表里没写样式时的兜底：default（灰）/ primary（蓝）/ 数字",
+    "default": "default",
+    "invisible": true
+  },
+  "button_empty_scenes": {
+    "invisible": true,
+    "description": "明确「就是不要按钮」的场景（逗号分隔场景名，例如 cast.none,bag.empty）：连「继承父场景」也断掉。留空 = 不特殊处理",
+    "type": "string",
+    "default": ""
   },
   "stamina_max": {
     "invisible": true,
@@ -89,37 +163,6 @@
     "description": "水族馆基础栏位数",
     "type": "int",
     "default": 8
-  },
-  "decoration_slots": {
-    "description": "水族馆里最多同时摆几个耐久型装饰（珊瑚造景），0 = 不开放",
-    "type": "int",
-    "default": 3,
-    "invisible": true
-  },
-  "decoration_hours": {
-    "description": "装饰的耐久小时数（到点自动失效；离线时间照算）",
-    "type": "int",
-    "default": 72,
-    "invisible": true
-  },
-  "buff_cast_count": {
-    "description": "锦鲤玉佩这类「作用在钓手身上」的手气 buff 持续多少竿",
-    "type": "int",
-    "default": 20,
-    "invisible": true
-  },
-  "aquarium_slots": {
-    "invisible": true,
-    "description": "水族馆扩建档位。每项格式：栏位名|解锁价格 或 栏位名|解锁价格|一次加几个位（第三段省略 = 加 1 个位）。越往后的档位越贵、一次加得越多；买满后容量 = aquarium_capacity + 各档 add 之和",
-    "type": "list",
-    "default": [
-      "精致缸|1600",
-      "生态缸|5400",
-      "深海缸|16000",
-      "珊瑚宫殿|38000|2",
-      "龙宫别苑|88000|3",
-      "水晶宫|190000|4"
-    ]
   },
   "interactive_rarities": {
     "invisible": true,
@@ -244,9 +287,21 @@
   },
   "order_reward_mult": {
     "invisible": true,
-    "description": "订单奖励相对卖店价的倍数（鼓励做订单而不是直接卖）",
+    "description": "订单奖励相对卖店价的基准倍数（1.6 = 新手期比卖店赚约一倍）。后期还会乘上「动态系数」：钓点倍率 × (1+鱼竿价值加成) × (1+order_level_growth×(等级-1))，再钳到 order_factor_max —— 所以订单价会跟着玩家自己的收入一起涨。",
     "type": "float",
-    "default": 2.2
+    "default": 1.6
+  },
+  "order_level_growth": {
+    "invisible": true,
+    "description": "订单奖励的等级成长系数：每高 1 级多加 0.02 倍（订单价跟着玩家收入走的那部分）",
+    "type": "float",
+    "default": 0.02
+  },
+  "order_factor_max": {
+    "invisible": true,
+    "description": "订单动态系数的封顶（防止后期订单价无限膨胀）",
+    "type": "float",
+    "default": 6.0
   },
   "order_unlock_level": {
     "invisible": true,
@@ -283,6 +338,43 @@
     "description": "隐藏生物（大肥鱼这种「藏起来的小惊喜」）能不能被点单。true（默认）= 能，和旧版一致；false = 订单不点它（它会占一个订单名额，但极难钓到）",
     "type": "bool",
     "default": true
+  },
+  "title_defs": {
+    "invisible": true,
+    "description": "称号表（v1.18.17 的后期金币回收口）。每项格式：id|名称|emoji|价格|说明。称号**纯炫耀、不加任何属性**，一次性买断、可随时换着戴，展示在 `/钓鱼 档案` 与群排行榜里 —— 给钱多到没处花的玩家一个目标，也不会推高收益。",
+    "type": "list",
+    "default": [
+      "novice|钓鱼新手|🎣|0|刚拿到竿子的第一天",
+      "regular|常客|🪑|20000|老板已经记住你的脸了",
+      "veteran|老钓手|🧢|80000|一坐就是一下午",
+      "tycoon|一掷千金|💰|300000|钱对你来说只是数字",
+      "deep_lord|深海领主|🔱|1200000|海沟以下都归你管",
+      "void_master|归墟之主|🕳️|5000000|连声音都被吞掉的地方，你去过"
+    ]
+  },
+  "offering_price": {
+    "invisible": true,
+    "description": "香火供奉一次要多少金币（后期金币回收口：花大钱换限时加成）",
+    "type": "int",
+    "default": 200000
+  },
+  "offering_hours": {
+    "invisible": true,
+    "description": "香火供奉的时长（小时；可重复供奉续时间，效果不叠加）",
+    "type": "int",
+    "default": 24
+  },
+  "offering_income_bonus": {
+    "invisible": true,
+    "description": "香火供奉期间的挂机产出加成（0.5 = +50%，与装饰加成相加）",
+    "type": "float",
+    "default": 0.5
+  },
+  "offering_luck_bonus": {
+    "invisible": true,
+    "description": "香火供奉期间的手气加成（0.05 = +0.05，与玉佩等叠加后一起钳到 0~1）",
+    "type": "float",
+    "default": 0.05
   },
   "rod_defs": {
     "invisible": true,
@@ -385,85 +477,73 @@
     "type": "bool",
     "default": true
   },
-  "codex_bonus_per_rarity": {
+  "level_xp_base": {
     "invisible": true,
-    "description": "集齐某一鱼种品质后获得的永久价值加成（按品质从低到高，5 档）",
-    "type": "list",
-    "default": [
-      0.03,
-      0.05,
-      0.08,
-      0.12,
-      0.2
-    ]
-  },
-  "pond_income_per_hour": {
-    "invisible": true,
-    "description": "鱼塘（水族馆）每小时产出馆藏估值的比例。v1.18.0 去掉了「取出 ×1.2 展出加成」，补偿就是把它从 0.015 提到 0.02",
+    "description": "升级曲线：基础竿数。升到 L 级所需累计钓获 = base×(ratio^(L-1)−1)/(ratio−1) + growth×(L-1)²。推荐 5（出厂值）：base=5 / ratio=1.08 时 10 级 62 条、20 级 207 条、30 级 520 条、45 级 1785 条",
     "type": "float",
-    "default": 0.02
+    "default": 5.0
   },
-  "pond_income_cap_hours": {
+  "level_xp_ratio": {
     "invisible": true,
-    "description": "鱼塘挂机收益最多累积多少小时（超过不再增加）",
-    "type": "int",
-    "default": 12
+    "description": "升级曲线：等比底数（指数项）。推荐 1.08（出厂值）= 每级需求递增 8%，越大越陡、越能卡住最高进度玩家；填 1.0 退化成等差（线性）",
+    "type": "float",
+    "default": 1.08
   },
-  "pond_income_cap_coins": {
+  "level_xp_growth": {
     "invisible": true,
-    "description": "单次领取的金币上限（0 = 不封顶）。v1.18.15 从 5000 提到 10 万：5000 在 30 级以后等于没有（龙宫一竿就 3000+ 金），整套养鱼玩法失去意义；10 万/次 ≈ 终局 30 竿，仍然是补充而不是捷径",
-    "type": "int",
-    "default": 100000
+    "description": "升级曲线：二次增长系数。推荐 0（出厂值 = 不用，平衡就是照它调的）；想让后期再陡一点填 0.2~0.5，填 2 已经很硬，10 以上会连前期一起变慢。它只加在平方项上：第 L 级多加 growth×(L-1)² 条（10 级 +81×growth、30 级 +841×growth）；编辑器「⚙️ 数值」页那一行下面会按当前数值实时算出结果",
+    "type": "float",
+    "default": 0.0
   },
-  "bait_defs": {
+  "location_hook_factors": {
     "invisible": true,
-    "description": "鱼饵定义。每项格式：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重倍数(5档逗号分隔)|解锁等级|需要鱼竿|说明。解锁等级 = 能买的等级；需要鱼竿填鱼竿 id 或名称（拥有即可，不要求装备）；旧配置没写这两项时按「1 级 + 无要求」。稀有度权重那一段是 5 个数（常见,少见,稀有,传说,神话）：大于 1 = 更容易出这一档，小于 1 = 更少；后两款后期饵就是靠这套权重做「专精大物」的取舍。",
-    "type": "list",
-    "default": [
-      "none|空钩|🪝|0|0|0|1,1,1,1,1|1||什么也不挂，全凭本事（免费）",
-      "bread|面包屑|🍞|1|10|0.06|1,1.1,1.3,1.4,1.5|1||厨房剩的，便宜大碗",
-      "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|2||万用饵，两块钱一钩",
-      "bloodworm|红虫|🪰|4|5|0.22|1,1.4,2.0,2.4,3.0|5||小鱼最爱，上钩快",
-      "corn|玉米粒|🌽|6|5|0.30|1,1.5,2.3,3.0,4.0|9|stream|素饵之王，草鱼克星",
-      "shrimp|虾饵|🦐|12|3|0.40|1,1.8,2.6,3.6,4.6|15|dragon|肉食鱼最爱，稀有度明显上升",
-      "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|22|starlight|活蹦乱跳，专勾大鱼",
-      "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|34|mythic|祖传配方，闻着就不一样",
-      "abyss_bait|深渊饵|🕳️|120|1|0.72|0.5,1.0,3.0,7.0,10.0|50|mythic|深海里捞上来的东西，腥得吓人，专招大物",
-      "dragon_bait|龙涎|🐉|300|1|0.78|0.3,0.8,2.0,6.0,14.0|62|void_rod|龙宫檐下凝的一滴，寻常鱼闻了不敢靠近"
-    ]
+    "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理。v1.18.16 重定阶梯：从 1.0 平滑降到 0.82（原来最深只有 0.54，拿最好的饵也有一半空竿）——现在最深的地图用最好的饵有 82% 中鱼，用中档饵（蚯蚓 0.70）才是 57%。",
+    "type": "string",
+    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,night:0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,trench:0.86,glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,dragon_palace:0.82"
   },
-  "item_defs": {
+  "location_codex_gate": {
     "invisible": true,
-    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)|解锁等级（最后一段可省略 = 1 级）。喂鱼类效果键：meat/spirit/sheen/value_up；装饰类：decorate（摆进鱼缸，耐久内加成挂机产出）；其他：feed_bonus（提升这条鱼的投喂上限）、buff_quality（钓手手气 buff，持续 buff_cast_count 竿）、quality_reroll（重掷个体品质取更好的那次）、heal（回复体力，体力已满时不消耗）。⚠️ 道具是一口价、收益却随鱼价上涨，所以后期道具靠解锁等级卡「什么时候买才划算」。",
-    "type": "list",
-    "default": [
-      "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1|1",
-      "feed_premium|高级饲料|🍖|90|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3|6",
-      "feed_divine|仙露|💧|420|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600|14",
-      "growth_tonic|育灵水|🌱|800|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5|18",
-      "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3|20",
-      "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
-      "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
-      "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
-      "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
-      "feed_mythic|龙涎饲料|🐲|1500|喂鱼：三维各 +18，估值 +2000（永久）|meat=18;spirit=18;sheen=18;value_up=2000|45",
-      "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
-      "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
-      "hot_soup|姜汤|🍲|400|喝一口：回复体力（体力已满时不消耗）|heal=10|3"
-    ]
+    "description": "前往下一个钓点需要上一个钓点图鉴开到多少比例（0.8 = 八成鱼种，隐藏生物不算）",
+    "type": "float",
+    "default": 0.8
+  },
+  "consume_bait_on_empty": {
+    "invisible": true,
+    "description": "空竿要不要扣饵。1 = 每竿都扣 1 个饵（旧规则）；0（默认）= **没咬钩 / 鱼不开口**的空竿不扣，但被鱼咬掉的那种（「咬了一口又吐掉了」）照扣 —— 文案说了「白搭了」就得真扣，单竿与连钓同一套规则",
+    "type": "bool",
+    "default": false
+  },
+  "bait_hook_rates": {
+    "invisible": true,
+    "description": "各鱼饵的咬钩率（= 这一竿中鱼的概率，空钩极低、带饵才容易上鱼）。格式 id:概率 逗号分隔；也认中文饵名与百分数（面包屑:0.8、worm:80 都行），漏写的饵按 0.3 处理。中鱼后就是鱼，不会再被杂物抢走；没中鱼时才有可能钩上杂物（见 item_drop_chance）。实际中鱼率 = 这里的值 × 钓点难度系数（见 location_hook_factors）",
+    "type": "string",
+    "default": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0"
+  },
+  "content_auto_merge": {
+    "invisible": true,
+    "description": "旧配置自动合并新版内容（新钓点/新鱼饵/新鱼竿/新道具自动补上）",
+    "type": "bool",
+    "default": true,
+    "hint": "只补「配置里没有的」条目，你自己改过的条目一律保留；关掉后必须手动重置配置才会看到新内容。"
+  },
+  "button_mode": {
+    "invisible": true,
+    "description": "QQ 官方机器人按钮发送形态（排查按钮不显示时用）",
+    "type": "string",
+    "default": "自动",
+    "options": [
+      "自动",
+      "markdown",
+      "text",
+      "关闭"
+    ],
+    "hint": "自动 = 先按官方示例用 markdown+keyboard，失败再试纯文本+keyboard；关闭 = 完全不发按钮（一直用纯文本）。"
   },
   "data_status": {
     "description": "数据状态（插件回写，只读参考）",
     "type": "text",
     "default": "",
     "hint": "保存或重载后这里会显示：玩家数、存档数量、最近快照、存档目录、上次操作结果。"
-  },
-  "editor_status": {
-    "invisible": true,
-    "description": "数据编辑器页面状态（插件回写，页面读取）｜不用手动改",
-    "type": "text",
-    "default": "",
-    "hint": "「插件页面 → 数据编辑器」把指令上传到 data/attachments/fishing_editor_bridge.json，插件每 1.5 秒轮询执行，并把结果（存档清单、玩家数、下次自动存档时间）以 JSON 字符串回写到这里。手改没有意义，下一次保存就被覆盖。"
   },
   "data_action": {
     "invisible": true,
@@ -495,6 +575,13 @@
     "description": "我已确认：执行危险操作（清除/恢复）时必须勾上",
     "type": "bool",
     "default": false
+  },
+  "editor_status": {
+    "invisible": true,
+    "description": "数据编辑器页面状态（插件回写，页面读取）｜不用手动改",
+    "type": "text",
+    "default": "",
+    "hint": "「插件页面 → 数据编辑器」把指令上传到 data/attachments/fishing_editor_bridge.json，插件每 1.5 秒轮询执行，并把结果（存档清单、玩家数、下次自动存档时间）以 JSON 字符串回写到这里。手改没有意义，下一次保存就被覆盖。"
   },
   "backup_import_file": {
     "invisible": true,
@@ -559,67 +646,124 @@
     "default": "",
     "hint": "默认 <插件目录>/backups/，里面有 README.md 说明每个子目录的用途。"
   },
-  "button_mode": {
+  "codex_bonus_per_rarity": {
     "invisible": true,
-    "description": "QQ 官方机器人按钮发送形态（排查按钮不显示时用）",
-    "type": "string",
-    "default": "自动",
-    "options": [
-      "自动",
-      "markdown",
-      "text",
-      "关闭"
-    ],
-    "hint": "自动 = 先按官方示例用 markdown+keyboard，失败再试纯文本+keyboard；关闭 = 完全不发按钮（一直用纯文本）。"
+    "description": "集齐某一鱼种品质后获得的永久价值加成（按品质从低到高，5 档）",
+    "type": "list",
+    "default": [
+      0.03,
+      0.05,
+      0.08,
+      0.12,
+      0.2
+    ]
   },
-  "content_auto_merge": {
+  "pond_income_per_hour": {
     "invisible": true,
-    "description": "旧配置自动合并新版内容（新钓点/新鱼饵/新鱼竿/新道具自动补上）",
+    "description": "鱼塘（水族馆）每小时产出馆藏估值的比例。v1.18.0 去掉了「取出 ×1.2 展出加成」，补偿就是把它从 0.015 提到 0.02",
+    "type": "float",
+    "default": 0.02
+  },
+  "pond_income_cap_hours": {
+    "invisible": true,
+    "description": "鱼塘挂机收益最多累积多少小时（超过不再增加；默认 24 小时 = 睡一觉回来还在攒）",
+    "type": "int",
+    "default": 24
+  },
+  "pond_income_cap_coins": {
+    "invisible": true,
+    "description": "单次领取的金币封顶（0 = 不封顶；默认 10 万 ≈ 终局 30 竿，是补充不是捷径）",
+    "type": "int",
+    "default": 100000
+  },
+  "decoration_slots": {
+    "description": "水族馆里最多同时摆几个耐久型装饰（珊瑚造景），0 = 不开放",
+    "type": "int",
+    "default": 3,
+    "invisible": true
+  },
+  "decoration_hours": {
+    "description": "装饰的耐久小时数（到点自动失效；离线时间照算）",
+    "type": "int",
+    "default": 72,
+    "invisible": true
+  },
+  "buff_cast_count": {
+    "description": "锦鲤玉佩这类「作用在钓手身上」的手气 buff 持续多少竿",
+    "type": "int",
+    "default": 20,
+    "invisible": true
+  },
+  "auto_supply_bait": {
+    "invisible": true,
+    "description": "鱼饵用完时是否自动按单价补 1 个继续钓（金币不够就退回空钩，绝不透支）",
     "type": "bool",
-    "default": true,
-    "hint": "只补「配置里没有的」条目，你自己改过的条目一律保留；关掉后必须手动重置配置才会看到新内容。"
+    "default": true
   },
-  "level_xp_base": {
+  "auto_equip_bait": {
     "invisible": true,
-    "description": "升级曲线：基础竿数。升到 L 级所需累计钓获 = base×(ratio^(L-1)−1)/(ratio−1) + growth×(L-1)²。推荐 5（出厂值）：base=5 / ratio=1.08 时 10 级 62 条、20 级 207 条、30 级 520 条、45 级 1785 条",
-    "type": "float",
-    "default": 5.0
-  },
-  "level_xp_ratio": {
-    "invisible": true,
-    "description": "升级曲线：等比底数（指数项）。推荐 1.08（出厂值）= 每级需求递增 8%，越大越陡、越能卡住最高进度玩家；填 1.0 退化成等差（线性）",
-    "type": "float",
-    "default": 1.08
-  },
-  "level_xp_growth": {
-    "invisible": true,
-    "description": "升级曲线：二次增长系数。推荐 0（出厂值 = 不用，平衡就是照它调的）；想让后期再陡一点填 0.2~0.5，填 2 已经很硬，10 以上会连前期一起变慢。它只加在平方项上：第 L 级多加 growth×(L-1)² 条（10 级 +81×growth、30 级 +841×growth）；编辑器「⚙️ 数值」页那一行下面会按当前数值实时算出结果",
-    "type": "float",
-    "default": 0.0
-  },
-  "location_codex_gate": {
-    "invisible": true,
-    "description": "前往下一个钓点需要上一个钓点图鉴开到多少比例（0.8 = 八成鱼种，隐藏生物不算）",
-    "type": "float",
-    "default": 0.8
-  },
-  "consume_bait_on_empty": {
-    "invisible": true,
-    "description": "空竿要不要扣饵。1 = 每竿都扣 1 个饵（旧规则）；0（默认）= **没咬钩 / 鱼不开口**的空竿不扣，但被鱼咬掉的那种（「咬了一口又吐掉了」）照扣 —— 文案说了「白搭了」就得真扣，单竿与连钓同一套规则",
+    "description": "玩家从没选过饵（equipped_bait 为空）时，是否自动挂上背包里手气最高的那款；自己选过空钩的人不受影响",
     "type": "bool",
-    "default": false
+    "default": true
   },
-  "bait_hook_rates": {
+  "auto_supply_buff": {
     "invisible": true,
-    "description": "各鱼饵的咬钩率（= 这一竿中鱼的概率，空钩极低、带饵才容易上鱼）。格式 id:概率 逗号分隔；也认中文饵名与百分数（面包屑:0.8、worm:80 都行），漏写的饵按 0.3 处理。中鱼后就是鱼，不会再被杂物抢走；没中鱼时才有可能钩上杂物（见 item_drop_chance）。实际中鱼率 = 这里的值 × 钓点难度系数（见 location_hook_factors）",
-    "type": "string",
-    "default": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0"
+    "description": "手气道具（玉佩/潮汐香/玉髓灯）用完后是否自动买 + 自动用（要先让玩家用 `/钓鱼 自动 <道具名>` 指定用哪一件）",
+    "type": "bool",
+    "default": true
   },
-  "location_hook_factors": {
+  "aquarium_slots": {
     "invisible": true,
-    "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理。v1.18.16 重定阶梯：从 1.0 平滑降到 0.82（原来最深只有 0.54，拿最好的饵也有一半空竿）——现在最深的地图用最好的饵有 82% 中鱼，用中档饵（蚯蚓 0.70）才是 57%。",
-    "type": "string",
-    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,night:0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,trench:0.86,glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,dragon_palace:0.82"
+    "description": "水族馆扩建档位。每项格式：栏位名|解锁价格 或 栏位名|解锁价格|一次加几个位。默认 9 档（买满 +30 个位），后 3 档是 v1.18.17 给后期溢出的金币准备的去处。",
+    "type": "list",
+    "default": [
+      "精致缸|1600",
+      "生态缸|5400",
+      "深海缸|16000",
+      "珊瑚宫殿|38000|2",
+      "龙宫别苑|88000|3",
+      "水晶宫|190000|4",
+      "琉璃龙宫|420000|5",
+      "星海神殿|900000|6",
+      "归墟海眼|1800000|8"
+    ]
+  },
+  "bait_defs": {
+    "invisible": true,
+    "description": "鱼饵定义。每项格式：id|名称|emoji|单价|一组数量|品质幸运|稀有度权重倍数(5档逗号分隔)|解锁等级|需要鱼竿|说明。解锁等级 = 能买的等级；需要鱼竿填鱼竿 id 或名称（拥有即可，不要求装备）；旧配置没写这两项时按「1 级 + 无要求」。稀有度权重那一段是 5 个数（常见,少见,稀有,传说,神话）：大于 1 = 更容易出这一档，小于 1 = 更少；后两款后期饵就是靠这套权重做「专精大物」的取舍。",
+    "type": "list",
+    "default": [
+      "none|空钩|🪝|0|0|0|1,1,1,1,1|1||什么也不挂，全凭本事（免费）",
+      "bread|面包屑|🍞|1|10|0.06|1,1.1,1.3,1.4,1.5|1||厨房剩的，便宜大碗",
+      "worm|蚯蚓|🪱|2|5|0.14|1,1.2,1.6,1.8,2.0|2||万用饵，两块钱一钩",
+      "bloodworm|红虫|🪰|4|5|0.22|1,1.4,2.0,2.4,3.0|5||小鱼最爱，上钩快",
+      "corn|玉米粒|🌽|6|5|0.30|1,1.5,2.3,3.0,4.0|9|stream|素饵之王，草鱼克星",
+      "shrimp|虾饵|🦐|12|3|0.40|1,1.8,2.6,3.6,4.6|15|dragon|肉食鱼最爱，稀有度明显上升",
+      "livebait|活饵小鱼|🐟|22|2|0.52|1,2.0,3.2,4.6,6.0|22|starlight|活蹦乱跳，专勾大鱼",
+      "secret|秘制饵|🍯|45|1|0.68|1,2.0,4.0,6.0,8.0|34|mythic|祖传配方，闻着就不一样",
+      "abyss_bait|深渊饵|🕳️|120|1|0.72|0.5,1.0,3.0,7.0,10.0|50|mythic|深海里捞上来的东西，腥得吓人，专招大物",
+      "dragon_bait|龙涎|🐉|300|1|0.78|0.3,0.8,2.0,6.0,14.0|62|void_rod|龙宫檐下凝的一滴，寻常鱼闻了不敢靠近"
+    ]
+  },
+  "item_defs": {
+    "invisible": true,
+    "description": "可购买道具。每项格式：id|名称|emoji|单价|说明|效果(键=值,分号分隔)|解锁等级（最后一段可省略 = 1 级）。喂鱼类效果键：meat/spirit/sheen/value_up；装饰类：decorate（摆进鱼缸，耐久内加成挂机产出）；其他：feed_bonus（提升这条鱼的投喂上限）、buff_quality（钓手手气 buff，持续 buff_cast_count 竿）、quality_reroll（重掷个体品质取更好的那次）、heal（回复体力，体力已满时不消耗）。⚠️ 道具是一口价、收益却随鱼价上涨，所以后期道具靠解锁等级卡「什么时候买才划算」。",
+    "type": "list",
+    "default": [
+      "feed_basic|普通饲料|🌾|20|喂鱼：肉+2、灵+1（永久）|meat=2;spirit=1|1",
+      "feed_premium|高级饲料|🍖|90|喂鱼：肉+5、灵+4、光+3（永久）|meat=5;spirit=4;sheen=3|6",
+      "feed_divine|仙露|💧|420|喂鱼：三维各 +10，估值 +600（永久）|meat=10;spirit=10;sheen=10;value_up=600|14",
+      "growth_tonic|育灵水|🌱|800|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5|18",
+      "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；极小概率直接洗出「神品」|quality_reroll=3|20",
+      "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
+      "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+      "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
+      "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
+      "feed_mythic|龙涎饲料|🐲|1500|喂鱼：三维各 +18，估值 +2000（永久）|meat=18;spirit=18;sheen=18;value_up=2000|45",
+      "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
+      "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
+      "hot_soup|姜汤|🍲|400|喝一口：回复体力（体力已满时不消耗）|heal=10|3"
+    ]
   },
   "rarity_spawn_weights": {
     "invisible": true,
@@ -693,12 +837,6 @@
     "type": "float",
     "default": 0.25
   },
-  "hostile_keywords": {
-    "invisible": true,
-    "description": "水族馆里「不好惹」的鱼名关键词（逗号分隔，用于隐藏的敌对判定，玩家侧无任何提示）",
-    "type": "string",
-    "default": "鳄,鲨,蛇,鳗,鳝,乌贼,章鱼,食人,水虎,龙鱼,巨齿,利维坦,归墟,古龙,鲸,鮟鱇,电鳗,鳄雀"
-  },
   "fish_value_mult": {
     "invisible": true,
     "description": "所有鱼基准价的全局倍率（1.0 = 原价）。想整体抬价/降价就改这个，不必逐条改鱼",
@@ -711,73 +849,11 @@
     "type": "string",
     "default": ""
   },
-  "fish_defs": {
-    "invisible": true,
-    "description": "鱼池定义（一行一条鱼）：id|名称|稀有度|基准价|分布|说明。分布 = 钓点:权重，逗号分隔（支持中文钓点名，* = 所有钓点），权重越高越常见；稀有度填 常见/少见/稀有/传说/神话；说明可省略。留空 = 用内置鱼池。注意：改这里会整体接管鱼池（稀有度权重 rarity_spawn_weights 仍会乘上去），单条改价也可以继续用 fish_value_overrides。",
-    "type": "text",
-    "default": "white_bait|白条|常见|6|novice:1.1104|细长的小鱼，抢饵最积极\nsmall_crucian|小鲫鱼|常见|4|novice:0.2143|最常见的鱼，脾气很好\nriver_shrimp|河虾|常见|21|night:0.8785|半透明的小家伙，弹跳力惊人\nmud_snail|田螺|常见|5|novice:1.1482|慢吞吞地贴在钩上，懒得挣扎\nloach|泥鳅|常见|5|novice:0.9217,night:1.0711|滑不溜手，抓它得有点耐心\ncrucian|河鲫|常见|5|novice:0.2143|银光闪闪，成群结队\ncarp|鲤鱼|少见|14|novice:1.0111,lake:0.9595|力气不小，尾巴拍水很响\ntopmouth_culter|翘嘴鲌|常见|8|novice:0.2143|喜欢在水面追着小鱼跑\ngrass_carp|草鱼|常见|10|lake:1.0102|吃草长大的，肉厚实\ncatfish|鲶鱼|少见|24|lake:0.9697,night:2.9723|躲在淤泥里，胡须很灵敏\nsnakehead|黑鱼|稀有|63|reed:1.0183|水中恶霸，牙齿很锋利\nriver_crab|河蟹|少见|30|reed:1.0804|横着走，钳子夹人很疼\nbass|鳜鱼|稀有|69|lake:0.9709|肉食性，专挑小鱼下手\nbighead_carp|鳙鱼|少见|28|lake:1.0216|脑袋特别大，游得慢\nsoftshell|甲鱼|稀有|83|reed:0.8659|咬住就不松口，小心取钩\neel|河鳗|少见|51|lake:0.4348|细长有力，缠线一把好手\nmandarin_fish|鳜花鱼|稀有|85|lake:0.7368|花纹华美，肉嫩刺少\ngiant_salamander|娃娃鱼|稀有|40|bamboo:0.8704|叫声像婴儿，脾气却很大\npearl_shell|珍珠贝|稀有|108|sea:0.7368|壳里偶尔藏着好东西\nseahorse|海马|稀有|119|dock:0.9175|游泳姿势相当优雅\ncuttlefish|墨鱼|稀有|136|sea:0.7368|被抓住就喷你一脸墨\nsturgeon|中华鲟|稀有|170|sea:0.7368|活化石级别的大家伙\nkoi|锦鲤|稀有|27|novice:1.1311|据说见到它会有好运气\ngolden_turtle|金龟|传说|363|swamp:0.5|背甲泛着金光，慢吞吞地划水\ndiscus|七彩神仙鱼|传说|431|swamp:0.5|水族箱里的活宝石\nmoon_jellyfish|月华水母|传说|500|swamp:0.5|半透明伞盖泛着淡蓝月光\narowana|金龙鱼|传说|624|sea:0.5|鳞片如金甲，游动雍容华贵\ndeep_anglerfish|深海鮟鱇|神话|907|abyss:1|额前挂着一盏幽蓝小灯\ndragon_koi|龙鲤|神话|1247|swamp:1|传说跃过龙门就会化龙\nabyss_whale|深渊鲸|神话|1701|abyss:1|深海巨影，一次摆尾掀起暗流\nkun|鲲|神话|2552|abyss:1|北冥有鱼，其名为鲲\nboot_carp|靴子鲤|少见|60|novice:0.4348|有人把破靴子扔进池塘，它就在里面安了家\nbamboo_shrimp|竹节虾|稀有|320|bamboo:0.7368|一节一节的花纹，藏在竹影下面\nlantern_fish|灯笼鱼|少见|61|night:1.0669|成群挂在堤坝边，像一串小灯笼\nghost_jelly|幽灵水母|传说|900|swamp:0.5|半透明得像一缕烟，雾天才会出现\nloach_king|泥鳅王|稀有|204|swamp:1.1323|传说泥鳅活过百年就会长出龙须\npearl_lume|夜明珠贝|传说|1550|sea:0.5|壳缝里透出微光，月夜里最亮\ngolden_hook|金钩鱼|神话|3400|glacier:1|嘴里叼着一枚金色鱼钩——上一任主人的吧\nnovice_crucian|鲫鱼|常见|5|novice:0.9604|池塘里最老实的小家伙\nnovice_stone_moroko|麦穗鱼|常见|5|novice:1.0003,reed:0.8926|身侧一道黑线爱啄钩\nnovice_shrimp|小河虾|常见|5|novice:0.9274|透明得能看见肚里的沙\nnovice_bitterling|鳑鲏|常见|5|novice:0.8971|阳光下闪出彩虹般的鳞\nnovice_yellow_catfish|黄颡鱼|少见|15|novice:1.1068,reed:0.9508|背鳍竖起来扎手的黄胡子\nnovice_mussel|河蚌|少见|12|novice:0.871,lake:1.096|壳缝里吐出一串小气泡\nnovice_turtle|巴西龟|少见|15|novice:1.1164|被人放生后长满了绿藻\nbamboo_chub|溪哥|常见|7|bamboo:1.1251|鳞片闪着溪水的亮光\nbamboo_horsemouth|马口鱼|常见|6|bamboo:0.9244|嘴大贪吃见饵就往前冲\nbamboo_river_snail|山坑螺|常见|6|bamboo:0.9037|吸在石头上扣都扣不动\nbamboo_goby|虾虎鱼|常见|5|bamboo:0.8515|趴在卵石上一动不动\nbamboo_barb|小鲃|常见|5|bamboo:0.8572|竹影下成群游来游去\nbamboo_stream_crab|溪蟹|常见|6|bamboo:0.9472|举着小钳子横着走路\nbamboo_labiobarbus|光唇鱼|少见|17|bamboo:1.0999|嘴唇厚实最爱啃青苔\nbamboo_spiny_eel|刺鳅|少见|14|bamboo:0.8941|浑身细刺钻进石缝里\nbamboo_corbicula|河蚬|少见|15|bamboo:0.9115|沙底上一排小小的纹路\nbamboo_spiny_frog|棘胸蛙|少见|17|bamboo:1.0582|蹲在湿石上鼓着腮帮\nbamboo_peach_jellyfish|桃花水母|稀有|33|bamboo:0.8824|水中漂浮的淡粉色小伞\ncanal_tilapia|罗非鱼|常见|6|canal:0.8545|污水里也活得膘肥体壮\ncanal_crayfish|小龙虾|常见|7|canal:0.9475|举着红钳从石缝里爬出\ncanal_old_boot|破靴子|常见|7|canal:0.9919|靴筒里还藏着两只小虾\ncanal_soda_can|易拉罐|常见|7|canal:0.9709|罐口卡着一只小螃蟹\ncanal_mosquitofish|食蚊鱼|常见|7|canal:0.9094|水面上一群指头长的小鱼\ncanal_mud_carp|鲮鱼|常见|6|canal:0.8989|贴着河底慢慢啃食青泥\ncanal_walking_catfish|塘鲺|少见|19|canal:1.0456|能在湿泥里扭着爬行\ncanal_mitten_crab|中华绒螯蟹|少见|18|canal:0.9667|毛茸茸的钳子夹住鱼线\ncanal_ricefield_eel|黄鳝|少见|19|canal:1.0288,swamp:0.9067|从石阶缝里滑出半条身子\ncanal_silver_carp|鲢鱼|少见|18|canal:0.9817|受惊时跃出水面半米高\ncanal_alligator_snapper|鳄龟|稀有|44|canal:1.0333|咬合力惊人的放生怪物\ncanal_chinese_sucker|胭脂鱼|稀有|39|canal:0.9121|背鳍如帆通体泛着红光\nlake_bream|鳊鱼|常见|12|lake:1.1404|侧扁的身子像一片银叶\nlake_icefish|银鱼|常见|10|lake:1.0276|几乎透明的细软小鱼\nlake_shrimp|湖虾|常见|9|lake:0.9028|长须在水草间轻轻摆动\nlake_whitefish|翘嘴白鱼|常见|11|lake:1.1068,night:0.973|追着小鱼把水面炸开花\nlake_black_carp|青鱼|稀有|61|lake:0.9967|力大得能把竿拉成弓\nlake_giant_softshell|百年老鳖|稀有|54|lake:0.8677|背上刻满岁月的旧纹\nreed_frog|青蛙|常见|14|reed:1.132|扑通一声跳进芦苇丛\nreed_water_snake|水蛇|常见|11|reed:0.8755,swamp:0.3239|贴着水面划出长长波纹\nreed_reed_shrimp|芦苇虾|常见|12|reed:0.9343|攀在苇秆上随波摇晃\nreed_river_snail|螺蛳|常见|13|reed:1.0357|壳上粘着几缕新鲜水草\nreed_leech|蚂蟥|少见|28|reed:0.8797|吸在腿上怎么拽都不松\nreed_freshwater_prawn|青虾|少见|29|reed:0.9154|弹尾一缩窜出半米远\nreed_pearl_mussel|珍珠蚌|稀有|66|reed:0.8926|壳里含着颗温润的珠子\nsea_hairtail|带鱼|常见|16|sea:1.1005|银亮长身像一把快刀\nsea_yellow_croaker|黄鱼|常见|16|sea:1.1314|出水时咕咕叫个不停\nsea_swimming_crab|梭子蟹|常见|13|sea:0.9187|两把尖钳护着满壳蟹黄\nsea_white_shrimp|白虾|常见|15|sea:1.048|一网拉上来活蹦乱跳\nsea_pomfret|鲳鱼|少见|38|sea:1.0159|扁得像面镜子闪着光\nsea_squid|鱿鱼|少见|32|sea:0.8524|喷出一团墨汁就逃走\nsea_spanish_mackerel|鲅鱼|少见|40|sea:1.0945|银蓝背上满是花纹\nsea_jellyfish|海蜇|少见|32|sea:0.8575|半透明地一伸又一缩\nsea_red_seabream|真鲷|稀有|77|sea:0.8947|通体粉红像海里的樱花\nsea_lobster|大龙虾|稀有|97|sea:1.1476|长须一弹溅起一片水花\nsea_tuna|金枪鱼|稀有|79|sea:0.9202|肌肉绷紧拖着鱼线狂奔\nsea_oarfish|皇带鱼|传说|186|sea:0.8584|银带般的身子长得望不到头\ndock_seabass|鲈鱼|常见|19|dock:1.0492|在桥墩阴影里伏击小鱼\ndock_old_tire|旧轮胎|常见|17|dock:0.9451|胎壁里住着一窝小蟹\ndock_shore_crab|小螃蟹|常见|17|dock:0.9304|举着钳子卡住鱼钩不放\ndock_sardine|沙丁鱼|常见|17|dock:0.9475|成群绕着木桩打转\ndock_eel|鳗鱼|少见|51|dock:1.081|缠住鱼线怎么都解不开\ndock_octopus|章鱼|少见|49|dock:1.0231|八条腕抱着鱼饵不撒手\ndock_starfish|海星|少见|54|dock:1.1398|五只角慢慢翻过木桩\ndock_barnacle|藤壶|少见|47|dock:0.9796|密密麻麻糊满整块船板\ndock_black_seabream|黑鲷|稀有|98|dock:0.8827|黑色鳍边一收就钻底\ndock_stonefish|石头鱼|稀有|100|dock:0.9031|装作石块等人踩上去\ndock_megalodon|巨齿鲨|传说|284|dock:1.0339|旧码头外掀起三米巨浪\nnight_opah|月鱼|少见|64|night:1.0534|鳞片映着月色泛出红光\nnight_glow_jellyfish|夜光水母|少见|64|night:1.0561|蓝光一闪一闪浮上来\nnight_giant_catfish|巨型鲶鱼|稀有|143|night:1.0207|拖得鱼竿弯进水里\nnight_moonlit_eel|银月鳗|稀有|129|night:0.9079|银色身子像一道月光\nnight_ghost_lanternfish|幽灵灯笼鱼|稀有|160|night:1.1482|幽绿的光在深处熄灭\nnight_glow_shark|夜光鲨|稀有|129|night:0.9049|背鳍划开墨色的水面\nnight_white_dragon_fish|白龙鱼|传说|339|night:0.9595|月光里跃出一条白影\nmangrove_mudskipper|弹涂鱼|常见|24|mangrove:0.9076|用胸鳍在泥滩上蹦跳\nmangrove_fiddler_crab|招潮蟹|常见|29|mangrove:1.1173|举着一只大钳来回招手\nmangrove_oyster|牡蛎|常见|25|mangrove:0.9346|牢牢粘在红树根上\nmangrove_baby_shark|幼鲨|少见|78|mangrove:1.1428|在浅湾里练习捕猎\nmangrove_mud_snail|泥螺|少见|75|mangrove:1.0948|拖着黏液在泥面爬行\nmangrove_prawn|基围虾|少见|75|mangrove:1.1011|在树根之间弹跳逃窜\nmangrove_mud_crab|青蟹|少见|64|mangrove:0.928|青壳大钳夹得人发麻\nmangrove_horseshoe_crab|中华鲎|稀有|177|mangrove:1.1203|蓝血甲壳像一顶小钢盔\nmangrove_saltwater_crocodile|湾鳄|稀有|138|mangrove:0.8542|浮木般的背脊缓缓移动\nmangrove_giant_python|巨蟒|稀有|157|mangrove:0.9838|从树根间垂下半个身子\nmangrove_dugong|儒艮|稀有|177|mangrove:1.1239|笨拙地抱着水草啃食\nmangrove_flood_dragon|蛟龙|传说|359|mangrove:0.8944|潮水翻涌时探出长角\nswamp_marsh_shrimp|沼虾|常见|32|swamp:0.9847|雾气里挥着细长的钳\nswamp_water_snail|水蜗牛|常见|30|swamp:0.9037|背着壳在浮叶上爬\nswamp_newt|蝾螈|常见|29|swamp:0.8635|橙腹的小东西扭着尾巴\nswamp_marsh_turtle|沼泽龟|少见|74|swamp:0.8581|壳上长满绿毛像块石头\nswamp_toad|蟾蜍|少见|91|swamp:1.0813|鼓着喉咙发出低哑叫声\nswamp_alligator_gar|鳄雀鳝|稀有|221|swamp:1.1428|满口尖牙咬得鱼线发白\nswamp_giant_leech|巨型水蛭|稀有|184|swamp:0.9325|黑亮的身子缠上小腿\nswamp_nine_eyed_fish|九目怪鱼|传说|464|swamp:0.9424|九只眼睛同时转向你\nswamp_ghost_catfish|幽冥巨鲶|传说|517|swamp:1.0615|雾里传来低沉的吞咽声\ncave_blindfish|盲鱼|常见|40|cave:0.9475|没有眼睛也能找到饵\ncave_cave_shrimp|洞穴虾|常见|38|cave:0.9016|通体雪白在暗水里漂\ncave_albino_tadpole|白化蝌蚪|常见|45|cave:1.0747|苍白的小尾巴摆动不停\ncave_cave_snail|洞穴螺|少见|99|cave:0.9001|壳薄得能看见里面的肉\ncave_albino_catfish|白化鲶|少见|119|cave:1.1059|白色长须在黑暗里摸索\ncave_blind_eel|盲眼鳗|少见|103|cave:0.9472|顺着暗流无声地滑过\ncave_olm|洞螈|稀有|230|cave:0.9094|粉白的小龙趴在石上\ncave_albino_giant_salamander|白化巨鲵|稀有|221|cave:0.8695|巨大白影贴着河底移动\ncave_stone_spirit_fish|石灵鱼|稀有|262|cave:1.0498|鳞片像会呼吸的钟乳石\ncave_glow_jellyfish|幽光水母|稀有|238|cave:0.9418|幽蓝冷光点亮整条暗河\ncave_blind_white_dragon|盲眼白龙|传说|608|cave:0.967|无眼的巨首擦过岩壁\ncave_earthcore_sturgeon|地心鲟|传说|591|cave:0.9364|骨板厚重如远古铠甲\nruins_grouper|石斑鱼|常见|49|ruins:0.9832|斑驳的身影守在船舷边\nruins_clownfish|小丑鱼|常见|55|ruins:1.099|在海葵触手间钻来钻去\nruins_sea_turtle|海龟|少见|121|ruins:0.9235|慢悠悠绕过断裂的桅杆\nruins_lionfish|狮子鱼|少见|131|ruins:1.0123,trench:0.9235|张开满身毒鳍缓缓逼近\nruins_sea_urchin|海胆|少见|138|ruins:1.0717|黑刺扎进手套里发麻\nruins_wreck_crab|沉船蟹|少见|125|ruins:0.955|从锈蚀的舱门里爬出\nruins_treasure_chest_fish|宝箱鱼|稀有|336|ruins:1.1326|鳞片像铜锁闪着暗光\nruins_giant_grouper|巨型石斑|稀有|336|ruins:1.1308|一张嘴能吞下整条鱼\nruins_rusty_swordfish|锈剑鱼|稀有|333|ruins:1.1209|长吻上缠着旧船的铁锈\nruins_pearl_king_clam|珍珠王贝|稀有|328|ruins:1.1032|壳里滚出拳头大的珍珠\nruins_ghost_shark|幽灵鲨|传说|847|ruins:1.1425|半透明的影子穿过船骸\nruins_sunken_leviathan|沉船巨鲲|传说|754|ruins:1.006|船体震动它正从下方经过\nabyss_deep_sea_shrimp|深海虾|常见|55|abyss:0.892|苍白细腿在泥底摸索\nabyss_deep_sea_crab|深海蟹|常见|67|abyss:1.1029|盲眼长腿抱着一块腐肉\nabyss_deep_sea_eel|深海鳗|少见|141|abyss:0.8785|张开大口等着一切落下\nabyss_sail_jellyfish|帆水母|少见|162|abyss:1.0225|像一片蓝色小帆漂过去\nabyss_deep_octopus|深海章鱼|少见|163|abyss:1.0288|吸盘在舷边留下圆痕\nabyss_anglerfish|鮟鱇鱼|稀有|405|abyss:1.1122|头顶小灯照出满口尖牙\nabyss_giant_squid|巨型乌贼|稀有|328|abyss:0.8839|触腕上密布着倒钩\nabyss_vampire_squid|吸血乌贼|稀有|343|abyss:0.9274|披着黑红斗篷缓缓飘过\nabyss_dragonfish|深海龙鱼|稀有|386|abyss:1.0549|獠牙长到合不上嘴\nabyss_colossal_squid|大王酸浆鱿|传说|930|abyss:1.0144|眼球比人头还大的家伙\nabyss_megamouth_shark|巨口鲨|传说|811|abyss:0.8731|巨口张开像一张大网\nabyss_leviathan|利维坦|神话|1921|abyss:0.916|海沟深处传来远古咆哮\ntrench_amphipod|端足虫|常见|67|trench:0.8944|指甲盖大的白虫翻着泥\ntrench_ghost_shrimp|幽灵虾|常见|69|trench:0.9199|半透明的影子掠过探照灯\ntrench_sea_pig|海猪|少见|203|trench:1.0558|粉胖的身子用细腿走路\ntrench_glass_sponge|玻璃海绵|少见|203|trench:1.0528|骨架像一件透明工艺品\ntrench_sixgill_shark|六鳃鲨|稀有|460|trench:1.033|远古的轮廓从黑暗中浮出\ntrench_ghost_octopus|幽灵蛸|稀有|417|trench:0.9265|深红斗篷在无光处张开\ntrench_gulper_eel|巨口鳗|稀有|394|trench:0.8698|能把嘴张得比身体还大\ntrench_spider_crab|巨蛛蟹|传说|1212|trench:1.0933|长腿跨过整个探测窗口\ntrench_dark_sea_serpent|无光海蛇|传说|1137|trench:1.0198|黑暗中只有鳞片在反光\ntrench_thousand_eye_fish|万眼鱼|传说|1267|trench:1.1464|每只眼睛都盯着不同方向\ntrench_guixu|归墟|神话|2477|trench:0.9763|万水归处连光都无法逃出\nglacier_cod|鳕鱼|常见|91|glacier:0.9946|冰凉水里肉质格外紧实\nglacier_ice_shrimp|冰虾|常见|82|glacier:0.886|在冰洞下闪着细碎的光\nglacier_arctic_char|冰鲑|少见|231|glacier:0.9643|红腹在冰下格外醒目\nglacier_ice_snail|冰螺|少见|263|glacier:1.1107|壳上结着一层薄薄的冰\nglacier_snow_crab|雪蟹|少见|261|glacier:1.102|白壳长腿在冰底爬行\nglacier_arctic_sturgeon|极地鳇|稀有|571|glacier:1.0405|破冰而出掀起大片水花\nglacier_ice_jellyfish|冰晶水母|稀有|571|glacier:1.0405|冻成晶体的伞盖仍在动\nglacier_ice_turtle|千年冰龟|稀有|603|glacier:1.1026|龟壳冻成了半透明的冰\nglacier_arctic_seal|北极海豹|传说|1530|glacier:1.1218|圆滚滚的家伙抢走鱼饵\nglacier_frozen_whale|冰封巨鲸|传说|1263|glacier:0.9097|冰层下传来悠长的鲸歌\nglacier_cod_king|极光鳕王|传说|1476|glacier:1.0789|鳞片映出整片绿色天光\nglacier_glacier_heart|冰川之心|神话|2762|glacier:0.8743|冰下传来缓慢的搏动声\naurora_aurora_shrimp|极光虾|常见|125|aurora:1.0891|壳上流转着淡淡的绿光\naurora_aurora_cod|极光鳕|少见|320|aurora:1.0735|在光幕下游成一条长线\naurora_stardust_jellyfish|星尘水母|少见|281|aurora:0.9328|触须上落满细小的光点\naurora_crystal_crab|冰晶蟹|少见|295|aurora:0.9826|钳子上凝着蓝白的霜花\naurora_aurora_salmon|极光鲑|稀有|692|aurora:1.0003|逆着光瀑向上游动\naurora_starlight_eel|星辉鳗|稀有|635|aurora:0.9103|身上流转着银河般的纹\naurora_light_pillar_fish|光柱鱼|稀有|669|aurora:0.9643|把极光折成一根根光柱\naurora_sky_whale|天穹巨鲸|传说|1859|aurora:1.0822|影子投在整片极光之上\naurora_aurora_dragonfish|极光龙鱼|传说|1917|aurora:1.1188|鳞片把整片天幕照得发亮\naurora_star_orbit_jellyfish|星轨水母|传说|1941|aurora:1.1341|伞盖旋转如一片星轨\naurora_eternal_night_sturgeon|永夜冰鲟|传说|1829|aurora:1.063|骨板下压着整片永夜\naurora_aurora_primordial_dragon|极光古龙|神话|4257|aurora:1.0942|光幕裂开它缓缓垂下头\nredfin|赤眼鳟|常见|5|novice:0.7|眼睛红红的，喜欢顶水游\npond_snail|塘螺|常见|4|novice:0.7|壳上裹着一层滑溜溜的苔\nstone_carp|石斑吻鰕|常见|5|bamboo:0.7|贴在石头上啃青苔\nbamboo_shrimp2|青虾|少见|18|bamboo:0.7|通体透明，夜里会发一点青\ncanal_guppy|孔雀鱼|常见|7|canal:0.7|尾鳍颜色比运河水还鲜艳\ncanal_eel|运河黄鳝|少见|21|canal:0.7|从水泥缝里钻出来的老住户\nsilver_carp|鲢鱼|常见|10|lake:0.7|成群游动，尾巴一摆一片白\nlake_perch|湖鲈|少见|24|lake:0.7|追着小鱼跑，咬钩很凶\nreed_loach|芦苇鳅|常见|12|reed:0.7|藏在苇根下，身上带花纹\nsea_sardine|沙丁鱼|常见|15|sea:0.7|密密麻麻挤成一片银云\nsea_bream|海鲷|少见|40|sea:0.7|牙口好，能把钩咬断\ndock_goby|虾虎鱼|常见|16|dock:0.7|趴在旧船底一动不动\nnight_moth_fish|夜蛾鱼|常见|24|night:0.7|被灯光引来，围着堤坝转\nnight_ray|月鳐|传说|317|night:0.7|在月光下像一片会飞的黑影\nmangrove_crab|招潮蟹|少见|72|mangrove:0.7|举着一只特别大的钳子\nswamp_leech|水蛭|常见|36|swamp:0.7|黏糊糊地挂在钩上\nswamp_eel|沼泽电鳗|传说|520|swamp:0.7|摸一下能麻半天\ncave_blind_shrimp|盲虾|常见|38|cave:0.7|眼睛退化了，全靠触须\ncave_whitefish|白化鳅|少见|109|cave:0.7|通体雪白，怕光\nruins_porgy|遗迹鲷|常见|55|ruins:0.7|在锈铁皮之间穿来穿去\nruins_lobster|船蛆虾|少见|136|ruins:0.7|住在烂木头里，钳子很硬\nabyss_snailfish|深渊狮子鱼|稀有|342|abyss:0.7|半透明的身体里有微光\nabyss_vampire|吸血乌贼|传说|978|abyss:0.7|张开像一把黑伞\ntrench_grenadier|深渊鼠尾鳕|稀有|418|trench:0.7|尾巴细得像鞭子\nglacier_icefish|冰鱼|常见|95|glacier:0.7|血是透明的，贴着冰面游\nglacier_char|北极红点鲑|传说|1355|glacier:0.7|身上洒满红色小点\naurora_crystal_fish|极光晶鱼|稀有|748|aurora:0.7|鳞片折出的光一直在变色\naurora_ghost_whale|极光幽灵鲸|神话|3607|aurora:0.7|游过时整片冰面都亮了一下\nstarfall_silver_crucian|陨湖银鲫|常见|136|starfall:0.9628|鳞片里嵌着洗不掉的星砂\nstarfall_stardust_goby|星屑虾虎|少见|348|starfall:0.9451|趴在陨石坑边捡碎屑吃\nstarfall_glow_loach|夜光泥鳅|少见|395|starfall:1.0876|受惊时整条泛起淡蓝色的光\nstarfall_iron_catfish|陨铁鲶|少见|391|starfall:1.0759|骨头里像掺了铁，沉得拖不动\nstarfall_meteor_eel|流星鳗|稀有|789|starfall:0.9280|划过水面时留下一道白痕\nstarfall_meteor_grouper|陨石斑|稀有|924|starfall:1.1023|身上的斑点像被砸出来的坑\nstarfall_galaxy_tetra|银河灯鱼|稀有|865|starfall:1.0267|成群游动时像一条旋转的星河\nstarfall_starcore_koi|星核锦鲤|传说|1969|starfall:0.9262|胸口一团光，据说是星核\nstarfall_comet_marlin|彗尾旗鱼|传说|2205|starfall:1.0486|冲刺时拖着几十米长的光尾\nstarfall_fallen_whaleshark|陨落鲸鲨|传说|1947|starfall:0.9151|背上嵌着一整块陨石\nstarfall_stardust_medusa|碎星水母|传说|2078|starfall:0.9826|伞下悬着一片碎掉的星光\nstarfall_meteor_roc|天陨鹏鱼|神话|4457|starfall:0.9250|展鳍如翼，从星陨里游出来\nvoidsea_blindfish|归墟盲鱼|常见|155|void_sea:0.8962|没有眼睛，靠水流认路\nvoidsea_bottomless_eel|无底鳗|少见|447|void_sea:1.0033|尾巴探不到尽头\nvoidsea_still_hydra|静水螅|少见|389|void_sea:0.8602|整片水都停了，只有它在动\nvoidsea_lantern_eye|灯眼鱼|少见|450|void_sea:1.0108|眼眶里点着一盏不会灭的灯\nvoidsea_vortex_turtle|漩涡龟|稀有|978|void_sea:0.9466|游过的地方会自动转起漩涡\nvoidsea_silent_whale|无声鲸|稀有|942|void_sea:0.9079|它唱歌的时候你什么也听不见\nvoidsea_myriad_jelly|万水母|稀有|1083|void_sea:1.0585|触手像天下所有河流的分叉\nvoidsea_elder_whale|归墟祖鲸|传说|2848|void_sea:1.1179|背上的藤壶比船还大\nvoidsea_boat_swallower|吞舟鱼|传说|2889|void_sea:1.1353|张口的瞬间，光都被吞进去\nvoidsea_nether_marlin|幽冥旗鱼|传说|2650|void_sea:1.0339|鳍是半透明的，像一片幽影\nvoidsea_dark_arowana|无光龙鱼|传说|2633|void_sea:1.0267|鳞片把所有照到它的光都吃掉\nvoidsea_abyss_dragon|归墟渊龙|神话|5346|void_sea:0.9100|它一翻身，整片海就换了方向\nvoidsea_chaos_devourer|混沌吞天鱼|神话|6410|void_sea:1.1095|据说它饿的时候会吃掉自己的影子\npalace_glass_lanternfish|琉璃灯鱼|常见|210|dragon_palace:1.0066|身体像一盏会游的宫灯\npalace_coral_maid|珊瑚宫女鱼|少见|605|dragon_palace:1.1227|排着队从珊瑚廊下穿过\npalace_pearl_shellfish|珍珠贝鱼|少见|571|dragon_palace:1.0546|壳里那颗珠子是它的心\npalace_coiled_carp|蟠龙小鲤|少见|604|dragon_palace:1.1209|还没长开，鳞上已有龙纹\npalace_ambergris_whale|龙涎香鲸|稀有|1343|dragon_palace:1.0774|一整片水域都是它的香气\npalace_crystal_barbel|水晶龙须鱼|稀有|1312|dragon_palace:1.0498|两根长须像水晶做的天线\npalace_pillar_fish|定海柱鱼|稀有|1112|dragon_palace:0.8755|沉在水底一动不动，像根柱子\npalace_golden_dragon|敖氏金龙|传说|3361|dragon_palace:1.0783|鳞片上刻着王朝般的纹路\npalace_night_pearl|夜明珠鱼|传说|2759|dragon_palace:0.8683|整座宫殿的光都是它给的\npalace_yaksha|巡海夜叉鱼|传说|3159|dragon_palace:1.0078|提着叉子沿宫墙巡夜\npalace_sky_koi|九霄龙鲤|传说|3073|dragon_palace:0.9778|传说跃过龙门就能化龙\npalace_dragon_king|东海龙王|神话|7740|dragon_palace:1.0969|它一睁眼，整片东海都安静了\npalace_yinglong|应龙|神话|7995|dragon_palace:1.1362|有翼的龙，掌着天下雨水\npalace_zhulong|烛龙|神话|6233|dragon_palace:0.8653|睁眼为昼，闭眼为夜\nbig_fat_fish|大肥鱼|稀有|360|novice:0.1579,bamboo:0.1579,canal:0.1579,lake:0.1579,reed:0.1579,sea:0.1579,dock:0.1579,night:0.1579,mangrove:0.1579,swamp:0.1579,cave:0.1579,ruins:0.1579,abyss:0.1579,trench:0.1579,glacier:0.1579,aurora:0.1579,starfall:0.1579,void_sea:0.1579,dragon_palace:0.1579|原型据说是现实里的 DeepSeek 模型：问它什么都肯答，答得又稳又长，就是偶尔会想很久"
-  },
-  "collectible_defs": {
-    "invisible": true,
-    "description": "杂物定义（没中鱼时可能钩上来的东西）。每行：id|名称|emoji|权重|价值|说明；权重越大越常见，价值是卖店价。加一条 = 加一行；# 开头是注释。",
-    "type": "text",
-    "default": "seaweed|海草|🌿|30|2|缠在钩上的一把水草，晒干了能当柴烧\nold_boot|破靴子|🥾|22|1|左脚。没人知道右脚在哪儿\ntin_can|铁皮罐|🥫|18|3|锈得看不出原来装什么，废铁站肯收\ndrift_bottle|漂流瓶|🍾|16|5|瓶口封着蜡，里面好像有东西\nstarry_shell|星纹贝|🐚|8|25|壳上落着一小片星形的纹，握久了发温\nsunken_coin|沉水古币|🪙|4|60|字都被水磨平了，只认得出是钱\ntreasure_chest|沉船宝箱|🎁|2|200|锁早锈死了，摇一摇，里头叮当响"
-  },
-  "variant_defs": {
-    "invisible": true,
-    "description": "变异个体定义。每行：id|名称|emoji|相对权重|价值倍率|说明；价值倍率直接乘在鱼价上（例如 1.30 = 贵 30%）。",
-    "type": "text",
-    "default": "golden|黄金|🌟|34|1.3|鳞片像鎏过一层金，出水时晃眼\nalbino|白化|❄️|24|1.45|白得透光，鳍里能看见淡淡的血\ncrimson|赤焰|🔥|18|1.6|鳍边红得像刚贴在火上烤过\njade|翡翠|💚|13|1.85|通体青碧，像从玉里凿出来的\nabyss|幽冥|🌑|8|2.3|黑得看不见鳞，只有眼睛有一点光\nprismatic|虹彩|🌈|3|3.2|偏一下角度换一种颜色，七种都齐"
-  },
-  "weather_defs": {
-    "invisible": true,
-    "description": "天气定义。每行：id|名称|emoji|权重|稀有度倍率|窗口倍率|运气|逃脱倍率|说明；稀有度倍率写成 少见:1.4,稀有:1.5,传说:1.3（留空 = 该天气不额外加成）；窗口倍率越小拉线窗口越短、运气越高越容易出好鱼、逃脱倍率越大越容易跑鱼。",
-    "type": "text",
-    "default": "sunny|晴朗|☀️|30||1.0|0.0|1.0|水面平得像镜子，什么都可能来咬\ncloudy|多云|⛅|24||1.05|0.02|0.95|光柔和，鱼口顺，拉线也从容些\nrain|下雨|🌧️|16|少见:1.4,稀有:1.5,传说:1.3|0.9|0.04|1.0|雨点一落鱼就活泛，少见以上的鱼变多\nfog|起雾|🌫️|12|稀有:1.6,传说:1.8,神话:1.5|0.85|0.03|1.1|十步外看不清漂，可大鱼敢贴着岸走\nmoon|月夜|🌙|10|传说:1.7,神话:2.0|0.92|0.06|1.05|月华压着水面，传说与神话的鱼会浮上来\nwind|大风|💨|8|少见:1.3,稀有:1.4|0.75|0.02|1.25|浪一层压一层，拉线的空当短，也更容易跑鱼"
-  },
-  "easter_egg_defs": {
-    "invisible": true,
-    "description": "上鱼后的彩蛋定义。每行：id|权重|文案|效果；效果写成 gold=12 / luck=0.08 / note=1（给漂流瓶纸条）/ heal_bait=1（返还鱼饵），分号分隔多个。",
-    "type": "text",
-    "default": "coin_in_fish|22|🪙 鱼肚子里滚出一枚硬币，还带着体温。|gold=12\nold_map|16|🗺️ 鱼鳞上粘着一角湿透的纸，画着几条线。|note=1\nlucky_scale|18|✨ 一片鳞在手里亮了一下，你把它塞进口袋。|luck=0.08\nfriend|14|🐟 它在你手心躺了一会儿才松开尾巴，像认得你。|luck=0.05\nbait_back|12|🪱 收线一看，饵还牢牢挂在钩上，一点没动。|heal_bait=1\npearl_in_mouth|10|🦪 它嘴里含着一颗小珍珠，吐在你掌心上。|gold=35\nlost_ring|5|💍 线上缠着一枚旧戒指，内圈刻着两个字母。|gold=80"
-  },
-  "button_defs": {
-    "invisible": true,
-    "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。插件里每条回复都有独立的场景键（共 150+ 个，见编辑器页面「💬 回复」页的场景卡片），常用的如 cast.hit=钓到鱼的结果 / cast.miss_none=空竿 / pull.hook=咬钩提示 / bag.list=背包视图 / location.list=钓点视图 / shop.list=商店货架 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）。老的 5 个场景键（cast/pull/bag/location/story）仍然有效：没单独配置的子场景会继承它们，所以升级后默认按钮一字不变。样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
-    "type": "text",
-    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|水族馆|/钓鱼 水族馆|default\ncast|卖光光|/钓鱼 卖光光|default\npull|拉线！|/钓鱼 拉|primary\nbag|再来一竿|/钓鱼|default\nbag|水族馆|/钓鱼 水族馆|default\nbag|卖光光|/钓鱼 卖光光|default\nbag|帮助|/钓鱼 帮助|default\nlocation|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|水族馆|/钓鱼 水族馆|default\nlocation|看天气|/钓鱼 今日|default\naquarium.view|再来一竿|/钓鱼|default\naquarium.view|领收益|/钓鱼 领|primary\naquarium.view|看背包|/钓鱼 背包|default\naquarium.view|卖光光|/钓鱼 卖光光|default\norders.list|再来一竿|/钓鱼|default\norders.list|看背包|/钓鱼 背包|default\norders.list|卖光光|/钓鱼 卖光光|default\nitem.used|再来一竿|/钓鱼|default\nitem.used|看背包|/钓鱼 背包|default\nitem.used|水族馆|/钓鱼 水族馆|default\nstamina.view|再来一竿|/钓鱼|default\nstamina.view|看背包|/钓鱼 背包|default\nhelp.page|开始钓鱼|/钓鱼|primary\nhelp.page|看背包|/钓鱼 背包|default\nhelp.page|水族馆|/钓鱼 水族馆|default\nhelp.page|我的档案|/钓鱼 档案|default\nstory|{label}|/钓鱼 事件 {n}|default"
-  },
-  "text_overrides": {
-    "invisible": true,
-    "description": "每一条回复的文案。一行一条：场景|模板。场景键与 button_defs 完全同名（例如 cast.hit 既是「钓到鱼的结果」那条回复的按钮场景，也是它的文案键）。模板里可以用 {原文} 表示插件原本拼好的那段文字（把它放在前后就能加前缀/后缀、改 emoji、换语气），也可以用该场景声明的具体占位符（例如 cast.hit 支持 {鱼名} {品质} {估值} {余额}）。没写到的场景一律用内置文案，所以留空=和以前完全一样。未知场景、占位符写错的行会被跳过并在日志里提示（不会把 {xxx} 发给玩家）。推荐用编辑器页面「💬 回复」页改，那里可以实时预览效果。",
-    "type": "text",
-    "default": "",
-    "hint": "例：cast.miss_none|🪝 水面静悄悄的，连个泡都没有 ｜ pull.hook|{原文}\\n　⚡ 快！{秒数} 秒内发 /钓鱼 拉"
-  },
-  "button_layout": {
-    "invisible": true,
-    "description": "按钮排布：一行一条，格式「场景|每行几个」。场景写 * 表示其余所有场景的默认值。每行个数只能是 1~5。留空=用内置排布（默认每行 3 个，随机插曲 story 每行 1 个），与历史版本逐字一致。",
-    "type": "text",
-    "default": "",
-    "hint": "例：*|2 表示所有场景每行 2 个按钮；story|1 表示插曲每行 1 个"
-  },
-  "button_style_mode": {
-    "type": "string",
-    "description": "按钮样式策略：按按钮表（每行各写各的）/ 统一（全部用下面那个样式）",
-    "default": "按按钮表",
-    "invisible": true
-  },
-  "button_default_style": {
-    "type": "string",
-    "description": "统一样式，也是按钮表里没写样式时的兜底：default（灰）/ primary（蓝）/ 数字",
-    "default": "default",
-    "invisible": true
-  },
   "command_aliases": {
     "invisible": true,
     "description": "命令别名：一行一个，格式「规范子命令|别名1,别名2」（全角逗号、顿号也认）。只能增加写法，内置写法永远有效、不会被覆盖。可用规范子命令：拉、帮助、下竿、去、背包、卖、图鉴、水族馆、扩建背包、锁定、解锁、今日、排行、商店（只回指路）、鱼竿、道具、鱼饵、用、查、事件、换饵、体力、档案、金币、签到、订单、钓点、杂物。与内置写法撞名、目标子命令不存在、与鱼饵重名的行会被跳过（日志里有提示）。留空=只认内置写法。",
     "type": "text",
-    "default": "拉|拉线,收,收线,提,提竿,拽,pull,p\n帮助|help,?,？,菜单,指令\n下竿|钓,钓鱼,抛竿,甩竿,下钩,抛,钓鱼吧,cast,fish,fishing\n去|前往,go\n背包|包,bag,鱼篓\n卖|卖鱼,sell,卖垃圾,卖光光,卖光,清空,全卖,空背包,sellall,一键卖出\n图鉴|收集,collection\n水族馆|馆,aquarium,缸\n扩建背包|扩容,背包扩容,鱼篓扩容\n锁定|锁,lock\n解锁|解,unlock\n今日|天气,行情,today,weather,market\n排行|排行榜,rank,top,榜\n商店|铺子,shop\n鱼饵|鱼饵店,饵店,饵\n道具|道具店,物品,item,items\n买|购买,buy\n用|使用,道具用,use\n查|查询,鱼,鱼查,资料,info,lookup\n事件|插曲,选择,event\n换饵|换鱼饵,装备饵,上饵,bait,equip_bait\n体力|体力值,活力,stamina\n档案|profile,me\n金币|gold\n签到|sign\n订单|任务,order,orders\n钓点|地点,地图,map,location\n鱼竿|竿,rod\n杂物|漂流瓶,收集品,collect",
+    "default": "拉|拉线,收,收线,提,提竿,拽,pull,p\n帮助|help,?,？,菜单,指令\n下竿|钓,钓鱼,抛竿,甩竿,下钩,抛,钓鱼吧,cast,fish,fishing\n去|前往,go\n背包|包,bag,鱼篓\n卖|卖鱼,sell,卖垃圾,卖光光,卖光,清空,全卖,空背包,sellall,一键卖出\n图鉴|收集,collection\n水族馆|馆,aquarium,缸\n扩建背包|扩容,背包扩容,鱼篓扩容\n锁定|锁,lock\n解锁|解,unlock\n今日|天气,行情,today,weather,market\n排行|排行榜,rank,top,榜\n商店|铺子,shop\n鱼饵|鱼饵店,饵店,饵\n道具|道具店,物品,item,items\n买|购买,buy\n用|使用,道具用,use\n查|查询,鱼,鱼查,资料,info,lookup\n事件|插曲,选择,event\n换饵|换鱼饵,装备饵,上饵,bait,equip_bait\n体力|体力值,活力,stamina\n档案|profile,me\n金币|gold\n签到|sign\n订单|任务,order,orders\n钓点|地点,地图,map,location\n鱼竿|竿,rod\n杂物|漂流瓶,收集品,collect\n自动|自动补给,auto\n称号|头衔,title\n供奉|香火,上香,offering",
     "hint": "例：在「背包」那一行后面加「,仓库,行囊」，以后 /钓鱼 仓库 就等于 /钓鱼 背包。保存即生效，不用重载。少打空格的写法（/钓鱼 仓库3）也认。"
   },
   "custom_commands": {
@@ -786,17 +862,5 @@
     "type": "text",
     "default": "",
     "hint": "例：快捷签到|执行:签到 ｜ 领奖|发送:今天也要加油！你现在有 {金币} 金币（点券）"
-  },
-  "button_empty_scenes": {
-    "invisible": true,
-    "description": "明确「就是不要按钮」的场景（逗号分隔场景名，例如 cast.none,bag.empty）：连「继承父场景」也断掉。留空 = 不特殊处理",
-    "type": "string",
-    "default": ""
-  },
-  "user_edited_keys": {
-    "invisible": true,
-    "description": "站长自己改过的配置键（插件自动记录）。升级时这些键**不会被新版默认值覆盖**，免得每次更新都要重新改一遍；想恢复出厂值就在编辑器里手动改回去或选 defaults_sync_mode=all",
-    "type": "list",
-    "default": []
   }
 }
