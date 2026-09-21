@@ -6946,13 +6946,13 @@ async def main():
     )
     check(
         mod._quality_ceil() >= 6.0,
-        f"倍率钳制上限跟着最高档走（神品 6.0 不会被削）-> {mod._quality_ceil()}",
+        f"倍率钳制上限跟着最高档走（v1.18.22 神品是 6.0-10.0）-> {mod._quality_ceil()}",
     )
     myth_inst = mod._new_instance("carp", 1.0)
-    mod._apply_quality(myth_inst, 5.5)
+    mod._apply_quality(myth_inst, 7.5)
     check(
-        myth_inst["quality"] == "神品" and abs(myth_inst["quality_mult"] - 5.5) < 1e-9,
-        f"5.5 倍率落在神品档且不被截断 -> {myth_inst['quality']} {myth_inst['quality_mult']}",
+        myth_inst["quality"] == "神品" and abs(myth_inst["quality_mult"] - 7.5) < 1e-9,
+        f"7.5 倍率落在神品档且不被截断 -> {myth_inst['quality']} {myth_inst['quality_mult']}",
     )
 
     # 洗髓丹：概率拉到 1 = 必出神品（验证「洗得出来」这条链路）
@@ -8488,12 +8488,33 @@ async def main():
         mod._roll_quality_mult(
             _off_cfg["quality_weights"], extra_luck=2.0, cfg=_off_cfg
         )
-        for _ in range(4000)
+        for _ in range(6000)
+    ]
+    _plain = [
+        mod._roll_quality_mult(
+            _off_cfg["quality_weights"], cfg=_off_cfg
+        )
+        for _ in range(6000)
+    ]
+    # 手气 +2.0 也掷不出比「无手气」更高的分布：均值几乎一样、也绝不会有 3.5 以上的绝品偏多
+    _off_mean, _plain_mean = sum(_off) / len(_off), sum(_plain) / len(_plain)
+    check(
+        abs(_off_mean - _plain_mean) < 0.08
+        and sum(1 for x in _off if x >= 3.5) / len(_off) < 0.06,
+        f"luck_weight_step=0 → 手气 +2.0 与无手气分布一致（均值 {_off_mean:.2f} vs "
+        f"{_plain_mean:.2f}）",
+    )
+    _step_cfg = dict(_curve_cfg)
+    _shifted = [
+        mod._roll_quality_mult(
+            _step_cfg["quality_weights"], extra_luck=2.0, cfg=_step_cfg
+        )
+        for _ in range(6000)
     ]
     check(
-        max(_off) <= mod.QUALITY_TIERS[2][2] + 1e-9 and sum(_off) / len(_off) < 1.6,
-        f"luck_weight_step=0 → 手气再高也只按权重掷（{len(_off)} 次最高 "
-        f"{max(_off):.2f}、均值 {sum(_off) / len(_off):.2f}）",
+        sum(1 for x in _shifted if x >= 3.5) / len(_shifted) > 0.20,
+        f"默认 luck_weight_step=1.0 时手气 +2.0 真的把分布顶上去了"
+        f"（绝品+ 占比 {sum(1 for x in _shifted if x >= 3.5) / len(_shifted):.1%}）",
     )
     check(
         abs(mod._safe_number(_curve_cfg.get("luck_cap"), 0) - 2.0) < 1e-9
