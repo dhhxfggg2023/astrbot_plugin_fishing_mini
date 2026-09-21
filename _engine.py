@@ -131,12 +131,20 @@ class EngineMixin:
                         f"（/钓鱼 鱼饵 买 可以补货，或 /钓鱼 换饵 空钩 固定用空钩）"
                     )
 
-        # ---- 4. 自动补 + 自动用手气道具（要玩家先指定用哪一件）----
+        # ---- 4. 自动补 + 自动用「钓手 buff」道具（手气 / 品质保底，要玩家先指定用哪一件）----
         auto_item = str(player.get("auto_buff_item") or "").strip()
+        auto_effects = ((self.items.get(auto_item) or {}).get("effects") or {}) if auto_item else {}
+        _is_caster_item = (
+            _safe_number(auto_effects.get("buff_quality"), 0.0) > 0
+            or _safe_number(auto_effects.get("quality_floor"), 0.0) > 0
+        )
         if (
             auto_item
+            and _is_caster_item
             and _cfg_bool(cfg, "auto_supply_buff", True)
+            # 手气 buff 与品质保底都在身上时就别再补了（两者的竿数各算各的）
             and _safe_int(player.get("buff_casts_left"), 0, 0) <= 0
+            and _safe_int(player.get("buff_floor_casts"), 0, 0) <= 0
         ):
             # 每日额度（v1.18.18）：额度用完了就别再自动买了 —— 不然「限额」等于没有，
             # 玩家挂机一整天会一直自动续上手气道具。
@@ -153,7 +161,10 @@ class EngineMixin:
         if auto_item:
             item = self.items.get(auto_item)
             effects = (item or {}).get("effects") or {}
-            if item and _safe_number(effects.get("buff_quality"), 0.0) > 0:
+            if item and (
+                _safe_number(effects.get("buff_quality"), 0.0) > 0
+                or _safe_number(effects.get("quality_floor"), 0.0) > 0
+            ):
                 bag = player.setdefault("items", {})
                 have = _safe_int(bag.get(auto_item), 0, 0)
                 price = _safe_int(item.get("price"), 0, 0)
@@ -181,15 +192,24 @@ class EngineMixin:
                     )
                 if have > 0 and grant > 0:
                     bag[auto_item] = have - 1
-                    player["buff_casts_left"] = grant
-                    player["buff_quality"] = _safe_number(
-                        effects.get("buff_quality"), 0.0
-                    )
+                    _floor = _safe_number(effects.get("quality_floor"), 0.0)
+                    if _floor > 0:
+                        # 品质保底类（v1.18.23）：走 buff_floor / buff_floor_casts
+                        player["buff_floor_casts"] = grant
+                        player["buff_floor"] = _floor
+                        _what = f"品质保底「{_quality_label(_floor)[0]}」"
+                    else:
+                        player["buff_casts_left"] = grant
+                        player["buff_quality"] = _safe_number(
+                            effects.get("buff_quality"), 0.0
+                        )
+                        _what = (
+                            f"手气 +"
+                            f"{_safe_number(effects.get('buff_quality'), 0.0):.0%}"
+                        )
                     _daily_add(player, "buff", grant)
                     notes.append(
-                        f"🎐 自动用上「{item['name']}」"
-                        f"（手气 +{_safe_number(effects.get('buff_quality'), 0.0):.0%}，"
-                        f"{grant} 竿）"
+                        f"🎐 自动用上「{item['name']}」（{_what}，{grant} 竿）"
                     )
                 elif grant <= 0:
                     notes.append("🌙 今天的手气额度用完了，没有自动补给")
@@ -355,6 +375,8 @@ class EngineMixin:
             # （来源不同、寿命不同，见 _calc._effective_luck）；
             # 本次抛竿读一次，收尾时消耗（一次性清空 + 玉佩竿数 -1，见 _consume_luck）
             luck = _effective_luck(player, cfg)
+            # 品质保底（v1.18.23）：玉佩这类道具让接下来 N 竿「不出垃圾」
+            floor = _effective_floor(player, cfg)
             gear_luck = _safe_number(rod.get("luck_bonus"), 0.0)
             player["last_fish_time"] = int(now)
             await self._save_player(player)
@@ -378,6 +400,7 @@ class EngineMixin:
                     + weather_luck,
                     extra_luck=luck,
                     cfg=cfg,
+                    floor=floor,
                 )
                 catch = _new_instance(
                     fish["id"],
@@ -398,6 +421,7 @@ class EngineMixin:
                 spec["weather_luck"] = weather_luck
                 spec["gear_luck"] = gear_luck
                 spec["player_luck"] = luck
+                spec["player_floor"] = floor
                 spec["rod_value_bonus"] = rod_value
                 spec["location_mult"] = loc_value
                 spec["codex_mult"] = codex_mult
@@ -591,6 +615,7 @@ class EngineMixin:
             # 以前整批只消耗 1 竿的玉佩额度 —— 连钓 15 次只掉 1 次 buff，站长报的就是这个。
             # 一次性储备（插曲/彩蛋给的那种）仍然只作用于**第 1 竿**，用完即清。
             buff_before = _safe_int(player.get("buff_casts_left"), 0, 0)
+            floor_before = _safe_int(player.get("buff_floor_casts"), 0, 0)
 
             lines = [f"🎣 连钓 {planned} 次"]
             # 自动补给说明（自动挂饵 / 自动补货 / 自动用手气道具，见 _auto_supply）
@@ -610,6 +635,7 @@ class EngineMixin:
                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
                 luck = _effective_luck(player, cfg)
+                floor = _effective_floor(player, cfg)
                 _consume_luck(player)
                 outcome, drop = self._roll_cast_outcome(
                     bait_id,
@@ -659,6 +685,7 @@ class EngineMixin:
                     bait_luck=bait_luck,
                     extra_luck=luck,
                     cfg=cfg,
+                    floor=floor,
                 )
                 catch = _new_instance(
                     fish["id"],
@@ -727,6 +754,18 @@ class EngineMixin:
                 lines.append(
                     f"🎐 锦鲤玉佩：本批 -{used_now} 竿"
                     + (f"　还剩 {left_now} 竿" if left_now > 0 else "　（用完了）")
+                )
+            # 品质保底（v1.18.23）：同一套「本批 -N 竿」的写法
+            if floor_before > 0:
+                floor_left_now = _safe_int(player.get("buff_floor_casts"), 0, 0)
+                floor_used = max(0, floor_before - floor_left_now)
+                lines.append(
+                    f"🧿 品质保底：本批 -{floor_used} 竿"
+                    + (
+                        f"　还剩 {floor_left_now} 竿"
+                        if floor_left_now > 0
+                        else "　（用完了）"
+                    )
                 )
 
             async for _r in self._say_msg(event, "cast.multi_summary", event.plain_result("\n".join(lines))):

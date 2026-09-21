@@ -1013,6 +1013,10 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # 持续型手气（锦鲤玉佩）：buff_casts_left > 0 时每竿都加这么多
         "buff_casts_left": 0,
         "buff_quality": 0.0,
+        # 品质保底（v1.18.23，quality_floor 道具）：buff_floor_casts > 0 时，
+        # 这一竿的品质倍率不低于 buff_floor（2.0 = 至少珍品）
+        "buff_floor_casts": 0,
+        "buff_floor": 0.0,
         # 小插曲的「连续剧」进度（v1.18.13）：
         #   arc    = 正在连载的那条线的 id（"" = 没有在连载）
         #   ep     = 已经演到第几话（下一话 = ep + 1）
@@ -1104,11 +1108,28 @@ def _effective_luck(player: dict[str, Any], cfg: dict[str, Any] | None = None) -
     return once + buff + offering
 
 
+def _effective_floor(player: dict[str, Any], cfg: dict[str, Any] | None = None) -> float:
+    """这一竿的**品质保底**倍率（``quality_floor`` 道具给的，v1.18.23）。
+
+    与手气是两件事：手气让分布往高档偏（还会被 ``luck_cap`` 钳住），
+    保底是「这一竿的品质**不低于**这个倍率」—— 例如 2.0 = 至少珍品。
+
+    值写在 ``buff_floor``、剩余竿数写在 ``buff_floor_casts``（寿命与手气 buff 各管各的，
+    见 ``_consume_luck``）。没生效时返回 0（= 不保底）。
+    """
+    casts = _safe_int(player.get("buff_floor_casts"), 0, 0)
+    if casts <= 0:
+        return 0.0
+    return max(0.0, _safe_number(player.get("buff_floor"), 0.0))
+
+
 def _consume_luck(player: dict[str, Any]) -> None:
-    """抛竿收尾时消耗手气（连钓里每竿各调一次，见 ``_engine``）。
+    """抛竿收尾时消耗手气与保底（连钓里每竿各调一次，见 ``_engine``）。
 
     * 一次性储备 **一竿即清**（不管玉佩在不在生效）
     * 持续型 buff 的剩余竿数 -1；减到 0 时把加成一起清掉，别留个空 buff
+    * 品质保底（``buff_floor``）与手气 buff **各扣各的竿数** —— 两者可以同时在身上，
+      但寿命独立，不要让一个的结束把另一个也清掉
     """
     player["luck_charges"] = 0.0
     casts = _safe_int(player.get("buff_casts_left"), 0, 0)
@@ -1117,6 +1138,12 @@ def _consume_luck(player: dict[str, Any]) -> None:
     player["buff_casts_left"] = casts
     if casts <= 0:
         player["buff_quality"] = 0.0
+    floor_casts = _safe_int(player.get("buff_floor_casts"), 0, 0)
+    if floor_casts > 0:
+        floor_casts -= 1
+    player["buff_floor_casts"] = floor_casts
+    if floor_casts <= 0:
+        player["buff_floor"] = 0.0
 
 
 def _level_threshold(level: int) -> int:
@@ -2092,6 +2119,16 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
             # 照着「还在生效」把它当成本次 buff 的每竿加成，并把一次性储备清零（不双算）
             player["buff_quality"] = player["luck_charges"]
             player["luck_charges"] = 0.0
+
+        # --- 品质保底（v1.18.23）：和手气 buff 一样是「持续 N 竿」，但字段独立 ---
+        player["buff_floor_casts"] = int(
+            _clamp(_safe_int(raw.get("buff_floor_casts"), 0, 0), 0, 999)
+        )
+        player["buff_floor"] = _clamp(
+            _safe_number(raw.get("buff_floor"), 0.0), 0.0, _quality_ceil()
+        )
+        if player["buff_floor_casts"] <= 0:
+            player["buff_floor"] = 0.0       # 竿数用光 = 保底结束，别留个空保底
 
         # --- 水族馆装饰（耐久型）：只做结构修复，过期清理走惰性结算 ---
         raw_dec = raw.get("decorations")

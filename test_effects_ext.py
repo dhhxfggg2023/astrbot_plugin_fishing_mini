@@ -86,8 +86,9 @@ check(
     f"注册表前 8 项 == 历史白名单（后面才是新键）：{_LIVE}",
 )
 check(
-    _LIVE == _LEGACY + ("quality_reroll", "buff_casts"),
-    f"历史 8 键之后只多了 quality_reroll（v1.18.0）与 buff_casts（v1.18.20）：{_LIVE}",
+    _LIVE == _LEGACY + ("quality_reroll", "buff_casts", "quality_floor"),
+    f"历史 8 键之后只多了 quality_reroll（v1.18.0）、buff_casts（v1.18.20）"
+    f"与 quality_floor（v1.18.23）：{_LIVE}",
 )
 check(
     [s.key for s in FX.BUILTIN_EFFECTS] == list(_LIVE),

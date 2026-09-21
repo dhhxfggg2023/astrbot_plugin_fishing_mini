@@ -367,16 +367,28 @@ class ViewsMixin:
         return f"{item.get('emoji', '')}{item.get('name', item_id)}"
 
     def _buff_status_line(self, player: dict[str, Any]) -> str:
-        """钓手手气的当前状态（一行；没有就返回空串）。
+        """钓手手气 / 品质保底的当前状态（一行；没有就返回空串）。
 
         * 锦鲤玉佩（持续 N 竿）：玩家最想知道**还剩几竿** —— v1.18.0 起明确写出来
         * 一次性手气（插曲/彩蛋）：写着「一次性」，下一竿用完就消失
         * 两者**叠加**（v1.18.11 站长要求：来源不同就该加在一起），
           所以两者同时在时直接把**这一竿的合计**写出来，免得玩家自己猜。
+        * 品质保底（v1.18.23，`quality_floor`）：与手气**并列**写在后面 ——
+          它管的是「不出垃圾」，手气管的是「更容易出好的」，两件事不能混成一句。
         """
         left = _safe_int(player.get("buff_casts_left"), 0, 0)
         once = _safe_number(player.get("luck_charges"), 0.0)
         buff = _safe_number(player.get("buff_quality"), 0.0) if left > 0 else 0.0
+        # 品质保底：同一个「钓手 buff」家族，但字段独立（各扣各的竿数）
+        floor_casts = _safe_int(player.get("buff_floor_casts"), 0, 0)
+        floor = _safe_number(player.get("buff_floor"), 0.0) if floor_casts > 0 else 0.0
+        floor_text = ""
+        if floor > 0:
+            floor_name, floor_emoji = _quality_label(floor)
+            floor_text = (
+                f"{floor_emoji} 品质保底「{floor_name}」：还剩 {floor_casts} 竿"
+            )
+        line = ""
         if left > 0 and buff > 0:
             line = f"🎐 锦鲤玉佩：手气 +{buff:.0%}　还剩 {left} 竿"
             if once > 0:
@@ -384,13 +396,14 @@ class ViewsMixin:
                     f"　🔮 一次性 +{once:.0%}（叠加：下一竿共 +{once + buff:.0%}，"
                     f"之后回到 +{buff:.0%}）"
                 )
-            return line
-        if left > 0:
+        elif left > 0:
             # 只有竿数没有数值（异常存档）：别显示成「+0%」，直接不提手气
-            return f"🎐 锦鲤玉佩：还剩 {left} 竿"
-        if once > 0:
-            return f"🔮 下一竿手气 +{once:.0%}（一次性，用完即清）"
-        return ""
+            line = f"🎐 锦鲤玉佩：还剩 {left} 竿"
+        elif once > 0:
+            line = f"🔮 下一竿手气 +{once:.0%}（一次性，用完即清）"
+        if floor_text:
+            line = f"{line}　{floor_text}" if line else floor_text
+        return line
 
     def _format_result(
         self,
@@ -784,6 +797,8 @@ class ViewsMixin:
             return "/钓鱼 洗 <水族馆栏位>"
         if _safe_number(effects.get("buff_quality"), 0.0) > 0:
             return "/钓鱼 用 <名字>（作用在自己身上，不用栏位）"
+        if _safe_number(effects.get("quality_floor"), 0.0) > 0:
+            return "/钓鱼 用 <名字>（作用在自己身上，接下来几竿品质有保底）"
         if _safe_number(effects.get("decorate"), 0.0) > 0:
             return "/钓鱼 用 <名字>（摆进鱼缸）"
         if _safe_number(effects.get("feed_bonus"), 0.0) > 0:

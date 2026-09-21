@@ -105,6 +105,14 @@ BUILTIN_EFFECTS: tuple[EffectSpec, ...] = (
         "buff_casts", "钓手手气：这件道具持续几竿（省略 = buff_cast_count）", "cast", "竿数",
         "_commands._cmd_use_item（buff_quality 分支）",
     ),
+    # v1.18.23：品质保底。站长选了这条方案 —— 手气修好之后「+20% 手气」对收入的影响
+    # 只剩 +5% 左右，撑不起 12000 金的大件；改成「接下来 N 竿品质不低于 X」之后
+    # 效果一眼能懂、收益也够（玉佩 = 20 竿保底珍品 ≈ +32% 收入）。
+    EffectSpec(
+        "quality_floor",
+        "钓手保底：接下来 N 竿的品质倍率不低于 value（2.0 = 至少珍品、3.5 = 至少绝品）",
+        "cast", "倍率", "_commands._cmd_use_item（quality_floor 分支）",
+    ),
 )
 
 #: 旧写法 -> 正式键名（``quality_up`` 是 v1.9 之前的写法，老配置照常可用）

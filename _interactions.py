@@ -597,6 +597,7 @@ class InteractionsMixin:
             ),
             extra_luck=bonus + _safe_number(spec.get("player_luck"), 0.0),
             cfg=self.cfg,
+            floor=_safe_number(spec.get("player_floor"), 0.0),
         )
         catch = _new_instance(
             fish["id"],

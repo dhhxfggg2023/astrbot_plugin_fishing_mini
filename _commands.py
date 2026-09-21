@@ -2445,6 +2445,78 @@ class CommandsMixin:
                     yield _r
                 return
 
+            # --- 品质保底（v1.18.23，锦鲤玉佩/潮汐香/玉髓灯）：接下来 N 竿不出垃圾 ---
+            # 和手气 buff 是**两件事**：手气让分布往高档偏，保底直接抬下限。
+            # 用的是同一个「手气额度」桶（都是强度型道具，玩家从早挂到晚也刷不出无限强度），
+            # 但字段独立（buff_floor / buff_floor_casts），寿命各算各的。
+            if _safe_number(effects.get("quality_floor"), 0.0) > 0:
+                today_text = self._today_text()
+                if _daily_reset(player, today_text):
+                    pass
+                left = _daily_left(
+                    player, "buff", self.cfg.get("buff_daily_cast_limit")
+                )
+                if left is not None and left <= 0:
+                    async for _r in self._say_msg(event, "item.used", event.plain_result(
+                            f"🌙 今天的手气额度用完了"
+                            f"（{_daily_used(player, 'buff')}/"
+                            f"{_safe_int(self.cfg.get('buff_daily_cast_limit'), 0, 0)} 竿）\n"
+                            f"　{self._item_label(item_id)}先留着，明天 0 点重置"
+                        )):
+                        yield _r
+                    return
+                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                floor = _clamp(
+                    _safe_number(effects.get("quality_floor"), 0.0), 0.0, _quality_ceil()
+                )
+                cap_casts = int(
+                    _safe_int(
+                        effects.get("buff_casts"), self.cfg["buff_cast_count"], 1
+                    )
+                )
+                cap_casts = int(_clamp(cap_casts, 1, 9999))
+                casts = cap_casts if left is None else max(1, min(cap_casts, left))
+                _daily_add(player, "buff", casts)
+                # 同类不叠加：两件保底道具同时用，取**较高的保底**、时长取较长的那次
+                old_floor = _safe_number(player.get("buff_floor"), 0.0)
+                old_floor_left = _safe_int(player.get("buff_floor_casts"), 0, 0)
+                floor_replaced = old_floor_left > 0 and floor > old_floor + 1e-9
+                if old_floor_left > 0:
+                    player["buff_floor"] = max(old_floor, floor)
+                else:
+                    player["buff_floor"] = floor
+                player["buff_floor_casts"] = max(old_floor_left, casts)
+                saved = await self._save_player(player)
+                _limit_cap = _safe_int(self.cfg.get("buff_daily_cast_limit"), 0, 0)
+                now_floor = _safe_number(player.get("buff_floor"), 0.0)
+                floor_name, floor_emoji = _quality_label(now_floor)
+                old_name = _quality_label(old_floor)[0] if old_floor > 0 else ""
+                lines = [
+                    f"🧿 使用 {self._item_label(item_id)}",
+                    f"　作用在你自己身上：接下来 {player['buff_floor_casts']} 竿有品质保底，"
+                    f"不低于「{floor_emoji}{floor_name}」"
+                    f"（{now_floor:.1f} 倍起步）",
+                    "　（不是喂鱼，鱼的三维不会变；神品仍然只能靠洗髓丹）",
+                ]
+                if old_floor_left > 0:
+                    lines.append(
+                        f"　🧷 同类保底**不叠加**：按较高的那个算「{floor_name}」"
+                        + (
+                            f"（这件更高，替掉了原来的「{old_name}」）"
+                            if floor_replaced
+                            else "（原来那件更高，这件只续时长）"
+                        )
+                    )
+                if _limit_cap > 0:
+                    lines.append(
+                        f"　📅 今日手气额度 {_daily_used(player, 'buff')}/{_limit_cap} 竿"
+                    )
+                if not saved:
+                    lines.append("⚠️ 保存失败")
+                async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
+                    yield _r
+                return
+
             # --- 洗髓丹（quality_reroll）：重掷这条鱼的个体品质，取更好的那次 ---
             # 效果值和「重掷几次」同义：写 3 就是掷 3 次取最好（次数越多越容易出珍品/绝品）
             if _safe_number(effects.get("quality_reroll"), 0.0) > 0:
@@ -2836,9 +2908,9 @@ class CommandsMixin:
 
         * 不带参数 = 看当前设置与可选项；
         * ``关`` / ``关掉`` / ``off`` = 取消自动；
-        * 写了道具名 = 只认**手气类**道具（玉佩 / 潮汐香 / 玉髓灯这种带
-          ``buff_quality`` 的），别的道具（饲料之类）不给设 —— 免得把喂鱼的道具
-          当成自动消耗品每竿买一个。
+        * 写了道具名 = 只认**钓手 buff 类**道具（玉佩 / 潮汐香 / 玉髓灯这种带
+          ``buff_quality`` 或 ``quality_floor`` 的），别的道具（饲料之类）不给设 ——
+          免得把喂鱼的道具当成自动消耗品每竿买一个。
         """
         async with self._lock_for(user_id):
             player = await self._load_player(user_id)
@@ -2847,8 +2919,17 @@ class CommandsMixin:
                 (iid, item)
                 for iid, item in self.items.items()
                 if _safe_number((item.get("effects") or {}).get("buff_quality"), 0.0) > 0
+                or _safe_number((item.get("effects") or {}).get("quality_floor"), 0.0) > 0
             ]
             buff_items.sort(key=lambda kv: _safe_int(kv[1].get("unlock_level"), 1, 1))
+
+            def _buff_desc(item: dict[str, Any]) -> str:
+                """这件道具自动用上之后给什么（手气 / 品质保底）。"""
+                eff = item.get("effects") or {}
+                floor = _safe_number(eff.get("quality_floor"), 0.0)
+                if floor > 0:
+                    return f"品质保底「{_quality_label(floor)[0]}」"
+                return f"手气 +{_safe_number(eff.get('buff_quality'), 0.0):.0%}"
 
             if not want:
                 current = str(player.get("auto_buff_item") or "")
@@ -2867,7 +2948,7 @@ class CommandsMixin:
                     locked = "" if _player_level(player) >= gate else f"（{gate} 级解锁）"
                     lines.append(
                         f"　　{self._item_label(iid)}　{_fmt_gold(item.get('price', 0))} 金"
-                        f"　手气 +{_safe_number((item.get('effects') or {}).get('buff_quality'), 0.0):.0%}"
+                        f"　{_buff_desc(item)}"
                         f"{locked}"
                     )
                 lines.append("　写法：/钓鱼 自动 锦鲤玉佩　｜　/钓鱼 自动 关")

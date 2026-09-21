@@ -515,11 +515,12 @@ DEFAULTS: dict[str, Any] = {
         "pill_quality|洗髓丹|🔮|4000|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
         "极小概率直接洗出「神品」|quality_reroll=3|20",
         "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
-        "lucky_jade|锦鲤玉佩|🎐|2400|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
-        "tide_incense|潮汐香|🕯️|3200|带在身上：接下来 40 竿手气小幅提升|"
-        "buff_quality=0.15;buff_casts=40|36",
-        "jade_lantern|玉髓灯|🏮|2800|带在身上：接下来 15 竿手气大幅提升|"
-        "buff_quality=0.35;buff_casts=15|40",
+        "lucky_jade|锦鲤玉佩|🎐|12000|带在身上：接下来 20 竿品质不低于「珍品」|"
+        "quality_floor=2.0|31",
+        "tide_incense|潮汐香|🕯️|23000|带在身上：接下来 40 竿品质不低于「珍品」|"
+        "quality_floor=2.0;buff_casts=40|36",
+        "jade_lantern|玉髓灯|🏮|27000|带在身上：接下来 15 竿品质不低于「绝品」|"
+        "quality_floor=3.5;buff_casts=15|40",
         "feed_mythic|龙涎饲料|🐲|1500|喂鱼：三维各 +18，估值 +2000（永久）|"
         "meat=18;spirit=18;sheen=18;value_up=2000|45",
         "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
@@ -854,6 +855,31 @@ LOCAL_CONTENT_ROW_FIXES: tuple[tuple[str, str, str], ...] = (
     ),
     # 他自己那三行（v1.18.21 登记的）也会跟着走到新价：迁移是**按顺序逐条套用**的
     # （6000 → v1.18.19 的 12000 → v1.18.22 的 2400），所以不用为他的旧价单独再写一条。
+    # v1.18.23：站长选了「品质保底」方案 —— 三件道具从「+手气」改成「接下来 N 竿品质保底」，
+    # 价格也回到大件的档位（口径同样是 ROI ≈ 1.8，终局每竿 3300 金）：
+    #   玉佩   20 竿保底珍品（+32%）→ 收益 21186，价格 12000（ROI 1.77）
+    #   潮汐香 40 竿保底珍品（+32%）→ 收益 42372，价格 23000（ROI 1.84）
+    #   玉髓灯 15 竿保底绝品（+100%）→ 收益 49350，价格 27000（ROI 1.83）
+    (
+        "item_defs",
+        "lucky_jade|锦鲤玉佩|🎐|2400|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+        "lucky_jade|锦鲤玉佩|🎐|12000|带在身上：接下来 20 竿品质不低于「珍品」|"
+        "quality_floor=2.0|31",
+    ),
+    (
+        "item_defs",
+        "tide_incense|潮汐香|🕯️|3200|带在身上：接下来 40 竿手气小幅提升|"
+        "buff_quality=0.15;buff_casts=40|36",
+        "tide_incense|潮汐香|🕯️|23000|带在身上：接下来 40 竿品质不低于「珍品」|"
+        "quality_floor=2.0;buff_casts=40|36",
+    ),
+    (
+        "item_defs",
+        "jade_lantern|玉髓灯|🏮|2800|带在身上：接下来 15 竿手气大幅提升|"
+        "buff_quality=0.35;buff_casts=15|40",
+        "jade_lantern|玉髓灯|🏮|27000|带在身上：接下来 15 竿品质不低于「绝品」|"
+        "quality_floor=3.5;buff_casts=15|40",
+    ),
 )
 
 #: 「站长已经同意交还给插件」的配置键（v1.18.21）：
@@ -2742,6 +2768,7 @@ def _roll_quality_mult(
     bait_luck: float = 0.0,
     extra_luck: float = 0.0,
     cfg: dict[str, Any] | None = None,
+    floor: float = 0.0,
 ) -> float:
     """掷个体品质倍率。手气把**权重**往高档推（v1.18.22 重写）。
 
@@ -2763,6 +2790,10 @@ def _roll_quality_mult(
 
     ``luck_weight_step`` = 0 时手气完全不影响品质；``luck_cap`` 是手气合计的上限
     （默认 2.0，老版本硬编码 1.0 —— 后期鱼饵+鱼竿就顶满，付费道具全成废纸）。
+
+    ``floor``（v1.18.23）= 品质保底：这一竿的品质倍率**不低于**它
+    （``quality_floor`` 道具给的，例如 2.0 = 至少珍品）。
+    它跟手气是两件事：手气是「更容易出好的」，保底是「不会出垃圾的」。
     """
     if not weights or sum(weights) <= 0:
         weights = list(DEFAULTS["quality_weights"])
@@ -2804,7 +2835,14 @@ def _roll_quality_mult(
     if idx >= len(QUALITY_TIERS):
         idx = len(QUALITY_TIERS) - 1
     _, low, high, _ = QUALITY_TIERS[idx]
-    return random.uniform(low, high)
+    value = random.uniform(low, high)
+    # 品质保底：抬到 floor（保底值就是某一档的下限，所以档位名也跟着对得上）。
+    # 自然掷骰那条「权重 0 的档永远不出」的规则不受影响，这里只是抬一个下限 ——
+    # 站长要是给某件道具写 quality_floor=6.0（= 神品），那也是他明确配的，照办。
+    guard = _clamp(float(floor or 0.0), 0.0, _quality_ceil())
+    if guard > value:
+        value = guard
+    return value
 
 
 

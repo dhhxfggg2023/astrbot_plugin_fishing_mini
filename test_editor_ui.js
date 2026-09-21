@@ -253,10 +253,10 @@ function runAssertions() {
   check(pageKeys.join(",") === registryKeys.join(","),
     "页面兜底清单的顺序逐项等于 _effects.BUILTIN_EFFECTS 的顺序",
     "页面=" + pageKeys.join("/") + " 注册表=" + registryKeys.join("/"));
-  check(pageKeys[pageKeys.length - 1] === "buff_casts" &&
-    T.ITEM_EFFECT_KEYS[T.ITEM_EFFECT_KEYS.length - 1][0] === "buff_casts" &&
-    registryKeys[registryKeys.length - 1] === "buff_casts",
-    "新增的 buff_casts 追加在清单末尾（没插进历史 8 键里）",
+  check(pageKeys[pageKeys.length - 1] === "quality_floor" &&
+    T.ITEM_EFFECT_KEYS[T.ITEM_EFFECT_KEYS.length - 1][0] === "quality_floor" &&
+    registryKeys[registryKeys.length - 1] === "quality_floor",
+    "新增的 quality_floor 追加在清单末尾（buff_casts 之后，没插进历史 8 键里）",
     "页面末项=" + pageKeys[pageKeys.length - 1] + " 注册表末项=" + registryKeys[registryKeys.length - 1]);
   check(/function applyEffectKeys\(/.test(html) && /ITEM_EFFECT_KEYS = rows/.test(html) &&
     /applyEffectKeys\(config\.effect_keys\)/.test(html),

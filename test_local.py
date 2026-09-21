@@ -171,10 +171,18 @@ async def cmd(plugin, event, *args):
     return await run(plugin.fishing, event, *args)
 
 
-async def wait_user(plugin, uid, tries=400):
+async def wait_user(plugin, uid, tries=400, task=None):
+    """等这次抛竿进入「等玩家拉线」的状态。
+
+    ⚠️ 以前这里只会空转 ``tries`` 次 sleep（400 × 0.01 = 4 秒），而**不需要拉线**的
+    抛竿永远不会进 ``_pending_pulls`` —— 于是每一次普通抛竿都白等 4 秒，
+    整个 test_local 跑一次要十分钟（v1.18.23 才发现）。现在任务一结束就立刻返回。
+    """
     for _ in range(tries):
         if uid in plugin._pending_pulls:
             return True
+        if task is not None and task.done():
+            return False
         await asyncio.sleep(0.01)
     return False
 
@@ -196,7 +204,7 @@ async def cast(plugin, event, *args, pull=True):
     """抛竿（若咬钩则自动拉线），返回回复列表。"""
     uid = event.get_sender_id()
     task = asyncio.create_task(run(plugin.fishing, event, *args))
-    await wait_user(plugin, uid)
+    await wait_user(plugin, uid, task=task)
     if uid in plugin._pending_pulls and pull:
         plugin._resolve_pull(event)
     return await task
@@ -209,17 +217,40 @@ def text_of(replies) -> str:
 async def main():
     failures = []
     checks_run = 0   # 实际执行到的断言条数（结尾打出来，README 里的数字才对得上）
+    #: 只跑指定的小节：``python test_local.py 10af 10ae``（不写 = 全跑）。
+    #: 改哪儿跑哪儿，省得每次等十分钟 —— 但**发版前要全跑一遍**。
+    #: 判定方式：从最近一条 ``print("\n[小节] …")`` 里取小节号，不在名单里的断言直接跳过。
+    import builtins as _builtins
+    import re as _re
+    #: ⚠️ 名字取成大写：测试体里到处都有叫 `_want` 的局部变量，撞名会让过滤失效（踩过）
+    _ONLY_SECTIONS = {a.strip() for a in sys.argv[1:] if a.strip()}
+    _NOW_SECTION = {"id": ""}
+    # ⚠️ 必须先抓住**内置** print：下面 def print 之后，同作用域里的名字 print 就是那个
+    # 局部函数了，`_real_print = print` 会直接 UnboundLocalError（踩过）。
+    _real_print = _builtins.print
 
     def check(cond, label, extra=None):
         """断言；extra 只在失败时打出来（成功时标签本身已经写清了细节）。"""
         nonlocal checks_run
+        if _ONLY_SECTIONS and _NOW_SECTION["id"] not in _ONLY_SECTIONS:
+            return                      # 没点名的节：连计数都不算，免得数字骗人
         checks_run += 1
         line = label if extra is None else f"{label}　{extra}"
         if cond:
             print(f"  ✅ {label}")
         else:
-            print(f"  ❌ {line}")
-            failures.append(line)
+            print(f"  ❌ [{_NOW_SECTION['id']}] {line}")
+            failures.append(f"[{_NOW_SECTION['id']}] {line}")
+
+    def print(*args, **kwargs):        # noqa: A001 - 故意遮蔽：只为认小节号
+        """拦一层 print：把 ``\n[小节] …`` 记下来，好让 check 知道现在在第几节。"""
+        if args and isinstance(args[0], str):
+            _m = _re.match(r"\s*\n?\[([0-9a-z]+)\]", args[0])
+            if _m:
+                _NOW_SECTION["id"] = _m.group(1)
+                if _ONLY_SECTIONS and _NOW_SECTION["id"] not in _ONLY_SECTIONS:
+                    return              # 这一节的标题也不打（输出干净）
+        _real_print(*args, **kwargs)
 
     # =====================================================================
     print("\n[1] 配置：schema 全项解析")
@@ -2111,7 +2142,9 @@ async def main():
     pp["rods"] = ["bamboo", "mythic"]
     pp["equipped_rod"] = "mythic"                      # 神话竿手气（_rod_luck）
     pp["buff_casts_left"] = 5
-    pp["buff_quality"] = 0.30                          # 玉佩 0.30
+    pp["buff_quality"] = 0.30                          # 持续型手气 buff
+    pp["buff_floor_casts"] = 5                         # 品质保底（v1.18.23）
+    pp["buff_floor"] = 2.0
     pp["luck_charges"] = 0.10                          # 一次性 0.10
     await pull_plugin._save_player(pp)
 
@@ -2121,6 +2154,7 @@ async def main():
     def _spy_roll(weights, bait_luck=0.0, extra_luck=0.0, **kwargs):
         captured["bait_luck"] = bait_luck
         captured["extra_luck"] = extra_luck
+        captured["floor"] = kwargs.get("floor", 0.0)
         return real_roll(weights, bait_luck=bait_luck, extra_luck=extra_luck, **kwargs)
 
     mod.INTERACTIONS._roll_quality_mult = _spy_roll
@@ -2139,10 +2173,15 @@ async def main():
         f"拉线路径吃到鱼饵 {_worm_luck} + 鱼竿 {_rod_luck} 手气"
         f" -> bait_luck={captured.get('bait_luck')}",
     )
-    # 一次性 + 玉佩 = 0.40；拉线评价是「偏差」（测试里落点贴近超时），加成为 0
+    # 一次性 + 持续型 buff = 0.40；拉线评价是「偏差」（测试里落点贴近超时），加成为 0
     check(
         abs(captured.get("extra_luck", -1) - 0.40) < 1e-9,
-        f"拉线路径也吃到玉佩 + 一次性手气 -> extra_luck={captured.get('extra_luck')}",
+        f"拉线路径也吃到持续型 buff + 一次性手气 -> extra_luck={captured.get('extra_luck')}",
+    )
+    # 品质保底也要跟着进拉线路径（v1.18.23）—— 以前手气就是这么被吞掉的，别再犯一次
+    check(
+        abs(captured.get("floor", -1) - 2.0) < 1e-9,
+        f"拉线路径也吃到品质保底 -> floor={captured.get('floor')}",
     )
     # 两条路径的口径要一致：同样的装备/状态，非拉线那一竿算出来的手气应完全相同
     plain_cfg = dict(pull_cfg)
@@ -2156,6 +2195,8 @@ async def main():
     pp2["equipped_rod"] = "mythic"
     pp2["buff_casts_left"] = 5
     pp2["buff_quality"] = 0.30
+    pp2["buff_floor_casts"] = 5
+    pp2["buff_floor"] = 2.0
     pp2["luck_charges"] = 0.10
     await plain_plugin._save_player(pp2)
     captured.clear()
@@ -2164,6 +2205,7 @@ async def main():
     def _spy_roll2(weights, bait_luck=0.0, extra_luck=0.0, **kwargs):
         captured["bait_luck"] = bait_luck
         captured["extra_luck"] = extra_luck
+        captured["floor"] = kwargs.get("floor", 0.0)
         return real_roll2(weights, bait_luck=bait_luck, extra_luck=extra_luck, **kwargs)
 
     mod.ENGINE._roll_quality_mult = _spy_roll2
@@ -2173,8 +2215,9 @@ async def main():
         mod.ENGINE._roll_quality_mult = real_roll2
     check(
         abs(captured.get("bait_luck", -1) - (_worm_luck + _rod_luck)) < 1e-9
-        and abs(captured.get("extra_luck", -1) - 0.40) < 1e-9,
-        f"两条路径的手气口径完全一致 -> {captured}",
+        and abs(captured.get("extra_luck", -1) - 0.40) < 1e-9
+        and abs(captured.get("floor", -1) - 2.0) < 1e-9,
+        f"两条路径的手气与保底口径完全一致 -> {captured}",
     )
     # 手气最终还是被钳到 luck_cap（叠满也只是「更偏高档」，不会顶穿品质表）
     check(
@@ -3158,8 +3201,11 @@ async def main():
         f"连钓结果里说明实扣饵数 -> {[l for l in body.splitlines() if '空竿不耗' in l][:1]}",
     )
 
-    # --- 连钓要按竿数消耗锦鲤玉佩（站长报的：连钓只消耗一次）---
-    print("\n[6k] 连钓的玉佩消耗：钓几竿就掉几竿额度")
+    # --- 连钓要按竿数消耗钓手 buff（站长报的：连钓只消耗一次）---
+    # v1.18.23 起玉佩这类道具给的是**品质保底**（buff_floor/buff_floor_casts），
+    # 手气 buff（buff_quality/buff_casts_left）仍然存在（站长自定义道具还能用），
+    # 这里两条都验一遍：扣竿数的规则必须完全一样。
+    print("\n[6k] 连钓的 buff 消耗：钓几竿就掉几竿额度（手气 / 品质保底各一套字段）")
     buff_cfg = dict(_CFG, easter_egg_chance=0.0, interactive_rarities="",
                     rarity_escape_chance="")
     bp = make_plugin(buff_cfg)
@@ -3168,49 +3214,62 @@ async def main():
     pb["equipped_bait"] = "worm"
     pb["buff_casts_left"] = 5
     pb["buff_quality"] = 0.30
+    pb["buff_floor_casts"] = 5
+    pb["buff_floor"] = 2.0
     pb["stamina"] = 50
     await bp._save_player(pb)
     out = await cmd(bp, FakeEvent("89110"), "3", "", "")
     body = text_of(out)
     pb = await bp._load_player("89110")
     check(
-        mod._safe_int(pb.get("buff_casts_left"), -1, 0) == 2,
-        f"连钓 3 次 → 玉佩额度 5 掉到 2（以前只掉 1）-> {pb.get('buff_casts_left')}",
+        mod._safe_int(pb.get("buff_casts_left"), -1, 0) == 2
+        and mod._safe_int(pb.get("buff_floor_casts"), -1, 0) == 2,
+        f"连钓 3 次 → 手气/保底额度都从 5 掉到 2（以前只掉 1）-> "
+        f"{pb.get('buff_casts_left')}/{pb.get('buff_floor_casts')}",
     )
     check(
-        abs(mod._safe_number(pb.get("buff_quality"), 0) - 0.30) < 1e-9,
-        f"额度没用完时加成还在 -> {pb.get('buff_quality')}",
+        abs(mod._safe_number(pb.get("buff_quality"), 0) - 0.30) < 1e-9
+        and abs(mod._safe_number(pb.get("buff_floor"), 0) - 2.0) < 1e-9,
+        f"额度没用完时两份加成都在 -> {pb.get('buff_quality')}/{pb.get('buff_floor')}",
     )
     check(
-        "本批 -3 竿" in body and "还剩 2 竿" in body,
-        f"结果里写明本批消耗了几竿 -> {[l for l in body.splitlines() if '锦鲤玉佩' in l][:1]}",
+        "本批 -3 竿" in body and "还剩 2 竿" in body and "品质保底" in body,
+        f"结果里写明本批消耗了几竿 -> {[l for l in body.splitlines() if '保底' in l][:1]}",
     )
 
     # 额度不够整批时：用完就停，加成一起清掉
     pb["buff_casts_left"] = 2
     pb["buff_quality"] = 0.30
+    pb["buff_floor_casts"] = 2
+    pb["buff_floor"] = 2.0
     await bp._save_player(pb)
     out = await cmd(bp, FakeEvent("89110"), "5", "", "")
     body = text_of(out)
     pb = await bp._load_player("89110")
     check(
         mod._safe_int(pb.get("buff_casts_left"), -1, 0) == 0
-        and mod._safe_number(pb.get("buff_quality"), -1) == 0,
-        f"额度只有 2 却连钓 5 次 → 归零并清掉加成 -> {pb.get('buff_casts_left')}/{pb.get('buff_quality')}",
+        and mod._safe_number(pb.get("buff_quality"), -1) == 0
+        and mod._safe_int(pb.get("buff_floor_casts"), -1, 0) == 0
+        and mod._safe_number(pb.get("buff_floor"), -1) == 0,
+        f"额度只有 2 却连钓 5 次 → 两份都归零并清掉加成 -> "
+        f"{pb.get('buff_casts_left')}/{pb.get('buff_quality')}/"
+        f"{pb.get('buff_floor_casts')}/{pb.get('buff_floor')}",
     )
     check(
         "本批 -2 竿" in body and "用完了" in body,
-        f"结果里说明这批只吃到 2 竿、且已用完 -> {[l for l in body.splitlines() if '锦鲤玉佩' in l][:1]}",
+        f"结果里说明这批只吃到 2 竿、且已用完 -> {[l for l in body.splitlines() if '保底' in l][:1]}",
     )
 
-    # 没有玉佩时不显示那一行（不占版面）
+    # 没有 buff 时不显示那两行（不占版面）
     pb["buff_casts_left"] = 0
     pb["buff_quality"] = 0.0
+    pb["buff_floor_casts"] = 0
+    pb["buff_floor"] = 0.0
     await bp._save_player(pb)
     out = await cmd(bp, FakeEvent("89110"), "2", "", "")
     check(
-        "锦鲤玉佩" not in text_of(out),
-        "没有玉佩时连钓结果里不显示玉佩那一行",
+        "锦鲤玉佩" not in text_of(out) and "品质保底" not in text_of(out),
+        "没有 buff 时连钓结果里不显示那两行",
     )
 
     # 一次性手气（插曲/彩蛋）：整批里只作用于第 1 竿，且用完即清
@@ -4497,23 +4556,28 @@ async def main():
         "自己选过空钩的人不会被自动换饵",
     )
 
-    # 手气道具：指定了 /钓鱼 自动 <道具> 才会自动补 + 自动用
+    # 钓手 buff 道具（v1.18.23 起出厂的是保底类）：指定了 /钓鱼 自动 <道具> 才会自动补 + 自动用
     p_auto["items"] = {}
     p_auto["auto_buff_item"] = "lucky_jade"
     p_auto["buff_casts_left"] = 0
+    p_auto["buff_floor_casts"] = 0
     p_auto["gold"] = 50000
     await plugin_auto._save_player(p_auto)
     out_auto = await cast(plugin_auto, ev_auto)
     p_auto = await plugin_auto._load_player("89605")
     check(
         p_auto["gold"] == 50000 - mod._safe_int(plugin_auto.items["lucky_jade"]["price"], 0, 0)
-        and p_auto["buff_casts_left"] > 0,
-        f"手气道具用光时自动买 1 个并立刻用上（剩 {p_auto['buff_casts_left']} 竿）",
+        and p_auto["buff_floor_casts"] > 0,
+        f"保底道具用光时自动买 1 个并立刻用上（剩 {p_auto['buff_floor_casts']} 竿保底）",
     )
-    check("自动用上" in text_of(out_auto), "结果里写明自动用了哪件道具")
+    check(
+        "自动用上" in text_of(out_auto) and "保底" in text_of(out_auto),
+        "结果里写明自动用了哪件道具、给的是什么",
+    )
     # 没指定就不替他买
     p_auto["auto_buff_item"] = ""
     p_auto["buff_casts_left"] = 0
+    p_auto["buff_floor_casts"] = 0
     p_auto["items"] = {}
     gold_before_buff = p_auto["gold"]
     await plugin_auto._save_player(p_auto)
@@ -6918,8 +6982,8 @@ async def main():
         "育灵水 feed_bonus=5（对鱼生效）",
     )
     check(
-        abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("buff_quality"), 0) - 0.20) < 1e-9,
-        "锦鲤玉佩 buff_quality=0.20（v1.18.16 从 0.30 削下来，对钓手生效）",
+        abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("quality_floor"), 0) - 2.0) < 1e-9,
+        "锦鲤玉佩 quality_floor=2.0（v1.18.23 起改成「接下来 20 竿至少珍品」）",
     )
 
     # --- 个体品质最高档：只能洗髓丹洗出来（v1.18.7 加档、v1.18.8 起叫「神品」）---
@@ -7467,15 +7531,19 @@ async def main():
         f"到基础上限后还能喂 -> {p3['aquarium'][0].get('feed_uses')}",
     )
 
-    # --- 锦鲤玉佩：持续 20 竿（写 buff_quality，不碰一次性储备 luck_charges）---
+    # --- 锦鲤玉佩：持续 20 竿的**品质保底**（v1.18.23 改成 quality_floor）---
     # 关掉彩蛋：彩蛋里的「吉利的鱼鳞」会给 luck_charges，随机命中会让下面
     # 「手气一竿即清」的断言偶发变红（这是测试的确定性要求，不是玩法改动）
     plugin_j = make_plugin(dict(_CFG, easter_egg_chance=0.0))
     ev_j = FakeEvent("96004")
-    # 玉佩的手气数值从配置读（v1.18.16 从 0.30 削到 0.20）：以后调平衡不用改测试
-    _JADE = mod._safe_number(
-        plugin_j.items["lucky_jade"]["effects"].get("buff_quality"), 0.0
+    # 数值从道具表读：以后调平衡不用改测试
+    _FLOOR = mod._safe_number(
+        plugin_j.items["lucky_jade"]["effects"].get("quality_floor"), 0.0
     )
+    _FLOOR_NAME = mod._quality_label(_FLOOR)[0]
+    # 手气 buff（buff_quality）现在没有出厂道具用它了，但字段与规则仍在
+    # （站长自己加道具还能写 buff_quality）—— 这里用手工值验证那套规则。
+    _JADE = 0.30
     _JADE_PCT = f"+{_JADE * 100:.0f}%"
     p4 = await plugin_j._load_player("96004")
     p4["items"]["lucky_jade"] = 1
@@ -7483,28 +7551,43 @@ async def main():
     await plugin_j._save_player(p4)
     out = text_of(await cmd(plugin_j, ev_j, "用", "锦鲤玉佩", ""))
     p4 = await plugin_j._load_player("96004")
-    check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 20, f"玉佩 → 20 竿 -> {p4.get('buff_casts_left')}")
     check(
-        abs(mod._safe_number(p4.get("buff_quality"), 0) - _JADE) < 1e-9,
-        f"玉佩的加成写在 buff_quality（持续型）-> {p4.get('buff_quality')}",
+        mod._safe_int(p4.get("buff_floor_casts"), 0, 0) == 20,
+        f"玉佩 → 20 竿保底 -> {p4.get('buff_floor_casts')}",
+    )
+    check(
+        abs(mod._safe_number(p4.get("buff_floor"), 0) - _FLOOR) < 1e-9,
+        f"玉佩的保底写在 buff_floor -> {p4.get('buff_floor')}（{_FLOOR_NAME}）",
+    )
+    check(
+        _FLOOR_NAME in out and "保底" in out,
+        f"回复里写明保底到哪一档 -> {[l for l in out.splitlines() if '保底' in l][:1]}",
     )
     check(mod._safe_number(p4.get("luck_charges"), 0) == 0, "玉佩不往一次性储备里塞东西")
     check("作用在你自己身上" in out, "文案说明是给钓手的、不是喂鱼")
 
     await cmd(plugin_j, ev_j, "蚯蚓", "", "")
     p4 = await plugin_j._load_player("96004")
-    check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 19, f"抛一竿后剩 19 -> {p4.get('buff_casts_left')}")
     check(
-        abs(mod._safe_number(p4.get("buff_quality"), 0) - _JADE) < 1e-9,
-        "第 2 竿仍然吃到玉佩的手气（加成留着，竿数在减）",
+        mod._safe_int(p4.get("buff_floor_casts"), 0, 0) == 19,
+        f"抛一竿后剩 19 -> {p4.get('buff_floor_casts')}",
+    )
+    check(
+        abs(mod._safe_number(p4.get("buff_floor"), 0) - _FLOOR) < 1e-9,
+        "第 2 竿仍然有保底（数值留着，竿数在减）",
+    )
+    check(
+        abs(mod._effective_floor(p4) - _FLOOR) < 1e-9,
+        f"_effective_floor 读到 {mod._effective_floor(p4)}（掷品质时就是用它抬下限）",
     )
 
-    p4["buff_casts_left"] = 1
+    p4["buff_floor_casts"] = 1
     await plugin_j._save_player(p4)
     await cmd(plugin_j, ev_j, "蚯蚓", "", "")
     p4 = await plugin_j._load_player("96004")
-    check(mod._safe_int(p4.get("buff_casts_left"), 0, 0) == 0, "最后一竿用完归零")
-    check(mod._safe_number(p4.get("buff_quality"), 0) == 0, "用完把加成一起清掉（不留空 buff）")
+    check(mod._safe_int(p4.get("buff_floor_casts"), 0, 0) == 0, "最后一竿用完归零")
+    check(mod._safe_number(p4.get("buff_floor"), 0) == 0, "用完把保底一起清掉（不留空保底）")
+    check(mod._effective_floor(p4) == 0.0, "用完之后 _effective_floor 回到 0")
 
     # 一次性手气（彩蛋/插曲）：一竿即清
     p4["luck_charges"] = 0.1
@@ -7519,9 +7602,12 @@ async def main():
     # 插曲手气挂了一整轮 buff 还每竿叠着算（v1.18.5 的 bug）。
     # v1.18.5 拆字段时顺手用 max() 把叠加也禁掉了 —— 属过度修正，
     # 站长要的是「可以叠，只是一竿后事件那份就没了」。
+    # 现在「持续型」这份既可能是手气 buff，也可能是品质保底：两者都要和插曲叠加。
     p5 = await plugin_j._load_player("96005")
     p5["items"]["lucky_jade"] = 1
     p5["baits"]["worm"] = 50
+    p5["buff_casts_left"] = 20
+    p5["buff_quality"] = _JADE          # 手工给一份手气 buff（出厂道具已改成保底）
     await plugin_j._save_player(p5)
     await cmd(plugin_j, FakeEvent("96005"), "用", "锦鲤玉佩", "")
     p5 = await plugin_j._load_player("96005")
@@ -7529,8 +7615,9 @@ async def main():
     await plugin_j._save_player(p5)
     check(
         abs(mod._safe_number(p5.get("luck_charges"), 0) - 0.5) < 1e-9
-        and abs(mod._safe_number(p5.get("buff_quality"), 0) - _JADE) < 1e-9,
-        "插曲手气记在一次性储备里，玉佩的加成另算（两个字段分开）",
+        and abs(mod._safe_number(p5.get("buff_quality"), 0) - _JADE) < 1e-9
+        and abs(mod._safe_number(p5.get("buff_floor"), 0) - _FLOOR) < 1e-9,
+        "插曲手气记在一次性储备里，手气 buff 与保底各自另算（三个字段分开）",
     )
     check(
         abs(mod._effective_luck(p5) - (0.5 + _JADE)) < 1e-9,
@@ -7538,37 +7625,46 @@ async def main():
     )
 
     before_casts = mod._safe_int(p5.get("buff_casts_left"), 0, 0)
+    before_floor = mod._safe_int(p5.get("buff_floor_casts"), 0, 0)
     await cmd(plugin_j, FakeEvent("96005"), "蚯蚓", "", "")
     p5 = await plugin_j._load_player("96005")
     check(mod._safe_number(p5.get("luck_charges"), 0) == 0, "抛一竿后插曲手气就消失了（一竿即清）")
     check(
-        mod._safe_int(p5.get("buff_casts_left"), 0, 0) == before_casts - 1,
-        f"玉佩额度照常减 1（{before_casts} -> {p5.get('buff_casts_left')}）",
+        mod._safe_int(p5.get("buff_casts_left"), 0, 0) == before_casts - 1
+        and mod._safe_int(p5.get("buff_floor_casts"), 0, 0) == before_floor - 1,
+        f"手气与保底的额度各减 1（{before_casts}->{p5.get('buff_casts_left')}、"
+        f"{before_floor}->{p5.get('buff_floor_casts')}）",
     )
     check(
-        abs(mod._safe_number(p5.get("buff_quality"), 0) - _JADE) < 1e-9,
-        "玉佩的加成还在（没被一次性储备的清零连坐）",
+        abs(mod._safe_number(p5.get("buff_quality"), 0) - _JADE) < 1e-9
+        and abs(mod._safe_number(p5.get("buff_floor"), 0) - _FLOOR) < 1e-9,
+        "两份加成还在（没被一次性储备的清零连坐）",
     )
     await cmd(plugin_j, FakeEvent("96005"), "蚯蚓", "", "")
     p5 = await plugin_j._load_player("96005")
     check(
         mod._safe_number(p5.get("luck_charges"), 0) == 0
         and abs(mod._effective_luck(p5) - _JADE) < 1e-9,
-        f"第二竿起事件那份没了，只剩玉佩的 {_JADE_PCT} -> {mod._effective_luck(p5)}",
+        f"第二竿起事件那份没了，只剩持续型的 {_JADE_PCT} -> {mod._effective_luck(p5)}",
     )
-    # 一次性储备与玉佩**同时归零/失效**时的边界
+    # 一次性储备与持续型 buff **同时归零/失效**时的边界
     check(
         mod._effective_luck({"luck_charges": 0.4, "buff_casts_left": 0, "buff_quality": 0.3})
         == 0.4,
-        "玉佩竿数用光后只剩一次性那份（buff_quality 残留也不参与）",
+        "竿数用光后只剩一次性那份（buff_quality 残留也不参与）",
     )
     check(
         mod._effective_luck({"luck_charges": 0.0, "buff_casts_left": 3, "buff_quality": 0.0})
         == 0.0,
         "只有竿数没有加成时手气为 0（异常存档不凭空给运气）",
     )
+    check(
+        mod._effective_floor({"buff_floor_casts": 0, "buff_floor": 2.0}) == 0.0
+        and mod._effective_floor({"buff_floor_casts": 5, "buff_floor": 0.0}) == 0.0,
+        "保底也一样：竿数用光或数值为 0 时都不生效",
+    )
 
-    # 状态行照实写：把「这一竿的合计」直接算给玩家看
+    # 状态行照实写：把「这一竿的合计」直接算给玩家看，保底另起一句
     p5["luck_charges"] = 0.5
     line = plugin_j._buff_status_line(p5)
     _sum_pct = f"+{(0.5 + _JADE) * 100:.0f}%"
@@ -7576,15 +7672,27 @@ async def main():
         "还剩" in line and "叠加" in line and "+50%" in line and _sum_pct in line,
         f"两者同时在时状态行写出这一竿的合计（0.5+{_JADE:.1f}={_sum_pct}）-> {line}",
     )
+    check(
+        "品质保底" in line and _FLOOR_NAME in line,
+        f"状态行同时写出保底还剩几竿 -> {line}",
+    )
     p5["luck_charges"] = 0.1
     line_low = plugin_j._buff_status_line(p5)
     _low_pct = f"+{(0.1 + _JADE) * 100:.0f}%"
     check(
         "叠加" in line_low and _low_pct in line_low,
-        f"一次性比玉佩小时也照样加起来（0.1+{_JADE:.1f}={_low_pct}）-> {line_low}",
+        f"一次性比持续型小时也照样加起来（0.1+{_JADE:.1f}={_low_pct}）-> {line_low}",
     )
     p5["luck_charges"] = 0.0
-    check("一次性" not in plugin_j._buff_status_line(p5), "只剩玉佩时不提一次性")
+    check("一次性" not in plugin_j._buff_status_line(p5), "只剩 buff 时不提一次性")
+    # 只剩保底（没有手气 buff）时也要报出来
+    p5["buff_casts_left"] = 0
+    p5["buff_quality"] = 0.0
+    only_floor = plugin_j._buff_status_line(p5)
+    check(
+        "品质保底" in only_floor and "还剩" in only_floor and "手气" not in only_floor,
+        f"只有保底时状态行只写保底 -> {only_floor}",
+    )
 
     # 插曲给手气时的提示：也要说清是「叠加」，别让玩家以为被吞了
     p6 = mod._default_player("96104")
@@ -7593,7 +7701,8 @@ async def main():
     hint = "\n".join(plugin_j._grant_event_reward(p6, {"luck": [0.5, 0.5]}))
     check(
         "叠加" in hint and _sum_pct in hint and f"回到 {_JADE_PCT}" in hint,
-        f"插曲文案写明与玉佩叠加、一竿后回到玉佩的值 -> {[l for l in hint.splitlines() if '🔮' in l]}",
+        f"插曲文案写明与持续型 buff 叠加、一竿后回到原值 -> "
+        f"{[l for l in hint.splitlines() if '🔮' in l]}",
     )
 
     # --- 老存档迁移：以前玉佩的加成写在 luck_charges 里 ---
@@ -7930,11 +8039,11 @@ async def main():
     )
     _prices = {iid: int(it["price"]) for iid, it in item_plugin.items.items()}
     check(
-        _prices["lucky_jade"] == 2400
+        _prices["lucky_jade"] == 12000
         and abs(mod._safe_number(
-            item_plugin.items["lucky_jade"]["effects"].get("buff_quality"), 0
-        ) - 0.20) < 1e-9,
-        f"锦鲤玉佩：+20% 手气、2400 金（v1.18.22 品质曲线修好后按 ROI 重定价）-> "
+            item_plugin.items["lucky_jade"]["effects"].get("quality_floor"), 0
+        ) - 2.0) < 1e-9,
+        f"锦鲤玉佩：20 竿保底珍品、12000 金（v1.18.23 改成保底类，按 ROI 重定价）-> "
         f"{_prices['lucky_jade']} 金",
     )
     check(
@@ -7943,10 +8052,19 @@ async def main():
         f"{_prices['coral_deco']}",
     )
     check(
-        _prices["tide_incense"] == 3200 and _prices["jade_lantern"] == 2800
+        _prices["tide_incense"] == 23000 and _prices["jade_lantern"] == 27000
         and _prices["coral_king"] == 40000,
-        f"三件手气/装饰道具的 ROI 也压在 2 倍以内 -> "
+        f"三件后期道具的 ROI 都压在 2 倍以内 -> "
         f"{_prices['tide_incense']}/{_prices['jade_lantern']}/{_prices['coral_king']}",
+    )
+    check(
+        abs(mod._safe_number(
+            item_plugin.items["jade_lantern"]["effects"].get("quality_floor"), 0
+        ) - 3.5) < 1e-9
+        and abs(mod._safe_number(
+            item_plugin.items["tide_incense"]["effects"].get("quality_floor"), 0
+        ) - 2.0) < 1e-9,
+        "玉髓灯 = 15 竿保底绝品（3.5）、潮汐香 = 40 竿保底珍品（2.0）",
     )
     check(
         all(it.get("unlock_level", 1) >= 1 for it in item_plugin.items.values())
@@ -7958,6 +8076,27 @@ async def main():
     check(
         all(k == "item_defs" for k in _fix_keys) and len(mod.LOCAL_CONTENT_ROW_FIXES) >= 7,
         f"老道具行登记了 {len(mod.LOCAL_CONTENT_ROW_FIXES)} 条迁移（旧价 -> 新价）",
+    )
+    # 迁移是**按顺序逐条套用**的：站长配置里还是最早那版行（玉佩 500 / 潮汐香 4500 /
+    # 玉髓灯 12000）时，一次同步就要一路走到 v1.18.23 的新行（12000+保底 / 23000 / 27000），
+    # 不能只前进一格停在中间版本。这正是他问的「我的配置一直没拿到迁移」。
+    _chain = make_plugin()
+    _chain.config["item_defs"] = [
+        "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+        "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
+        "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
+    ]
+    _chain._apply_content_row_fixes()
+    _chain_refresh = mod.CALC._parse_item_defs(_chain.config["item_defs"])
+    check(
+        _chain_refresh["lucky_jade"]["price"] == 12000
+        and abs(_chain_refresh["lucky_jade"]["effects"].get("quality_floor", 0) - 2.0) < 1e-9
+        and _chain_refresh["tide_incense"]["price"] == 23000
+        and _chain_refresh["jade_lantern"]["price"] == 27000
+        and abs(_chain_refresh["jade_lantern"]["effects"].get("quality_floor", 0) - 3.5) < 1e-9,
+        f"一次同步就把最早那版道具行推到最新（500 -> 12000+保底 / 4500 -> 23000 / "
+        f"12000 -> 27000）-> {_chain_refresh['lucky_jade']['price']}/"
+        f"{_chain_refresh['tide_incense']['price']}/{_chain_refresh['jade_lantern']['price']}",
     )
 
     # --- 姜汤（heal）：回体力、满了不扣、体力没开时不消耗 ---
@@ -8235,7 +8374,7 @@ async def main():
         and mod.DEFAULTS["offering_daily_limit"] == 1,
         "出厂额度：手气 120 竿 / 姜汤 5 次 / 洗髓丹 30 颗 / 供奉 1 次",
     )
-    # --- 手气道具：用满额度就拒绝，并且只给剩下的竿数 ---
+    # --- 钓手 buff 道具：用满额度就拒绝，并且只给剩下的竿数 ---
     qp = mod._default_player("89711")
     qp["gold"] = 10_000_000
     qp["items"] = {"lucky_jade": 10}
@@ -8243,7 +8382,7 @@ async def main():
     out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
     qp = await quota._load_player("89711")
     check(
-        mod._daily_used(qp, "buff") == 20 and qp["buff_casts_left"] == 20,
+        mod._daily_used(qp, "buff") == 20 and qp["buff_floor_casts"] == 20,
         f"用一次玉佩记 20 竿额度 -> {mod._daily_used(qp, 'buff')}",
     )
     check("今日手气额度 20/120" in text_of(out), "回执里写出今日额度用量")
@@ -8251,16 +8390,16 @@ async def main():
     qp["daily_date"] = quota._today_text()
     qp["daily_used"] = {"buff": 115}
     qp["items"] = {"lucky_jade": 10}
-    qp["buff_casts_left"] = 0
+    qp["buff_floor_casts"] = 0
     await quota._save_player(qp)
     out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
     qp = await quota._load_player("89711")
     check(
-        mod._daily_used(qp, "buff") == 120 and qp["buff_casts_left"] == 5,
-        f"额度只剩 5 竿时只给 5 竿 -> {qp['buff_casts_left']}（今日 {mod._daily_used(qp, 'buff')}）",
+        mod._daily_used(qp, "buff") == 120 and qp["buff_floor_casts"] == 5,
+        f"额度只剩 5 竿时只给 5 竿 -> {qp['buff_floor_casts']}（今日 {mod._daily_used(qp, 'buff')}）",
     )
     # 额度用满 -> 拒绝使用（而且不扣道具）
-    qp["buff_casts_left"] = 0
+    qp["buff_floor_casts"] = 0
     qp["items"] = {"lucky_jade": 10}
     await quota._save_player(qp)
     out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
@@ -8381,43 +8520,61 @@ async def main():
     )
 
     # =====================================================================
-    print("\n[10ad] 同类手气道具不叠加（v1.18.20）")
+    print("\n[10ad] 同类道具不叠加（v1.18.20 手气 / v1.18.23 保底都是取较强的那件）")
     # 站长：「同类效果不能叠加，比如说都加手气的道具」——
-    # 同时用两件手气道具时只按**较强的那个**算，绝不把 +20% 和 +35% 加成 +55%；
+    # 同时用两件同类道具时只按**较强的那个**算，绝不把 +20% 和 +35% 加成 +55%；
     # 时长取较长的那次。插曲一次性手气 / 供奉手气仍然照旧叠加（他确认过）。
+    # v1.18.23 起出厂道具改成「品质保底」，同一条规矩跟着搬到保底上。
     stack = make_plugin(dict(_CFG, buff_daily_cast_limit=0))
     sp2 = mod._default_player("89721")
     sp2["items"] = {"lucky_jade": 3, "jade_lantern": 3, "tide_incense": 3}
     await stack._save_player(sp2)
+    _JADE_FLOOR = mod._safe_number(
+        stack.items["lucky_jade"]["effects"].get("quality_floor"), 0.0
+    )
+    _LANTERN_FLOOR = mod._safe_number(
+        stack.items["jade_lantern"]["effects"].get("quality_floor"), 0.0
+    )
     await cmd(stack, FakeEvent("89721"), "用", "锦鲤玉佩", "")
     sp2 = await stack._load_player("89721")
-    jade_gain = mod._safe_number(sp2.get("buff_quality"), 0.0)
+    floor_now = mod._safe_number(sp2.get("buff_floor"), 0.0)
     check(
-        abs(jade_gain - 0.20) < 1e-9 and sp2["buff_casts_left"] == 20,
-        f"先戴玉佩 -> +{jade_gain:.0%} / {sp2['buff_casts_left']} 竿",
+        abs(floor_now - _JADE_FLOOR) < 1e-9 and sp2["buff_floor_casts"] == 20,
+        f"先戴玉佩 -> 保底「{mod._quality_label(floor_now)[0]}」/ "
+        f"{sp2['buff_floor_casts']} 竿",
     )
     out = await cmd(stack, FakeEvent("89721"), "用", "玉髓灯", "")
     sp2 = await stack._load_player("89721")
     check(
-        abs(mod._safe_number(sp2.get("buff_quality"), 0.0) - 0.35) < 1e-9,
-        f"再用玉髓灯 -> 只按较强的 +35%（不是 +55%）-> "
-        f"+{mod._safe_number(sp2.get('buff_quality'), 0.0):.0%}",
+        abs(mod._safe_number(sp2.get("buff_floor"), 0.0) - _LANTERN_FLOOR) < 1e-9,
+        f"再用更强的玉髓灯 -> 换成「{mod._quality_label(_LANTERN_FLOOR)[0]}」"
+        f"（不是两件叠加成更高的保底）-> {sp2.get('buff_floor')}",
     )
     check(
-        sp2["buff_casts_left"] == 20,
-        f"时长取较长的那次（20 > 15）-> {sp2['buff_casts_left']} 竿",
+        sp2["buff_floor_casts"] == 20,
+        f"时长取较长的那次（20 > 15）-> {sp2['buff_floor_casts']} 竿",
     )
     check("不叠加" in text_of(out), f"回复里写明不叠加 -> {text_of(out).splitlines()[-2][:26]}")
     # 再用一件**更弱**的：数值不动，只续时长
-    sp2["buff_casts_left"] = 3
+    sp2["buff_floor_casts"] = 3
     await stack._save_player(sp2)
     out = await cmd(stack, FakeEvent("89721"), "用", "潮汐香", "")
     sp2 = await stack._load_player("89721")
     check(
-        abs(mod._safe_number(sp2.get("buff_quality"), 0.0) - 0.35) < 1e-9
-        and sp2["buff_casts_left"] == 40
-        and "原来那件更强" in text_of(out),
-        f"用更弱的潮汐香：数值不降、只把时长续到 {sp2['buff_casts_left']} 竿（它自己 40 竿）",
+        abs(mod._safe_number(sp2.get("buff_floor"), 0.0) - _LANTERN_FLOOR) < 1e-9
+        and sp2["buff_floor_casts"] == 40
+        and "原来那件更高" in text_of(out),
+        f"用更弱的潮汐香：保底不降、只把时长续到 {sp2['buff_floor_casts']} 竿（它自己 40 竿）",
+    )
+    # 手气 buff（buff_quality）走的是同一套不叠加规则 —— 出厂道具已经不用它了，
+    # 但站长自定义道具还能写，所以拿手工状态验一遍
+    sp3 = mod._default_player("89722")
+    sp3["buff_casts_left"] = 5
+    sp3["buff_quality"] = 0.20
+    await stack._save_player(sp3)
+    check(
+        abs(mod._effective_luck(sp3) - 0.20) < 1e-9,
+        f"手气 buff 字段照常生效 -> {mod._effective_luck(sp3)}",
     )
     # 每件道具的持续竿数写在它自己身上（buff_casts），而不是全都用全局 20 竿
     check(
@@ -8428,6 +8585,8 @@ async def main():
     )
     # 插曲一次性手气仍然叠加（他明确说可以叠）
     sp2["luck_charges"] = 0.5
+    sp2["buff_casts_left"] = 5
+    sp2["buff_quality"] = 0.35
     await stack._save_player(sp2)
     check(
         abs(mod._effective_luck(sp2, stack.cfg) - 0.85) < 1e-9,
@@ -8539,6 +8698,51 @@ async def main():
             for old, new in _tier_fix
         ),
         "老档位表登记了整串迁移（逐字等于旧默认才替换）",
+    )
+
+    # =====================================================================
+    print("\n[10af] 品质保底 quality_floor：接下来 N 竿「不出垃圾」（v1.18.23）")
+    # 站长选的方案：手气修好之后「+20% 手气」对收入只剩 +5%，撑不起 12000 金的大件；
+    # 改成「接下来 N 竿品质不低于 X」—— 效果一眼能懂，收益也够（+32%）。
+    _f_cfg = dict(_CFG)
+    _w = _f_cfg["quality_weights"]
+
+    def _floored(floor: float, n: int = 5000) -> list[float]:
+        return [
+            mod._roll_quality_mult(_w, cfg=_f_cfg, floor=floor) for _ in range(n)
+        ]
+
+    _f20 = _floored(2.0)
+    check(
+        min(_f20) >= 2.0 - 1e-9,
+        f"保底 2.0 → 5000 次全部 ≥ 2.0（最低 {min(_f20):.2f}，档位名「珍品」）",
+    )
+    check(
+        {mod._quality_label(x)[0] for x in _f20} <= {"珍品", "绝品", "神品"}
+        and "神品" not in {mod._quality_label(x)[0] for x in _f20},
+        f"保底只是抬下限，神品照样掷不到 -> "
+        f"{sorted({mod._quality_label(x)[0] for x in _f20})}",
+    )
+    _f35 = _floored(3.5, 3000)
+    check(
+        min(_f35) >= 3.5 - 1e-9 and {mod._quality_label(x)[0] for x in _f35} == {"绝品"},
+        f"保底 3.5 → 条条绝品（最低 {min(_f35):.2f}）",
+    )
+    _f0 = _floored(0.0, 3000)
+    check(
+        min(_f0) < 2.0,
+        f"floor=0 就是不保底（最低 {min(_f0):.2f}，分布与不带保底一致）",
+    )
+    check(
+        mod._roll_quality_mult(_w, cfg=_f_cfg, floor=99.0) <= mod._quality_ceil() + 1e-9,
+        f"保底值写得再离谱也被钳到最高档上限 {mod._quality_ceil()}",
+    )
+    check(
+        mod._roll_quality_mult(_w, cfg=_f_cfg, floor=2.0) >= 2.0
+        and mod._effective_floor(
+            {"buff_floor": 2.0, "buff_floor_casts": 0}
+        ) == 0.0,
+        "掷骰这一层认得 floor，玩家状态那一层认竿数（用光就不保底）",
     )
 
     # =====================================================================
