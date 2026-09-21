@@ -1857,6 +1857,20 @@ cast.no_stamina|体力|/钓鱼 体力|default
 cast.no_stamina|喝姜汤|/钓鱼 用 姜汤|default
 cast.no_stamina|看背包|/钓鱼 背包|default
 cast.no_stamina|帮助|/钓鱼 帮助|default
+# 三种空竿：都会让人想「换饵」或「补货」（v1.18.21 补上 —— 顺便让老配置里
+# 站长自己配过的那几行仍算「官方场景」，内容合并才能把其余场景补进来）
+cast.miss_none|再来一竿|/钓鱼|default
+cast.miss_none|换饵|/钓鱼 换饵|default
+cast.miss_none|鱼饵店|/钓鱼 鱼饵|default
+cast.miss_none|看背包|/钓鱼 背包|default
+cast.miss_bait|再来一竿|/钓鱼|default
+cast.miss_bait|换饵|/钓鱼 换饵|default
+cast.miss_bait|鱼饵店|/钓鱼 鱼饵|default
+cast.miss_bait|看背包|/钓鱼 背包|default
+cast.miss_deep|再来一竿|/钓鱼|default
+cast.miss_deep|换饵|/钓鱼 换饵|default
+cast.miss_deep|钓点|/钓鱼 钓点|default
+cast.miss_deep|看背包|/钓鱼 背包|default
 cast.no_gold|签到|/钓鱼 签到|default
 cast.no_gold|卖光光|/钓鱼 卖光光|default
 cast.no_gold|看背包|/钓鱼 背包|default

@@ -789,6 +789,39 @@ LOCAL_CONTENT_ROW_FIXES: tuple[tuple[str, str, str], ...] = (
         "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
         "coral_king|珊瑚王座|👑|40000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
     ),
+    # v1.18.21：站长自己改过的那三行（he 把描述也改成了自己的话），他明确要求
+    # 「这三个给我同步修改了」—— 逐字登记他那三行 -> 新价新数值（保留他的描述）。
+    # ⚠️ 为什么要登记他的行：直接改他的配置文件会被**正在运行的插件**用内存里的旧配置
+    # 覆盖回去（v1.18.19 就踩了这个坑：改完文件，插件一存盘又变回 80/300/260），
+    # 只有走插件自己的迁移链路才稳。
+    (
+        "item_defs",
+        "feed_premium|高级饲料|🍖|80|营养均衡，长得快|meat=5;spirit=4;sheen=3",
+        "feed_premium|高级饲料|🍖|90|营养均衡，长得快|meat=5;spirit=4;sheen=3|6",
+    ),
+    (
+        "item_defs",
+        "feed_divine|仙露|💧|300|传说中的养鱼圣品|meat=10;spirit=10;sheen=10;value_up=150",
+        "feed_divine|仙露|💧|420|传说中的养鱼圣品|"
+        "meat=10;spirit=10;sheen=10;value_up=600|14",
+    ),
+    (
+        "item_defs",
+        "coral_deco|珊瑚造景|🪸|260|水族馆装饰，提升馆藏价值|decorate=0.20",
+        "coral_deco|珊瑚造景|🪸|3000|水族馆装饰，提升馆藏价值|decorate=0.20|27",
+    ),
+)
+
+#: 「站长已经同意交还给插件」的配置键（v1.18.21）：
+#: 他改过这些值，但**明确采用了我给的新值**（在对话里勾选的），所以启动时把它们从
+#: ``user_edited_keys`` 里摘掉，让默认值同步照常把它们推到新版 —— 以后版本升级也能继续跟着走。
+#: ⚠️ 光改配置文件是不够的：正在运行的插件会用内存里的旧配置覆盖回去（踩过）。
+#: 想反悔：把键名从这张表里删掉，再自己去编辑器里改一遍（编辑一次就又回到「他改过的」）。
+CONSENTED_DEFAULT_KEYS: tuple[str, ...] = (
+    "order_reward_mult",       # 2.2 -> 1.6（订单价改成动态系数，基准倍率必须跟着降）
+    "pond_income_cap_hours",   # 12 -> 24（睡一觉回来还在攒）
+    "feed_max_uses",           # 5 -> 10（投喂上限翻倍）
+    "pond_income_per_hour",    # 0.03 -> 0.02（回到出厂费率）
 )
 
 
@@ -4569,6 +4602,17 @@ class FishingPlugin(
                 except Exception:
                     edited = []
                 edited_set = set(edited)
+                # 站长**明确同意交还给插件**的键（CONSENTED_DEFAULT_KEYS）：从「他改过的」
+                # 名单里摘掉，让下面的同步把它们推到新版（他勾选采用了我给的值）。
+                _consented = [k for k in CONSENTED_DEFAULT_KEYS if k in edited_set]
+                if _consented:
+                    edited = [k for k in edited if k not in set(CONSENTED_DEFAULT_KEYS)]
+                    edited_set = set(edited)
+                    changed["user_edited_keys"] = edited
+                    logger.info(
+                        f"配置同步：站长已同意改用新版数值的 {len(_consented)} 项"
+                        f"（{'、'.join(_consented)}）交还给默认值同步"
+                    )
                 # 「还没记录过任何站长改过的键」= 第一次启用这套机制：
                 # 此时无法区分「站长改过」和「官方这次改了默认值」，一律按前者处理
                 # （宁可少同步，也不要把他的话改回去）；官方确实改了默认值的那些键
@@ -4854,6 +4898,12 @@ class FishingPlugin(
         }
         if have and have <= official_ids:
             # 清一色官方条目：某个旧版本的快照（哪怕只留了几条），补齐就行
+            pass
+        elif have and len(have & official_ids) * 5 >= len(have) * 4:
+            # 他自己的行里有 **≥80% 是官方条目**：说明这份表本来就是「官方表 + 少量自己的改动」
+            # （典型：把 story.prompt 换成自己的静态按钮）。这种也该补齐缺的官方行 ——
+            # v1.18.21 加的判据：站长那份 button_defs 有 12 个场景、其中 story.prompt 是他自己配的，
+            # 按老规矩（全官方才算快照）就永远补不上其余 100 个场景的按钮。
             pass
         elif len(have & official_ids) * 2 < len(official_ids):
             # 手工内容居多：不动（官方新增的条目不该淹没站长的自定义）

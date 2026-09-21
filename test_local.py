@@ -462,7 +462,9 @@ async def main():
     out = await cmd(plugin, ev, "鱼竿", "用", "神话竿")
     check("还没买" in text_of(out), "未购买不能装备")
 
-    plugin_r = make_plugin()
+    # ⚠️ 关掉变异：gear_mult 里含变异倍率，而变异是 0.5% 的随机 ——
+    # 「神话竿的 gear_mult 应该大于竹竿」这条断言曾经因为竹竿那边撞上变异而偶发变红
+    plugin_r = make_plugin(dict(_CFG, variant_chance=0.0))
     for uid, rod in (("31001", "bamboo"), ("31002", "mythic")):
         pp = mod._default_player(uid)
         pp["gold"] = 100000
