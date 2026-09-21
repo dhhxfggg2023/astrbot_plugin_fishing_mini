@@ -6460,7 +6460,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 122,
+        len(_schema) == 126,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -6472,7 +6472,8 @@ async def main():
         f" + v1.18.10 的 multi_escape_mult"
         f" + v1.18.13 的 story_chain_chance/story_chain_gap/story_shuffle_choices"
         f" + v1.18.17 的 order_level_growth/order_factor_max + 三个自动补给开关"
-        f" + title_defs/offering_* 四项；"
+        f" + title_defs/offering_* 四项"
+        f" + v1.18.18 的四个每日额度；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -6481,7 +6482,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 119, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 123, f"其余 {len(_hidden)} 项全部 invisible")
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
@@ -8199,6 +8200,163 @@ async def main():
     check(
         len(text_of(out).splitlines()) <= 20,
         f"钓点列表分页后不超过 20 行 -> {len(text_of(out).splitlines())} 行",
+    )
+
+    # =====================================================================
+    print("\n[10ac] 每日额度：道具不能从早用到晚（v1.18.18）")
+    # 站长问「这个游戏玩家一般从早玩到晚，道具你不做一些限制吗」——
+    # 于是给四类「强度型」道具各加一份每日额度（全部可配，0 = 不限，跨天 0 点重置）。
+    quota = make_plugin()
+    check(
+        mod.DEFAULTS["buff_daily_cast_limit"] == 120
+        and mod.DEFAULTS["hot_soup_daily_limit"] == 5
+        and mod.DEFAULTS["reroll_daily_total"] == 30
+        and mod.DEFAULTS["offering_daily_limit"] == 1,
+        "出厂额度：手气 120 竿 / 姜汤 5 次 / 洗髓丹 30 颗 / 供奉 1 次",
+    )
+    # --- 手气道具：用满额度就拒绝，并且只给剩下的竿数 ---
+    qp = mod._default_player("89711")
+    qp["gold"] = 10_000_000
+    qp["items"] = {"lucky_jade": 10}
+    await quota._save_player(qp)
+    out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
+    qp = await quota._load_player("89711")
+    check(
+        mod._daily_used(qp, "buff") == 20 and qp["buff_casts_left"] == 20,
+        f"用一次玉佩记 20 竿额度 -> {mod._daily_used(qp, 'buff')}",
+    )
+    check("今日手气额度 20/120" in text_of(out), "回执里写出今日额度用量")
+    # 直接把额度灌到只剩 5 竿：这一件只能给 5 竿（不浪费整件道具）
+    qp["daily_date"] = quota._today_text()
+    qp["daily_used"] = {"buff": 115}
+    qp["items"] = {"lucky_jade": 10}
+    qp["buff_casts_left"] = 0
+    await quota._save_player(qp)
+    out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
+    qp = await quota._load_player("89711")
+    check(
+        mod._daily_used(qp, "buff") == 120 and qp["buff_casts_left"] == 5,
+        f"额度只剩 5 竿时只给 5 竿 -> {qp['buff_casts_left']}（今日 {mod._daily_used(qp, 'buff')}）",
+    )
+    # 额度用满 -> 拒绝使用（而且不扣道具）
+    qp["buff_casts_left"] = 0
+    qp["items"] = {"lucky_jade": 10}
+    await quota._save_player(qp)
+    out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
+    qp = await quota._load_player("89711")
+    check(
+        "额度用完了" in text_of(out) and qp["items"]["lucky_jade"] == 10,
+        "额度用满后拒绝使用，且一个道具都不扣",
+    )
+    # 跨天自动重置
+    qp["daily_date"] = "2000-01-01"
+    await quota._save_player(qp)
+    out = await cmd(quota, FakeEvent("89711"), "用", "锦鲤玉佩", "")
+    qp = await quota._load_player("89711")
+    check(
+        mod._daily_used(qp, "buff") == 20 and qp["items"]["lucky_jade"] == 9,
+        f"跨天后额度自动重置（新的一天重新计）-> {mod._daily_used(qp, 'buff')}",
+    )
+    # 自动补给也要尊重额度：额度用完就不再自动买
+    auto_q = make_plugin(
+        dict(_CFG, auto_supply_buff=True, auto_equip_bait=False, easter_egg_chance=0.0)
+    )
+    qp2 = mod._default_player("89712")
+    qp2["gold"] = 1_000_000
+    qp2["baits"] = {"worm": 50}
+    qp2["equipped_bait"] = "worm"
+    qp2["auto_buff_item"] = "lucky_jade"
+    qp2["daily_date"] = auto_q._today_text()
+    qp2["daily_used"] = {"buff": 120}
+    await auto_q._save_player(qp2)
+    out = await cast(auto_q, FakeEvent("89712"))
+    qp2 = await auto_q._load_player("89712")
+    check(
+        not (qp2.get("items") or {}).get("lucky_jade")
+        and re.search(r"额度用完|没有自动补给", text_of(out)),
+        "额度用完后自动补给不再买手气道具（限额才有意义）",
+    )
+
+    # --- 姜汤：每天最多喝 N 次 ---
+    soup_q = make_plugin(dict(_CFG, stamina_regen_seconds=45, stamina_max=100))
+    sp_q = mod._default_player("89713")
+    sp_q["items"] = {"hot_soup": 10}
+    sp_q["stamina"] = 0
+    sp_q["stamina_ts"] = int(time.time())
+    await soup_q._save_player(sp_q)
+    for _ in range(mod.DEFAULTS["hot_soup_daily_limit"]):
+        await cmd(soup_q, FakeEvent("89713"), "用", "姜汤", "")
+    sp_q = await soup_q._load_player("89713")
+    used_soup = mod._daily_used(sp_q, "heal")
+    out = await cmd(soup_q, FakeEvent("89713"), "用", "姜汤", "")
+    sp_q = await soup_q._load_player("89713")
+    check(
+        used_soup == 5 and "额度用完了" in text_of(out)
+        and sp_q["items"]["hot_soup"] == 5,
+        f"姜汤每天限 {used_soup} 次，超了拒绝且不扣道具 -> 剩 {sp_q['items']['hot_soup']}",
+    )
+    # 体力页写明额度
+    out = await cmd(soup_q, FakeEvent("89713"), "体力", "", "")
+    check("今日回体力额度 5/5" in text_of(out), "体力页显示回体力额度")
+
+    # --- 洗髓丹：每天总额度 ---
+    pill_q = make_plugin(dict(_CFG, reroll_daily_total=2))
+    pp_q = mod._default_player("89714")
+    pp_q["gold"] = 100000
+    pp_q["items"] = {"pill_quality": 10}
+    pp_q["aquarium"] = [
+        mod._new_instance("carp", 1.0) for _ in range(5)
+    ]
+    await pill_q._save_player(pp_q)
+    out = await cmd(pill_q, FakeEvent("89714"), "用", "洗髓丹", "全部")
+    pp_q = await pill_q._load_player("89714")
+    check(
+        mod._daily_used(pp_q, "reroll") == 2 and pp_q["items"]["pill_quality"] == 8,
+        f"洗髓丹每日总额度 2 颗（洗了 2 条就停）-> 用了 {mod._daily_used(pp_q, 'reroll')}",
+    )
+    out = await cmd(pill_q, FakeEvent("89714"), "用", "洗髓丹", "1")
+    pp_q = await pill_q._load_player("89714")
+    check(
+        "额度用完了" in text_of(out) and pp_q["items"]["pill_quality"] == 8,
+        "额度用满后拒绝洗髓，且不扣丹",
+    )
+
+    # --- 供奉：每天一次 ---
+    offer_q = make_plugin()
+    op_q = mod._default_player("89715")
+    op_q["gold"] = 1_000_000
+    await offer_q._save_player(op_q)
+    await cmd(offer_q, FakeEvent("89715"), "供奉", "", "")
+    op_q = await offer_q._load_player("89715")
+    out = await cmd(offer_q, FakeEvent("89715"), "供奉", "", "")
+    op_q = await offer_q._load_player("89715")
+    check(
+        mod._daily_used(op_q, "offering") == 1 and "已经供奉过" in text_of(out)
+        and op_q["gold"] == 800_000,
+        f"供奉每天一次（第二次被拒、钱也没扣）-> 余额 {op_q['gold']}",
+    )
+
+    # --- 档案里的额度行 ---
+    out = await cmd(quota, FakeEvent("89711"), "档案", "", "")
+    check(
+        "今日额度" in text_of(out) and "手气" in text_of(out),
+        f"档案里能看到今日额度 -> {[l for l in text_of(out).splitlines() if '今日额度' in l][:1]}",
+    )
+
+    # --- 0 = 不限：全部关掉之后照样能用 ---
+    free_q = make_plugin(
+        dict(
+            _CFG,
+            buff_daily_cast_limit=0,
+            hot_soup_daily_limit=0,
+            reroll_daily_total=0,
+            offering_daily_limit=0,
+        )
+    )
+    check(
+        mod._daily_left({"daily_used": {"buff": 99999}}, "buff", 0) is None
+        and mod._daily_line(mod._default_player("x"), free_q.cfg, "2026-01-01") == "",
+        "额度设 0 = 不限（档案里也不显示那一行）",
     )
 
     # =====================================================================

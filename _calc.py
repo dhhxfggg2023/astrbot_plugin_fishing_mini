@@ -128,6 +128,71 @@ def _tank_display_seconds(instance: dict[str, Any], now: int | None = None) -> i
         return 0
     return max(0, now - since)
 
+def _daily_reset(player: dict[str, Any], today: str) -> bool:
+    """跨天就把「今日额度」清零（惰性结算，和体力/洗髓丹同一个套路）。
+
+    玩家从早玩到晚也**不能无限吃道具**：手气道具、回体力道具、洗髓丹、香火供奉
+    都各自有一份每日额度（v1.18.18，站长提的「道具你不做一些限制吗」）。
+    这里只管「日期变了就清空」，具体额度由 ``_daily_left`` 按配置算。
+    """
+    changed = False
+    if str(player.get("daily_date") or "") != str(today or ""):
+        player["daily_date"] = str(today or "")
+        player["daily_used"] = {}
+        changed = True
+    if not isinstance(player.get("daily_used"), dict):
+        player["daily_used"] = {}
+        changed = True
+    return changed
+
+
+def _daily_used(player: dict[str, Any], key: str) -> int:
+    """今天这个额度已经用掉多少。"""
+    used = player.get("daily_used")
+    if not isinstance(used, dict):
+        return 0
+    return max(0, _safe_int(used.get(key), 0, 0))
+
+
+def _daily_left(player: dict[str, Any], key: str, limit: Any) -> int | None:
+    """今天这个额度还剩多少；``limit <= 0`` 表示不限额（返回 ``None``）。"""
+    cap = _safe_int(limit, 0, 0)
+    if cap <= 0:
+        return None
+    return max(0, cap - _daily_used(player, key))
+
+
+def _daily_add(player: dict[str, Any], key: str, amount: int = 1) -> int:
+    """记一次额度消耗，返回消耗后的今日累计值。"""
+    used = player.get("daily_used")
+    if not isinstance(used, dict):
+        used = {}
+        player["daily_used"] = used
+    total = max(0, _safe_int(used.get(key), 0, 0) + max(0, int(amount)))
+    used[key] = total
+    return total
+
+
+def _daily_line(
+    player: dict[str, Any], cfg: dict[str, Any], today: str
+) -> str:
+    """档案里那行「今日额度」（没开任何限额时返回空串，不占版面）。"""
+    parts: list[str] = []
+    for key, label, unit, cfg_key in (
+        ("buff", "手气", "竿", "buff_daily_cast_limit"),
+        ("heal", "回体力", "次", "hot_soup_daily_limit"),
+        ("reroll", "洗髓丹", "颗", "reroll_daily_total"),
+        ("offering", "供奉", "次", "offering_daily_limit"),
+    ):
+        cap = _safe_int((cfg or {}).get(cfg_key), 0, 0)
+        if cap <= 0:
+            continue
+        parts.append(f"{label} {_daily_used(player, key)}/{cap} {unit}".rstrip())
+    if not parts:
+        return ""
+    return "📅 今日额度：" + "・".join(parts) + "（每天 0 点重置）"
+
+
 def _pond_income(
     player: dict[str, Any], cfg: dict[str, Any], now: int | None = None
 ) -> dict[str, Any]:
@@ -884,6 +949,10 @@ def _default_player(user_id: str) -> dict[str, Any]:
         "title": "",           # 当前佩戴的称号 id（纯炫耀，v1.18.17）
         "titles": [],          # 已买下的称号 id 列表
         "offering_ts": 0,      # 香火供奉到期时间戳（0 = 没有供奉）
+        # 今日额度（v1.18.18）：{"buff": 手气竿数, "heal": 回体力次数,
+        # "reroll": 洗髓丹颗数, "offering": 供奉次数}；跨天由 _daily_reset 清零
+        "daily_date": "",
+        "daily_used": {},
         "decorations": [],     # 水族馆装饰：[{id, rate, ts, expire_ts}]（耐久到点自动失效）
         "buff_casts_left": 0,  # 钓手手气 buff 还剩几竿（0 = 没有 buff）
         "aquarium_slots": [],  # 已解锁的水族馆扩建栏位名
@@ -1853,6 +1922,19 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
             else []
         )
         player["offering_ts"] = _safe_int(raw.get("offering_ts"), 0, 0)
+        # 今日额度（v1.18.18）：日期对不上就当今天还没用（老存档也走这条路）
+        raw_used = raw.get("daily_used")
+        player["daily_used"] = (
+            {
+                str(k): max(0, _safe_int(v, 0, 0))
+                for k, v in raw_used.items()
+                if isinstance(k, str)
+            }
+            if isinstance(raw_used, dict)
+            else {}
+        )
+        raw_date = raw.get("daily_date")
+        player["daily_date"] = raw_date if isinstance(raw_date, str) else ""
 
         # --- 道具 ---
         raw_items = raw.get("items")

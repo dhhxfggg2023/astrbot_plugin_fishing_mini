@@ -350,6 +350,14 @@ DEFAULTS: dict[str, Any] = {
     "offering_hours": 24,
     "offering_income_bonus": 0.5,
     "offering_luck_bonus": 0.05,
+    # ---- 每日额度（v1.18.18）：站长问「玩家从早玩到晚，道具你不做一些限制吗」----
+    # 一天之内能白嫖（或花钱买）的「强度」必须有天花板，否则装置就形同虚设：
+    # 手气道具全天挂着 = 品质分布被顶穿、回体力道具无限喝 = 体力限制失效。
+    # 0 = 不限（想放开就填 0）。跨天 0 点自动重置，档案里能看到今天用了多少。
+    "buff_daily_cast_limit": 120,   # 手气道具每天合计最多生效多少竿
+    "hot_soup_daily_limit": 5,      # 回体力类道具（姜汤）每天最多喝几次
+    "reroll_daily_total": 30,       # 洗髓丹每天最多用几颗（每鱼每天还有一层上限）
+    "offering_daily_limit": 1,      # 香火供奉每天最多几次
     # 鱼竿：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级）
     # 后两段（可选）是**拉线手感**：拉线窗口加成 / 逃脱率系数（见 _calc._parse_rod_defs）
     # v1.18.15 加了两档后期竿：不堆数值，改卖「手感 + 收金币」——
@@ -2820,6 +2828,19 @@ class FishingPlugin(
         )
         cfg["offering_luck_bonus"] = _clamp(
             _safe_number(cfg.get("offering_luck_bonus"), 0.05), 0.0, 5.0
+        )
+        # 每日额度（v1.18.18）：0 = 不限；上限给得比较宽，只是挡住「全天无上限」
+        cfg["buff_daily_cast_limit"] = int(
+            _clamp(_safe_int(cfg.get("buff_daily_cast_limit"), 120, 0), 0, 100000)
+        )
+        cfg["hot_soup_daily_limit"] = int(
+            _clamp(_safe_int(cfg.get("hot_soup_daily_limit"), 5, 0), 0, 10000)
+        )
+        cfg["reroll_daily_total"] = int(
+            _clamp(_safe_int(cfg.get("reroll_daily_total"), 30, 0), 0, 100000)
+        )
+        cfg["offering_daily_limit"] = int(
+            _clamp(_safe_int(cfg.get("offering_daily_limit"), 1, 0), 0, 1000)
         )
         cfg["order_refresh_min_hours"] = int(
             _clamp(_safe_int(cfg.get("order_refresh_min_hours"), 3, 1), 1, 72)

@@ -376,6 +376,30 @@
     "type": "float",
     "default": 0.05
   },
+  "buff_daily_cast_limit": {
+    "invisible": true,
+    "description": "手气道具（锦鲤玉佩/潮汐香/玉髓灯）每天合计最多生效多少竿（0 = 不限）。玩家从早玩到晚时，这个额度决定「强度天花板」——不然手气可以整天挂着，品质分布会被顶穿。跨天 0 点自动重置，档案里能看到今天用了多少。",
+    "type": "int",
+    "default": 120
+  },
+  "hot_soup_daily_limit": {
+    "invisible": true,
+    "description": "回体力类道具（姜汤）每天最多用几次（0 = 不限）。体力是「别从早钓到晚」的闸门，不限额的话买一背包姜汤就能无限钓。",
+    "type": "int",
+    "default": 5
+  },
+  "reroll_daily_total": {
+    "invisible": true,
+    "description": "洗髓丹每天最多用几颗（0 = 不限）。在「每条鱼每天最多吃 N 颗」（reroll_daily_limit）之外再加一层总额度，挡住「买一堆丹把整个缸洗一遍」。",
+    "type": "int",
+    "default": 30
+  },
+  "offering_daily_limit": {
+    "invisible": true,
+    "description": "香火供奉每天最多几次（默认 1；0 = 不限）。供奉效果本来就有 24 小时，一天一次刚好续上，重复供奉只是把钱重复烧掉。",
+    "type": "int",
+    "default": 1
+  },
   "rod_defs": {
     "invisible": true,
     "description": "鱼竿定义（一行一档）：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述，可选再加两段：拉线窗口加成|逃脱率系数（例如 0.15|1.00 = 窗口 +15%、逃脱率不变；0.10|0.90 = 窗口 +10% 且逃脱率打九折）。空着不写就没有这两项加成。",

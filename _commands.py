@@ -2374,9 +2374,29 @@ class CommandsMixin:
             # 它写的是 buff_quality（每竿加多少）+ buff_casts_left（还剩几竿），
             # **不碰 luck_charges**（那是一次性的，见 _calc._effective_luck / _consume_luck）
             if _safe_number(effects.get("buff_quality"), 0.0) > 0:
+                # 每日额度（v1.18.18）：手气道具**每天合计只能生效 N 竿**，
+                # 否则玩家从早挂到晚 = 品质分布被永久顶穿。
+                today_text = self._today_text()
+                if _daily_reset(player, today_text):
+                    pass
+                left = _daily_left(
+                    player, "buff", self.cfg.get("buff_daily_cast_limit")
+                )
+                cap_casts = int(self.cfg["buff_cast_count"])
+                if left is not None and left <= 0:
+                    async for _r in self._say_msg(event, "item.used", event.plain_result(
+                            f"🌙 今天的手气额度用完了"
+                            f"（{_daily_used(player, 'buff')}/"
+                            f"{_safe_int(self.cfg.get('buff_daily_cast_limit'), 0, 0)} 竿）\n"
+                            f"　{self._item_label(item_id)}先留着，明天 0 点重置"
+                        )):
+                        yield _r
+                    return
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                 gain = _safe_number(effects.get("buff_quality"), 0.0)
-                casts = int(self.cfg["buff_cast_count"])
+                # 额度不够一整轮时就只给剩下的那几竿（不浪费这一件道具的其余部分）
+                casts = cap_casts if left is None else max(1, min(cap_casts, left))
+                _daily_add(player, "buff", casts)
                 active = _safe_int(player.get("buff_casts_left"), 0, 0) > 0
                 if active:
                     # 同一件道具的效果不叠加：还在生效就只把剩余竿数刷新回满，
@@ -2389,12 +2409,17 @@ class CommandsMixin:
                     _safe_int(player.get("buff_casts_left"), 0, 0), casts
                 )
                 saved = await self._save_player(player)
+                _limit_cap = _safe_int(self.cfg.get("buff_daily_cast_limit"), 0, 0)
                 lines = [
                     f"🎐 使用 {self._item_label(item_id)}",
                     f"　作用在你自己身上：接下来 {casts} 竿手气更好"
                     f"（{_luck_stars(_safe_number(player.get('buff_quality'), 0.0), 0.3)}）",
                     "　（不是喂鱼，鱼的三维不会变）",
                 ]
+                if _limit_cap > 0:
+                    lines.append(
+                        f"　📅 今日手气额度 {_daily_used(player, 'buff')}/{_limit_cap} 竿"
+                    )
                 if not saved:
                     lines.append("⚠️ 保存失败")
                 async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
@@ -2436,6 +2461,21 @@ class CommandsMixin:
                 )
                 today = self._today_text()
                 cap = _reroll_daily_cap(self.cfg)
+                _daily_reset(player, today)
+                # 每日总额度（v1.18.18）：在「每条鱼每天 N 颗」之上再加一层，
+                # 挡住「买一堆丹把整个缸洗一遍」
+                total_left = _daily_left(
+                    player, "reroll", self.cfg.get("reroll_daily_total")
+                )
+                if total_left is not None and total_left <= 0:
+                    async for _r in self._say_msg(event, "item.reroll_failed", event.plain_result(
+                            f"🌙 今天的洗髓丹额度用完了"
+                            f"（{_daily_used(player, 'reroll')}/"
+                            f"{_safe_int(self.cfg.get('reroll_daily_total'), 0, 0)} 颗）\n"
+                            "　明天 0 点重置"
+                        )):
+                        yield _r
+                    return
                 lines = []
                 used = 0
                 best_gain = 0
@@ -2443,6 +2483,8 @@ class CommandsMixin:
                 for idx in picked:
                     if _safe_int(items.get(item_id), 0, 0) <= 0:
                         break
+                    if total_left is not None and used >= total_left:
+                        break          # 今天的总额度用完了
                     instance = reroll_tank[idx - 1]
                     # 今天吃腻了（达到每日上限）：跳过，并告诉玩家明天再来
                     if _reroll_averse(instance, self.cfg, today):
@@ -2461,6 +2503,7 @@ class CommandsMixin:
                         best = max(best, _roll_quality_mult(weights))
                     items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                     used += 1
+                    _daily_add(player, "reroll", 1)
                     eaten = _reroll_used(instance, today) + 1
                     _reroll_mark(instance, today, eaten)
                     tail = f"　今天 {eaten}/{cap}" if cap > 0 else f"　今天 {eaten}"
@@ -2601,7 +2644,22 @@ class CommandsMixin:
                     )):
                         yield _r
                     return
+                # 每日额度（v1.18.18）：回体力道具一天最多喝几次（体力是「别从早玩到晚」的闸门）
+                _daily_reset(player, self._today_text())
+                heal_left = _daily_left(
+                    player, "heal", self.cfg.get("hot_soup_daily_limit")
+                )
+                if heal_left is not None and heal_left <= 0:
+                    async for _r in self._say_msg(event, "item.used", event.plain_result(
+                            f"🌙 今天的回体力额度用完了"
+                            f"（{_daily_used(player, 'heal')}/"
+                            f"{_safe_int(self.cfg.get('hot_soup_daily_limit'), 0, 0)} 次）\n"
+                            f"　{item.get('name', item_id)}先留着，明天 0 点重置"
+                        )):
+                        yield _r
+                    return
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                _daily_add(player, "heal", 1)
                 player["stamina"] = min(cap, before + heal)
                 saved = await self._save_player(player)
                 lines = [
@@ -2609,6 +2667,9 @@ class CommandsMixin:
                     f"　⚡ 体力 {before} → {player['stamina']}/{cap}",
                     f"　剩余 {_safe_int(items.get(item_id), 0, 0)} 个",
                 ]
+                _soup_cap = _safe_int(self.cfg.get("hot_soup_daily_limit"), 0, 0)
+                if _soup_cap > 0:
+                    lines.append(f"　📅 今日额度 {_daily_used(player, 'heal')}/{_soup_cap} 次")
                 if not saved:
                     lines.append("⚠️ 保存失败")
                 async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
@@ -2942,6 +3003,21 @@ class CommandsMixin:
             luck_bonus = max(0.0, _safe_number(self.cfg.get("offering_luck_bonus"), 0.05))
             until = _safe_int(player.get("offering_ts"), 0, 0)
             gold = _safe_int(player.get("gold"), 0, 0)
+            # 每日额度（v1.18.18）：供奉默认一天一次（效果本来就有 24 小时，
+            # 再叠加只是把钱重复烧掉，不如把额度写清楚）
+            _daily_reset(player, self._today_text())
+            offer_left = _daily_left(
+                player, "offering", self.cfg.get("offering_daily_limit")
+            )
+            if offer_left is not None and offer_left <= 0:
+                async for _r in self._say_msg(event, "offering.no_gold", event.plain_result(
+                        f"🕯️ 今天已经供奉过了"
+                        f"（每天 "
+                        f"{_safe_int(self.cfg.get('offering_daily_limit'), 1, 1)} 次）\n"
+                        f"　现在的香火还有效，明天再来上香吧"
+                    )):
+                    yield _r
+                return
             if gold < price:
                 async for _r in self._say_msg(event, "offering.no_gold", event.plain_result(
                         f"💸 供奉一次要 {_fmt_gold(price)} 金币，"
@@ -2953,12 +3029,18 @@ class CommandsMixin:
                 return
             player["gold"] = gold - price
             player["offering_ts"] = now + hours * 3600
+            _daily_add(player, "offering", 1)
             lines = [
                 f"🕯️ 供奉成功！接下来 {hours} 小时：",
                 f"　挂机产出 +{income_bonus:.0%}　手气 +{luck_bonus:.2f}",
                 f"　💰 余额 {_fmt_gold(player['gold'])}",
                 "　（可重复供奉续时间，不叠加效果）",
             ]
+            _offer_cap = _safe_int(self.cfg.get("offering_daily_limit"), 0, 0)
+            if _offer_cap > 0:
+                lines.append(
+                    f"　📅 今日供奉 {_daily_used(player, 'offering')}/{_offer_cap} 次"
+                )
             saved = await self._save_with_notices(player, lines)
             async for _r in self._say_msg(event, "offering.done", event.plain_result("\n".join(lines))):
                 yield _r
@@ -3042,6 +3124,14 @@ class CommandsMixin:
             f"🎒 饵：{bait_text}",
             f"🧰 道具：{item_text}",
         ])
+        # 今日额度（v1.18.18）：没开任何限额时这行是空的，不占版面
+        # ⚠️ 跨天时这里顺手把额度落盘：不然「看一眼档案」不写盘，别的视图
+        # （比如编辑器玩家页）读到的还是昨天的计数。
+        if _daily_reset(player, self._today_text()):
+            await self._save_player(player)
+        _quota_line = _daily_line(player, self.cfg, self._today_text())
+        if _quota_line:
+            lines.append(_quota_line)
         buff = self._buff_status_line(player)
         if buff:
             lines.append(buff)

@@ -138,13 +138,31 @@ class EngineMixin:
             and _cfg_bool(cfg, "auto_supply_buff", True)
             and _safe_int(player.get("buff_casts_left"), 0, 0) <= 0
         ):
+            # 每日额度（v1.18.18）：额度用完了就别再自动买了 —— 不然「限额」等于没有，
+            # 玩家挂机一整天会一直自动续上手气道具。
+            _daily_reset(player, self._today_text())
+            buff_left = _daily_left(player, "buff", cfg.get("buff_daily_cast_limit"))
+            if buff_left is not None and buff_left <= 0:
+                notes.append(
+                    f"🌙 今天的手气额度用完了"
+                    f"（{_daily_used(player, 'buff')}/"
+                    f"{_safe_int(cfg.get('buff_daily_cast_limit'), 0, 0)} 竿），"
+                    f"没有自动补给"
+                )
+                auto_item = ""
+        if auto_item:
             item = self.items.get(auto_item)
             effects = (item or {}).get("effects") or {}
             if item and _safe_number(effects.get("buff_quality"), 0.0) > 0:
                 bag = player.setdefault("items", {})
                 have = _safe_int(bag.get(auto_item), 0, 0)
                 price = _safe_int(item.get("price"), 0, 0)
-                if have <= 0 and price > 0 and gold >= price:
+                # 每日额度（v1.18.18）：自动补给也只能补到额度用完为止
+                left = _daily_left(player, "buff", cfg.get("buff_daily_cast_limit"))
+                grant = max(1, _safe_int(cfg.get("buff_cast_count"), 20, 1))
+                if left is not None:
+                    grant = max(0, min(grant, left))
+                if have <= 0 and price > 0 and gold >= price and grant > 0:
                     gold -= price
                     player["gold"] = gold
                     bag[auto_item] = 1
@@ -153,19 +171,20 @@ class EngineMixin:
                         f"🛒 自动补货 1 个「{item['name']}」"
                         f"（-{_fmt_gold(price)} 金，余额 {_fmt_gold(gold)}）"
                     )
-                if have > 0:
+                if have > 0 and grant > 0:
                     bag[auto_item] = have - 1
-                    player["buff_casts_left"] = max(
-                        1, _safe_int(cfg.get("buff_cast_count"), 20, 1)
-                    )
+                    player["buff_casts_left"] = grant
                     player["buff_quality"] = _safe_number(
                         effects.get("buff_quality"), 0.0
                     )
+                    _daily_add(player, "buff", grant)
                     notes.append(
                         f"🎐 自动用上「{item['name']}」"
                         f"（手气 +{_safe_number(effects.get('buff_quality'), 0.0):.0%}，"
-                        f"{player['buff_casts_left']} 竿）"
+                        f"{grant} 竿）"
                     )
+                elif grant <= 0:
+                    notes.append("🌙 今天的手气额度用完了，没有自动补给")
                 elif not notes or notes[-1].find("自动补货 1 个") < 0:
                     notes.append(
                         f"💸 「{item['name']}」用完了，金币不够自动补货"

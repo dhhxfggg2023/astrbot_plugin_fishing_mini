@@ -1048,6 +1048,14 @@ class ViewsMixin:
             lines.append(f"　下一点恢复：还需 {wait} 秒")
         if current >= 2:
             lines.append(f"　满体力能连钓 {current} 次（/钓鱼 {current}）")
+        # 回体力道具的每日额度（v1.18.18）：能喝几次一眼看到
+        soup_cap = _safe_int(cfg.get("hot_soup_daily_limit"), 0, 0)
+        if soup_cap > 0:
+            used = _daily_used(player, "heal")
+            lines.append(
+                f"　🍲 今日回体力额度 {used}/{soup_cap} 次"
+                f"（剩 {max(0, soup_cap - used)} 次，/钓鱼 用 姜汤）"
+            )
         return "\n".join(lines)
 
     def _help_text(self, page: int = 1) -> str:

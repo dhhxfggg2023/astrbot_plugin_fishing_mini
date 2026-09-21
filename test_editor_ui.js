@@ -1391,7 +1391,7 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 122, "配置 schema 里是 122 个键", schemaKeys.length);
+  check(schemaKeys.length === 126, "配置 schema 里是 126 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
   check(pageKeys.indexOf("hostile_keywords") < 0,
@@ -1402,6 +1402,25 @@ async function configKeysCoverage() {
   const missingNew = newKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
   check(missingNew.length === 0, "v1.18.17 新增的 10 个键全都登记在 NUMBER_KEYS 里",
     missingNew.join(",") || "10/10 都在");
+  /* v1.18.18 的 4 个「每日额度」键：登记 + 入口是 ""（数值页直接改）+ 分组跟着同族键走 */
+  const dailyKeys = ["buff_daily_cast_limit", "hot_soup_daily_limit",
+    "reroll_daily_total", "offering_daily_limit"];
+  const missingDaily = dailyKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
+  check(missingDaily.length === 0, "v1.18.18 新增的 4 个「每日额度」键全都登记在 NUMBER_KEYS 里",
+    missingDaily.join(",") || "4/4 都在");
+  const dailyItemOf = function (k) {
+    return T.NUMBER_KEYS.filter(function (x) { return x[0] === k; })[0];
+  };
+  const dailyEntryBad = dailyKeys.filter(function (k) {
+    return T.numberEntryOf(dailyItemOf(k)) !== "";
+  });
+  check(dailyEntryBad.length === 0, "这 4 个键的入口都是 \"\"（数值页给输入框，不是跳转 / 只读行）",
+    dailyEntryBad.join(",") || "4/4 都是本页可改");
+  const dailyGroups = {};
+  dailyKeys.forEach(function (k) { dailyGroups[k] = T.numberRowFromItem(dailyItemOf(k), undefined).group; });
+  check(dailyGroups.buff_daily_cast_limit === "基础" && dailyGroups.hot_soup_daily_limit === "基础" &&
+    dailyGroups.reroll_daily_total === "稀有度" && dailyGroups.offering_daily_limit === "水族馆",
+    "这 4 个键跟同族键待在「基础 / 稀有度 / 水族馆」三组里", JSON.stringify(dailyGroups));
   const missingPage = schemaKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
   const extraPage = pageKeys.filter(function (k) { return schemaKeys.indexOf(k) < 0; });
   check(missingPage.length === 0, "schema 里的键页面上全部登记了（没有遗漏）",
@@ -1417,9 +1436,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 122 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 122,
-    "122 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 126 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 126,
+    "126 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1427,12 +1446,12 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "122/122 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "126/126 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/122 条 ≥30 字");
+    longDoc.length + "/126 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
@@ -1467,12 +1486,12 @@ async function configKeysCoverage() {
     "backup_export_file,backup_import_file,data_action,data_confirm,data_status,data_target,editor_status",
     "插件面板只读的键正好是这 7 个（Python 侧再放开白名单时这里跟着改）", panelKeys.join(","));
 
-  /* 数值页：122 个键铺成 122 行，入口行给跳转按钮、只读行不给输入框 */
+  /* 数值页：126 个键铺成 126 行，入口行给跳转按钮、只读行不给输入框 */
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 122 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 122 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 126 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 126 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
@@ -1516,7 +1535,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 122, "清空搜索词 -> 又看到全部 122 个键");
+  check(T.keysFilteredRows().length === 126, "清空搜索词 -> 又看到全部 126 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -1559,20 +1578,35 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 122 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 122 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 126 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 126 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
   const noDemo = T.NUMBER_KEYS.filter(function (item) {
     return T.DEMO_NUMBER_VALUES[item[0]] === undefined;
   }).map(function (item) { return item[0]; });
   check(noDemo.length === 0, "演示值表覆盖每一个键（不会出现「这行是空的」）",
-    noDemo.join(",") || "122/122 都有演示值");
+    noDemo.join(",") || "126/126 都有演示值");
   const staleDemo = ["order_reward_mult", "pond_income_cap_hours", "aquarium_slots", "button_defs",
-    "command_aliases"].concat(newKeys).filter(function (k) {
+    "command_aliases"].concat(newKeys).concat(dailyKeys).filter(function (k) {
     return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) !== JSON.stringify(schema[k].default);
   });
-  check(staleDemo.length === 0, "刷新过的 5 个 + 新增的 10 个演示值 == _conf_schema.json 的默认值",
-    staleDemo.join(",") || "15/15 与 schema 一致");
+  check(staleDemo.length === 0, "刷新过的 5 个 + 新增的 10 个 + 4 个每日额度的演示值 == _conf_schema.json 的默认值",
+    staleDemo.join(",") || "19/19 与 schema 一致");
+  /* 4 个每日额度键逐字核对：演示值 JSON 全等于 schema default（不是手抄的近似值） */
+  const dailyDemoBad = dailyKeys.filter(function (k) {
+    return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) !== JSON.stringify(schema[k].default);
+  });
+  check(dailyDemoBad.length === 0, "4 个每日额度键的演示值 JSON 全等于 _conf_schema.json 的默认值",
+    dailyDemoBad.length
+      ? dailyDemoBad.map(function (k) {
+        return k + "=" + JSON.stringify(T.DEMO_NUMBER_VALUES[k]) + "≠" + JSON.stringify(schema[k].default);
+      }).join(" ")
+      : dailyKeys.map(function (k) { return k + "=" + JSON.stringify(T.DEMO_NUMBER_VALUES[k]); }).join(" "));
+  const dailyDemoRows = demo.filter(function (r) { return dailyKeys.indexOf(r.key) >= 0; });
+  check(dailyDemoRows.length === 4 && dailyDemoRows.every(function (r) {
+    return r.entry === "" && r.value !== "" && r.value !== undefined && r.value !== null;
+  }), "演示态里这 4 行也铺出来了：入口 \"\" + 有值（离线打开就能看见今天的额度）",
+    dailyDemoRows.map(function (r) { return r.key + "=" + JSON.stringify(r.value); }).join(" "));
   check(T.DEMO_NUMBER_VALUES.stamina_max === 20 && T.DEMO_NUMBER_VALUES.level_xp_ratio === 1.08 &&
     T.DEMO_NUMBER_VALUES.quality_myth_chance === 0.0025,
     "演示值就是 _conf_schema.json 里的真实默认值（体力 20 / 曲线 1.08 / 洗髓 0.0025）",

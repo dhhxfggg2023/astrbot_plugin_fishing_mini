@@ -1684,7 +1684,7 @@ table.grid td.actions .btn { vertical-align: middle; }
    *   - `"tab:xxx"`  = 在别的标签页里可视化编辑（数值页只留一个可点的跳转行）
    *   - `"panel"`    = 插件配置面板自己的键（页面通道不给写，只读展示 + 说明为什么）
    * 兜底断言在 `configKeyCoverage()`：插件下发了页面不认识的键会当场报出来
-   * （`test_editor_ui.js` 会拿 `_conf_schema.json` 的 122 个键逐个核对，漏一个就红）。
+   * （`test_editor_ui.js` 会拿 `_conf_schema.json` 的 126 个键逐个核对，漏一个就红）。
    *
    * 第 5 位 `true` = 文本行（逗号/冒号分隔的名单，例如 `常见:14,少见:4.6`）。
    */
@@ -1702,6 +1702,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["auto_supply_bait", "自动补饵", "开关", "鱼饵用完时自动按单价补 1 个继续钓，金币不够就退回空钩、绝不透支；关掉 = 没饵的那一竿按空钩判定，中鱼率会明显掉下来，玩家得自己回商店买饵。", false, "基础"],
     ["auto_equip_bait", "自动挂饵", "开关", "玩家从没选过饵（equipped_bait 为空）时，自动挂上背包里手气最高的那款；关掉 = 新玩家一直空钩下竿，得自己用「/钓鱼 换饵」挑一次。自己选过空钩的人不受这项影响。", false, "基础"],
     ["auto_supply_buff", "自动补手气道具", "开关", "手气道具（玉佩/潮汐香/玉髓灯）用完后自动买、自动接着用；关掉 = 玩家得自己再买一次再手动用。只对玩家用「/钓鱼 自动 道具名」指定过的那一件生效。", false, "基础"],
+    ["buff_daily_cast_limit", "手气道具每日竿数", "竿", "手气道具（玉佩/潮汐香/玉髓灯）每天合计最多有多少竿生效 —— 这是每日额度，跨天 0 点自动重置；填 0 = 不限竿数。放开的话手气可以整天挂着，品质分布会被顶穿；档案里能看到今天已经用掉多少竿。", false, "基础", ""],
+    ["hot_soup_daily_limit", "姜汤每日次数", "次", "回体力道具（姜汤）每天最多能用几次 —— 这是每日额度，跨天 0 点自动重置；填 0 = 不限次数。体力本来就是「别从早钓到晚」的闸门，不限额的话买一背包姜汤就能无限钓；档案里能看到今天用了几次。", false, "基础", ""],
 
     // ---- 经济 ----
     ["sell_discount", "卖鱼折扣", "倍", "卖鱼折扣系数，1.0 = 按估值原价回收", false, "经济"],
@@ -1730,6 +1732,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["quality_weights", "个体品质权重", "6 个数", "六档个体品质的出现权重（凡品,良品,精品,珍品,绝品,神品）。最后一位是「神品」——留 0 就是自然上钩永远不出，只能靠洗髓丹洗出来", true, "稀有度"],
     ["quality_tiers", "个体品质档位", "档位表", "个体品质档位（格式：名称:下限-上限:emoji，逗号分隔，从低到高）。默认 凡品/良品/精品/珍品/绝品/神品 —— 故意和鱼种稀有度（常见/少见/稀有/传说/神话）用两套名字，免得玩家混淆；最后一档「神品」只能靠洗髓丹洗出来", true, "稀有度"],
     ["reroll_daily_limit", "洗髓丹每日上限", "颗/鱼", "洗髓丹：同一条鱼每天最多吃几颗。吃满当天它就对洗髓丹「厌恶」，拒绝再吃，第二天自动恢复（0 = 不限）。推荐 3，和「洗髓出神话的概率」一起决定神话的产出速度", false, "稀有度"],
+    ["reroll_daily_total", "洗髓丹每日总颗数", "颗", "洗髓丹每天最多能用几颗（整个鱼缸合计）—— 这是每日额度，跨天 0 点自动重置；填 0 = 不限颗数。它和上面的「洗髓丹每日上限（每条鱼）」是两层额度，专门挡住「买一堆丹把整个缸洗一遍」；档案里能看到今天用了几颗。", false, "稀有度", ""],
     ["quality_myth_chance", "洗髓出神品概率", "每次重掷", "洗髓丹洗出「神品」的概率 —— 每次重掷独立判定（一颗丹默认重掷 3 次）。推荐 0.0025（= 0.25%/次，一颗丹约 0.75%）；填 0 = 永远洗不出神品。自然上钩出不了神品，只能靠洗髓丹", false, "稀有度"],
     ["attr_weights", "三维权重", "键:权重", "三维属性在售价里的权重（格式：meat:0.45,spirit:0.3,sheen:0.25）", true, "稀有度"],
     ["attr_labels", "三维显示名", "键:名字", "三维属性的展示名（格式：meat:肉质,spirit:灵性,sheen:光泽）", true, "稀有度"],
@@ -1778,6 +1781,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["offering_hours", "供奉时长", "小时", "香火供奉一次能顶多少小时（可重复供奉续时间，效果不叠加）；调短 = 加成更稀缺、玩家要勤回来续香火，调长 = 一次管很久、回收金币的速度变慢。", false, "水族馆"],
     ["offering_income_bonus", "供奉产出加成", "比例", "香火供奉期间的鱼塘挂机产出加成（0.5 = +50%，与装饰加成相加）；它乘在馆藏估值上，调高会直接抬高挂机收益，和「单次领取上限」一起决定一次能领多少。", false, "水族馆"],
     ["offering_luck_bonus", "供奉手气加成", "点数", "香火供奉期间的手气加成（0.05 = +0.05，与玉佩等叠加后一起钳到 0~1）；调高 = 更容易出高稀有度与高价值的个体，属于花钱换爆率的那种加成。", false, "水族馆"],
+    ["offering_daily_limit", "供奉每日次数", "次", "香火供奉每天最多能点几次 —— 这是每日额度，跨天 0 点自动重置；填 0 = 不限次数。供奉效果本来就有 24 小时，一天一次刚好续上（再多只是把钱重复烧掉）；档案里能看到今天供了几次。", false, "水族馆", ""],
 
     // ---- 订单 ----
     ["order_count", "订单数量", "个", "同时挂几个订单（每天刷新一批）。", false, "订单"],
@@ -2485,6 +2489,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     "auto_supply_bait": true,
     "auto_equip_bait": true,
     "auto_supply_buff": true,
+    "buff_daily_cast_limit": 120,
+    "hot_soup_daily_limit": 5,
     "sell_discount": 1.0,
     "fish_value_mult": 1.0,
     "fish_value_overrides": "",
@@ -2507,6 +2513,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     "quality_weights": [44, 28, 16, 9, 3, 0],
     "quality_tiers": "凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢,精品:1.35-1.8:💎,珍品:1.8-2.5:🏆,绝品:2.5-4.0:👑,神品:4.0-6.0:🔱",
     "reroll_daily_limit": 3,
+    "reroll_daily_total": 30,
     "quality_myth_chance": 0.0025,
     "attr_weights": "meat:0.45,spirit:0.3,sheen:0.25",
     "attr_labels": "meat:肉质,spirit:灵性,sheen:光泽",
@@ -2547,6 +2554,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     "offering_hours": 24,
     "offering_income_bonus": 0.5,
     "offering_luck_bonus": 0.05,
+    "offering_daily_limit": 1,
     "order_count": 3,
     "order_reward_mult": 1.6,
     "order_unlock_level": 3,
@@ -2867,7 +2875,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /**
    * 离线演示态的数值页行：按 NUMBER_KEYS 的**全量**清单生成。
-   * 这样演示态里 122 个键一个都不少（与真实默认值一致），不会出现「这行是空的」。
+   * 这样演示态里 126 个键一个都不少（与真实默认值一致），不会出现「这行是空的」。
    */
   function demoNumberRows() {
     return NUMBER_KEYS.map(function (item) {
@@ -3149,7 +3157,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       id: "numbers",
       label: "⚙️ 数值",
       title: "配置数值",
-      hint: "插件配置里的 122 个键全在这一页：能直接改的给输入框，在别的标签页改的给跳转按钮，" +
+      hint: "插件配置里的 126 个键全在这一页：能直接改的给输入框，在别的标签页改的给跳转按钮，" +
         "插件配置面板自己的项标成只读 —— 搜键名 / 中文名 / 说明都能筛",
       keyField: "key",
       readonlyKeys: ["key", "label", "desc"],
