@@ -584,7 +584,8 @@ class InteractionsMixin:
         # 手气口径与「不用拉线」那条路径**完全一致**（v1.18.14 修的）：
         #   常驻来源（鱼饵 + 天气 + 鱼竿）走 bait_luck，
         #   一次性/持续 buff（插曲、玉佩）与拉线评价加成走 extra_luck，
-        #   最后由 _roll_quality_mult 一起钳到 0~1。
+        #   最后由 _roll_quality_mult 按档位放大权重（v1.18.22 起：不再「推点数」，
+        #   上限也从硬编码 1.0 改成可配的 luck_cap）。
         # 以前这里只传了「鱼饵 + 天气 + 评价」，鱼竿与玉佩/插曲那份被吞了 ——
         # 而收尾照样 _consume_luck()，等于玉佩白扣。
         quality_mult = _roll_quality_mult(
@@ -595,6 +596,7 @@ class InteractionsMixin:
                 + _safe_number(spec.get("gear_luck"), 0.0)
             ),
             extra_luck=bonus + _safe_number(spec.get("player_luck"), 0.0),
+            cfg=self.cfg,
         )
         catch = _new_instance(
             fish["id"],

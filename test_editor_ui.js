@@ -1408,7 +1408,7 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 127, "配置 schema 里是 127 个键", schemaKeys.length);
+  check(schemaKeys.length === 129, "配置 schema 里是 129 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
   check(pageKeys.indexOf("hostile_keywords") < 0,
@@ -1425,6 +1425,15 @@ async function configKeysCoverage() {
   const missingDaily = dailyKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
   check(missingDaily.length === 0, "v1.18.18 新增的 4 个「每日额度」键全都登记在 NUMBER_KEYS 里",
     missingDaily.join(",") || "4/4 都在");
+  /* v1.18.22 的品质曲线旋钮：登记 + 演示值与 schema 默认一致 */
+  const curveKeys = ["luck_weight_step", "luck_cap"];
+  const missingCurve = curveKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
+  check(missingCurve.length === 0, "v1.18.22 新增的 2 个「品质曲线」键全都登记在 NUMBER_KEYS 里",
+    missingCurve.join(",") || "2/2 都在");
+  check(curveKeys.every(function (k) {
+    return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) === JSON.stringify(schema[k].default);
+  }), "两个曲线旋钮的演示值与 schema 默认一致",
+    curveKeys.map(function (k) { return k + "=" + T.DEMO_NUMBER_VALUES[k]; }).join(" "));
   const dailyItemOf = function (k) {
     return T.NUMBER_KEYS.filter(function (x) { return x[0] === k; })[0];
   };
@@ -1467,9 +1476,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 127 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 127,
-    "127 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 129 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 129,
+    "129 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1477,12 +1486,12 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "127/127 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "129/129 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/127 条 ≥30 字");
+    longDoc.length + "/129 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
@@ -1517,12 +1526,12 @@ async function configKeysCoverage() {
     "backup_export_file,backup_import_file,data_action,data_confirm,data_status,data_target,editor_status",
     "插件面板只读的键正好是这 7 个（Python 侧再放开白名单时这里跟着改）", panelKeys.join(","));
 
-  /* 数值页：127 个键铺成 127 行，入口行给跳转按钮、只读行不给输入框 */
+  /* 数值页：129 个键铺成 129 行，入口行给跳转按钮、只读行不给输入框 */
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 127 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 127 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 129 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 129 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
@@ -1566,7 +1575,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 127, "清空搜索词 -> 又看到全部 127 个键");
+  check(T.keysFilteredRows().length === 129, "清空搜索词 -> 又看到全部 129 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -1609,14 +1618,14 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 127 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 127 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 129 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 129 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
   const noDemo = T.NUMBER_KEYS.filter(function (item) {
     return T.DEMO_NUMBER_VALUES[item[0]] === undefined;
   }).map(function (item) { return item[0]; });
   check(noDemo.length === 0, "演示值表覆盖每一个键（不会出现「这行是空的」）",
-    noDemo.join(",") || "127/127 都有演示值");
+    noDemo.join(",") || "129/129 都有演示值");
   const staleDemo = ["order_reward_mult", "pond_income_cap_hours", "aquarium_slots", "button_defs",
     "command_aliases"].concat(newKeys).concat(dailyKeys).concat([edwKey]).filter(function (k) {
     return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) !== JSON.stringify(schema[k].default);

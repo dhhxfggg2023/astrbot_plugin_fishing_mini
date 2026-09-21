@@ -377,6 +377,7 @@ class EngineMixin:
                     + gear_luck
                     + weather_luck,
                     extra_luck=luck,
+                    cfg=cfg,
                 )
                 catch = _new_instance(
                     fish["id"],
@@ -657,6 +658,7 @@ class EngineMixin:
                     self.cfg["quality_weights"],
                     bait_luck=bait_luck,
                     extra_luck=luck,
+                    cfg=cfg,
                 )
                 catch = _new_instance(
                     fish["id"],

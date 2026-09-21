@@ -2118,10 +2118,10 @@ async def main():
     captured: dict[str, float] = {}
     real_roll = mod.INTERACTIONS._roll_quality_mult
 
-    def _spy_roll(weights, bait_luck=0.0, extra_luck=0.0):
+    def _spy_roll(weights, bait_luck=0.0, extra_luck=0.0, **kwargs):
         captured["bait_luck"] = bait_luck
         captured["extra_luck"] = extra_luck
-        return real_roll(weights, bait_luck=bait_luck, extra_luck=extra_luck)
+        return real_roll(weights, bait_luck=bait_luck, extra_luck=extra_luck, **kwargs)
 
     mod.INTERACTIONS._roll_quality_mult = _spy_roll
     try:
@@ -2161,10 +2161,10 @@ async def main():
     captured.clear()
     real_roll2 = mod.ENGINE._roll_quality_mult
 
-    def _spy_roll2(weights, bait_luck=0.0, extra_luck=0.0):
+    def _spy_roll2(weights, bait_luck=0.0, extra_luck=0.0, **kwargs):
         captured["bait_luck"] = bait_luck
         captured["extra_luck"] = extra_luck
-        return real_roll2(weights, bait_luck=bait_luck, extra_luck=extra_luck)
+        return real_roll2(weights, bait_luck=bait_luck, extra_luck=extra_luck, **kwargs)
 
     mod.ENGINE._roll_quality_mult = _spy_roll2
     try:
@@ -2176,11 +2176,11 @@ async def main():
         and abs(captured.get("extra_luck", -1) - 0.40) < 1e-9,
         f"两条路径的手气口径完全一致 -> {captured}",
     )
-    # 手气最终还是被钳到 0~1（叠满也不会顶穿品质表）
+    # 手气最终还是被钳到 luck_cap（叠满也只是「更偏高档」，不会顶穿品质表）
     check(
         mod._roll_quality_mult([44, 28, 16, 9, 3, 0], bait_luck=0.8, extra_luck=0.9)
         <= mod._quality_ceil(),
-        "手气叠满时品质倍率仍在最高档区间内（钳到 0~1 后再掷）",
+        "手气叠满时品质倍率仍在最高档区间内（按 luck_cap 钳制后再掷）",
     )
 
     # --- 出厂兜底鱼竿（RODS）必须与 rod_defs 的数值一致 ---
@@ -6462,7 +6462,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 127,
+        len(_schema) == 129,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -6475,7 +6475,8 @@ async def main():
         f" + v1.18.13 的 story_chain_chance/story_chain_gap/story_shuffle_choices"
         f" + v1.18.17 的 order_level_growth/order_factor_max + 三个自动补给开关"
         f" + title_defs/offering_* 四项"
-        f" + v1.18.18 的四个每日额度 + v1.18.20 的 escape_difficulty_weight；"
+        f" + v1.18.18 的四个每日额度 + v1.18.20 的 escape_difficulty_weight"
+        f" + v1.18.22 的 luck_weight_step/luck_cap；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -6484,7 +6485,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 124, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 126, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -7929,11 +7930,11 @@ async def main():
     )
     _prices = {iid: int(it["price"]) for iid, it in item_plugin.items.items()}
     check(
-        _prices["lucky_jade"] == 12000
+        _prices["lucky_jade"] == 2400
         and abs(mod._safe_number(
             item_plugin.items["lucky_jade"]["effects"].get("buff_quality"), 0
         ) - 0.20) < 1e-9,
-        f"锦鲤玉佩：+20% 手气、12000 金（v1.18.19 按 ROI 重定价）-> "
+        f"锦鲤玉佩：+20% 手气、2400 金（v1.18.22 品质曲线修好后按 ROI 重定价）-> "
         f"{_prices['lucky_jade']} 金",
     )
     check(
@@ -7942,9 +7943,9 @@ async def main():
         f"{_prices['coral_deco']}",
     )
     check(
-        _prices["tide_incense"] == 18000 and _prices["jade_lantern"] == 18000
+        _prices["tide_incense"] == 3200 and _prices["jade_lantern"] == 2800
         and _prices["coral_king"] == 40000,
-        f"三件手气/装饰道具的 ROI 也被压到 2 倍以内 -> "
+        f"三件手气/装饰道具的 ROI 也压在 2 倍以内 -> "
         f"{_prices['tide_incense']}/{_prices['jade_lantern']}/{_prices['coral_king']}",
     )
     check(
@@ -8431,6 +8432,92 @@ async def main():
     check(
         abs(mod._effective_luck(sp2, stack.cfg) - 0.85) < 1e-9,
         f"插曲一次性 +0.5 仍然与道具叠加 -> {mod._effective_luck(sp2, stack.cfg):.2f}",
+    )
+
+    # =====================================================================
+    print("\n[10ae] 品质曲线重做：手气按档位放大权重，不再「把点数往后推」（v1.18.22）")
+    # 站长报：「不用玉佩，玩家钓到的鱼也大部分是绝品了」。
+    # 老算法 `point = rand*total + 手气*total*0.9` 的累计总量只有 100，
+    # 所以手气一过 0.53 就整段越过前四档 —— 中期 52%、终局 93% 都是绝品，
+    # 而且手气被硬钳在 1.0，玉佩/玉髓灯/供奉一点效果都没有。
+    _curve_cfg = dict(_CFG)
+
+    def _tier_share(luck: float, tier: str, n: int = 20000) -> float:
+        """在给定手气下抽 n 次，看某一档占多少。"""
+        hit = 0
+        for _ in range(n):
+            mult = mod._roll_quality_mult(
+                _curve_cfg["quality_weights"], extra_luck=luck, cfg=_curve_cfg
+            )
+            if mod._quality_label(mult)[0] == tier:
+                hit += 1
+        return hit / n
+
+    # (1) 手气 0 时逐字等于权重表（历史行为不变）
+    _zero = _tier_share(0.0, "凡品", 8000)
+    check(
+        0.42 <= _zero <= 0.49,
+        f"手气 0 时凡品占比 = 权重 44/97 ≈ 45% -> 实测 {_zero:.1%}",
+    )
+    # (2) 终局手气（龙涎 0.78 + 归墟竿 0.30 + 天气 0.06 = 1.14）绝品不再是「大部分」
+    _end_top = _tier_share(1.14, "绝品")
+    check(
+        0.12 <= _end_top <= 0.28,
+        f"终局手气 1.14：绝品 ≈ 20%（老算法 93%）-> 实测 {_end_top:.1%}",
+    )
+    # (3) 手气越高越偏高档：绝品占比单调上升
+    _shares = [_tier_share(x, "绝品", 12000) for x in (0.0, 0.55, 1.14, 1.49)]
+    check(
+        _shares[0] < _shares[1] < _shares[2] < _shares[3],
+        f"手气 0 → 0.55 → 1.14 → 1.49 的绝品占比单调上升 -> "
+        f"{['%.1f%%' % (x * 100) for x in _shares]}",
+    )
+    # (4) 手气叠满也掷不到神品（权重 0 的档永远乘出 0）
+    check(
+        mod._quality_label(
+            mod._roll_quality_mult(
+                _curve_cfg["quality_weights"], extra_luck=5.0, cfg=_curve_cfg
+            )
+        )[0]
+        != "神品",
+        "手气拉满（+5.0）也掷不到神品 —— 0 权重档永远是 0",
+    )
+    # (5) 两个旋钮都在配置里：luck_weight_step = 0 时手气完全不影响品质
+    _off_cfg = dict(_curve_cfg, luck_weight_step=0.0)
+    _off = [
+        mod._roll_quality_mult(
+            _off_cfg["quality_weights"], extra_luck=2.0, cfg=_off_cfg
+        )
+        for _ in range(4000)
+    ]
+    check(
+        max(_off) <= mod.QUALITY_TIERS[2][2] + 1e-9 and sum(_off) / len(_off) < 1.6,
+        f"luck_weight_step=0 → 手气再高也只按权重掷（{len(_off)} 次最高 "
+        f"{max(_off):.2f}、均值 {sum(_off) / len(_off):.2f}）",
+    )
+    check(
+        abs(mod._safe_number(_curve_cfg.get("luck_cap"), 0) - 2.0) < 1e-9
+        and abs(mod._safe_number(_curve_cfg.get("luck_weight_step"), 0) - 1.0) < 1e-9,
+        f"新旋钮进了配置：luck_cap={_curve_cfg.get('luck_cap')}、"
+        f"luck_weight_step={_curve_cfg.get('luck_weight_step')}",
+    )
+    # (6) 档位表顶部拉开了：绝品 / 神品 的区间（老配置走 DEFAULTS_VALUE_FIXES 迁移）
+    check(
+        mod.QUALITY_TIERS[4] == ("绝品", 3.50, 6.00, "👑")
+        and mod.QUALITY_TIERS[5] == ("神品", 6.00, 10.00, "🔱")
+        and abs(mod._quality_ceil() - 10.0) < 1e-9,
+        f"绝品/神品区间拉开、钳制上限跟着走 -> {mod.QUALITY_TIERS[4]} / "
+        f"{mod.QUALITY_TIERS[5]} / ceil={mod._quality_ceil()}",
+    )
+    _tier_fix = dict(mod.DEFAULTS_VALUE_FIXES)["quality_tiers"]
+    check(
+        any(
+            old == "凡品:0.8-1.0:⚪,良品:1.0-1.35:🟢,精品:1.35-1.8:💎,"
+                   "珍品:1.8-2.5:🏆,绝品:2.5-4.0:👑,神品:4.0-6.0:🔱"
+            and new == mod.DEFAULTS["quality_tiers"]
+            for old, new in _tier_fix
+        ),
+        "老档位表登记了整串迁移（逐字等于旧默认才替换）",
     )
 
     # =====================================================================
