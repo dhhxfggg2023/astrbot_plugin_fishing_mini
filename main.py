@@ -505,16 +505,18 @@ DEFAULTS: dict[str, Any] = {
         "feed_divine|仙露|💧|420|喂鱼：三维各 +10，估值 +600（永久）|"
         "meat=10;spirit=10;sheen=10;value_up=600|14",
         "growth_tonic|育灵水|🌱|800|喂鱼：这条鱼的投喂上限 +5 次|feed_bonus=5|18",
-        "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "pill_quality|洗髓丹|🔮|4000|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
         "极小概率直接洗出「神品」|quality_reroll=3|20",
         "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
-        "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
-        "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
-        "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
+        "lucky_jade|锦鲤玉佩|🎐|12000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+        "tide_incense|潮汐香|🕯️|18000|带在身上：接下来 40 竿手气小幅提升|"
+        "buff_quality=0.15;buff_casts=40|36",
+        "jade_lantern|玉髓灯|🏮|18000|带在身上：接下来 15 竿手气大幅提升|"
+        "buff_quality=0.35;buff_casts=15|40",
         "feed_mythic|龙涎饲料|🐲|1500|喂鱼：三维各 +18，估值 +2000（永久）|"
         "meat=18;spirit=18;sheen=18;value_up=2000|45",
         "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
-        "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
+        "coral_king|珊瑚王座|👑|40000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
         "hot_soup|姜汤|🍲|400|喝一口：回复体力（体力已满时不消耗）|heal=10|3",
     ],
     # ---- 可调数值表：想改物价 / 爆率 / 属性范围，改这里（或 WebUI）即可 ----
@@ -536,6 +538,11 @@ DEFAULTS: dict[str, Any] = {
     # 上钩率解析失败时的兜底值、未列出品质的默认逃脱率
     "hook_rate_fallback": 0.30,
     "default_escape_rate": 0.25,
+    # 难度对「拉线逃脱率」的影响权重（v1.18.19）：
+    #   窗口逃脱率 = rarity_escape_chance × ((1−0.5w) + w×鱼种难度) × 天气逃脱倍率 × 鱼竿逃脱率系数
+    # 默认 0.5 就是历史曲线（0.75 + 0.5×难度）：难度 0.5 的鱼 = 配置值，越难越容易跑。
+    # 填 0 则**配置里写多少窗口期就是多少**（难度不再缩放）；想更极端就填 1~2。
+    "escape_difficulty_weight": 0.5,
     # 物价总开关：全局倍率 + 单条覆盖（鱼名或 id 均可）
     "fish_value_mult": 1.0,
     "fish_value_overrides": "",
@@ -747,6 +754,40 @@ LOCAL_CONTENT_ROW_FIXES: tuple[tuple[str, str, str], ...] = (
         "item_defs",
         "coral_deco|珊瑚造景|🪸|260|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20",
         "coral_deco|珊瑚造景|🪸|3000|摆进鱼缸：72 小时内挂机产出 +20%|decorate=0.20|27",
+    ),
+    # v1.18.19：站长问「道具的价格是不是太便宜了，你自己考虑一下吧」——
+    # 拿真实收益算了一遍 ROI（收益 ÷ 价格），把这五件**明显偏低**的调上去
+    # （目标 ROI 约 1.8：买它划算，但要付出代价）：
+    #   潮汐香 8.4x / 玉佩 4.1x / 玉髓灯 2.7x / 洗髓丹 2.8x / 珊瑚王座 3.0x
+    # 仙露（1.5x）、龙涎饲料（1.7x）、育灵水、珍珠梳、造景（1.7x）本来就合理，不动。
+    (
+        "item_defs",
+        "lucky_jade|锦鲤玉佩|🎐|6000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+        "lucky_jade|锦鲤玉佩|🎐|12000|带在身上：接下来 20 竿手气更好|buff_quality=0.20|31",
+    ),
+    (
+        "item_defs",
+        "tide_incense|潮汐香|🕯️|4500|带在身上：接下来 40 竿手气小幅提升|buff_quality=0.15|36",
+        "tide_incense|潮汐香|🕯️|18000|带在身上：接下来 40 竿手气小幅提升|"
+        "buff_quality=0.15;buff_casts=40|36",
+    ),
+    (
+        "item_defs",
+        "jade_lantern|玉髓灯|🏮|12000|带在身上：接下来 15 竿手气大幅提升|buff_quality=0.35|40",
+        "jade_lantern|玉髓灯|🏮|18000|带在身上：接下来 15 竿手气大幅提升|"
+        "buff_quality=0.35;buff_casts=15|40",
+    ),
+    (
+        "item_defs",
+        "pill_quality|洗髓丹|🔮|2500|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "极小概率直接洗出「神品」|quality_reroll=3|20",
+        "pill_quality|洗髓丹|🔮|4000|重掷这条鱼的个体品质（取更好的那次，不影响三维）；"
+        "极小概率直接洗出「神品」|quality_reroll=3|20",
+    ),
+    (
+        "item_defs",
+        "coral_king|珊瑚王座|👑|26000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
+        "coral_king|珊瑚王座|👑|40000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
     ),
 )
 
@@ -1079,16 +1120,35 @@ BUTTON_EMPTY_SCENES: set[str] = set()
 #: 上一次扩展加载的摘要（用来避免每次应用配置都重复打日志）
 EXT_REPORT_ROWS: list[str] = []
 
-#: 内置快照：首次应用时从默认文本解析一次，之后回退一直用它
+#: 内置快照：首次应用时从默认文本解析一次（**没应用「统一样式」策略**，保持原味）
+_BUILTIN_BUTTONS_RAW: dict[str, list[tuple[str, str, int]]] = {}
+#: 渲染时真正用的内置表 = `_BUILTIN_BUTTONS_RAW`（套上「统一样式」策略后的结果）
 _BUILTIN_BUTTONS: dict[str, list[tuple[str, str, int]]] = {}
 
 
 def _builtin_buttons() -> dict[str, list[tuple[str, str, int]]]:
-    """内置按钮表（解析 button_defs 的默认文本，只做一次）。"""
-    if not _BUILTIN_BUTTONS:
+    """内置按钮表（解析 button_defs 的默认文本，只做一次；不含样式策略）。"""
+    if not _BUILTIN_BUTTONS_RAW:
         parsed = CALC._parse_button_defs(DEFAULTS.get("button_defs") or "")
-        _BUILTIN_BUTTONS.update(parsed)
-    return {scene: list(items) for scene, items in _BUILTIN_BUTTONS.items()}
+        _BUILTIN_BUTTONS_RAW.update(parsed)
+    return {scene: list(items) for scene, items in _BUILTIN_BUTTONS_RAW.items()}
+
+
+def _refresh_builtin_buttons() -> None:
+    """把「统一样式」策略应用到内置表。
+
+    ⚠️ v1.18.19 修的：以前只对**配置里的行**套策略，于是站长把
+    ``button_style_mode`` 设成「统一」之后，凡是用出厂按钮的场景
+    （没配过的场景、以及「同组兜底」拿到的那些）在 QQ 上仍然是原样式 ——
+    表现就是「全局按钮效果没生效」。内置表也同样要过一遍策略。
+
+    原地更新（clear + update）：兄弟模块引用的是同一个 dict。
+    """
+    styled = CALC._apply_button_style_policy(
+        _builtin_buttons(), BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE
+    )
+    _BUILTIN_BUTTONS.clear()
+    _BUILTIN_BUTTONS.update(styled)
 
 
 def _apply_extensions() -> None:
@@ -1149,6 +1209,8 @@ def _apply_button_defs(cfg: dict[str, Any]) -> None:
     rows = CALC._apply_button_style_policy(rows, BUTTON_STYLE_MODE, BUTTON_DEFAULT_STYLE)
     BUTTONS.clear()
     BUTTONS.update(rows)
+    # 内置表也要过一遍同一个策略（见 _refresh_builtin_buttons 的说明）
+    _refresh_builtin_buttons()
 
 
 def _apply_button_layout(cfg: dict[str, Any]) -> None:
@@ -1223,11 +1285,21 @@ def _apply_command_config(cfg: dict[str, Any]) -> None:
     """
     reserved = _command_reserved_words(cfg)
 
+    # ⚠️ 别名表的坏行是**逐行跳过**的（其余别名照常生效），所以不能用
+    # `_tunable_warn` 那句「已回退默认值」——站长看到会以为整张表被扔了。
+    _alias_warned = {"done": False}
+
+    def _alias_warn(msg: str) -> None:
+        if _alias_warned["done"]:
+            return
+        _alias_warned["done"] = True
+        logger.warning(f"[配置] command_aliases {msg}（这一行跳过，其余别名照常生效）")
+
     aliases, alias_problems = CALC._build_command_aliases(
         _cfg_str(cfg, "command_aliases"),
         SUBCOMMAND_KEYWORDS,
         reserved=reserved,
-        warn=lambda msg: _tunable_warn("command_aliases", msg),
+        warn=_alias_warn,
     )
     COMMAND_ALIASES.clear()
     COMMAND_ALIASES.update(aliases)

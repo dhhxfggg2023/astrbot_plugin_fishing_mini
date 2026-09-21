@@ -159,7 +159,15 @@ class EngineMixin:
                 price = _safe_int(item.get("price"), 0, 0)
                 # 每日额度（v1.18.18）：自动补给也只能补到额度用完为止
                 left = _daily_left(player, "buff", cfg.get("buff_daily_cast_limit"))
-                grant = max(1, _safe_int(cfg.get("buff_cast_count"), 20, 1))
+                # 每件道具自己的持续竿数（v1.18.20，`buff_casts=40`）
+                grant = max(
+                    1,
+                    _safe_int(
+                        effects.get("buff_casts"),
+                        _safe_int(cfg.get("buff_cast_count"), 20, 1),
+                        1,
+                    ),
+                )
                 if left is not None:
                     grant = max(0, min(grant, left))
                 if have <= 0 and price > 0 and gold >= price and grant > 0:

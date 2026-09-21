@@ -6460,7 +6460,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 126,
+        len(_schema) == 127,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -6473,7 +6473,7 @@ async def main():
         f" + v1.18.13 的 story_chain_chance/story_chain_gap/story_shuffle_choices"
         f" + v1.18.17 的 order_level_growth/order_factor_max + 三个自动补给开关"
         f" + title_defs/offering_* 四项"
-        f" + v1.18.18 的四个每日额度；"
+        f" + v1.18.18 的四个每日额度 + v1.18.20 的 escape_difficulty_weight；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -6482,7 +6482,18 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 123, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 124, f"其余 {len(_hidden)} 项全部 invisible")
+    # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
+    # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
+    # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
+    _default_mismatch = sorted(
+        k for k, v in _schema.items()
+        if k in mod.DEFAULTS and v.get("default") != mod.DEFAULTS[k]
+    )
+    check(
+        not _default_mismatch,
+        f"schema 默认值与 DEFAULTS 逐项一致（不一致：{_default_mismatch or '无'}）",
+    )
     # 页面「数值」页必须覆盖所有「面板藏了、又只有手改配置文件才能改」的键
     _bridge_mod = sys.modules.get("astrbot_fishing_editor_bridge")
     if _bridge_mod is not None:
@@ -7054,10 +7065,11 @@ async def main():
         not mod._reroll_averse(lf, cfg_r, plugin_r._today_text()),
         "老鱼默认不是「厌恶」状态",
     )
-    # 洗髓丹价格（v1.18.16：1200 → 2500）+ 官方行迁移
+    # 洗髓丹价格（v1.18.16：1200 → 2500；v1.18.19 按 ROI 再调到 4000）+ 官方行迁移
     check(
-        mod._safe_int(plugin_r.items["pill_quality"].get("price"), 0, 0) == 2500,
-        f"洗髓丹价格 500 → 1200 → 2500 -> {plugin_r.items['pill_quality'].get('price')}",
+        mod._safe_int(plugin_r.items["pill_quality"].get("price"), 0, 0) == 4000,
+        f"洗髓丹价格 500 → 1200 → 2500 → 4000 -> "
+        f"{plugin_r.items['pill_quality'].get('price')}",
     )
     fix_cfg = dict(cfg_r)
     fix_cfg["item_defs"] = [
@@ -7065,8 +7077,8 @@ async def main():
     ]
     plugin_fix = make_plugin(fix_cfg)
     check(
-        "|2500|" in str(plugin_fix.cfg["item_defs"][0])
-        and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 2500,
+        "|4000|" in str(plugin_fix.cfg["item_defs"][0])
+        and mod._safe_int(plugin_fix.items["pill_quality"].get("price"), 0, 0) == 4000,
         "老配置里那行没被改过 → 自动升级成新价（CONTENT_ROW_FIXES 三级链 + 本地迁移）",
     )
     # v1.18.10：个体品质最后一档改名「神品」，说明里那个「神话」指的其实是它 ——
@@ -7915,17 +7927,23 @@ async def main():
     )
     _prices = {iid: int(it["price"]) for iid, it in item_plugin.items.items()}
     check(
-        _prices["lucky_jade"] == 6000
+        _prices["lucky_jade"] == 12000
         and abs(mod._safe_number(
             item_plugin.items["lucky_jade"]["effects"].get("buff_quality"), 0
         ) - 0.20) < 1e-9,
-        f"锦鲤玉佩已削弱：+20% 手气、6000 金（原 +30%/500 金）-> "
+        f"锦鲤玉佩：+20% 手气、12000 金（v1.18.19 按 ROI 重定价）-> "
         f"{_prices['lucky_jade']} 金",
     )
     check(
-        _prices["pill_quality"] == 2500 and _prices["coral_deco"] == 3000,
+        _prices["pill_quality"] == 4000 and _prices["coral_deco"] == 3000,
         f"洗髓丹/珊瑚造景也跟着重定价 -> {_prices['pill_quality']}/"
         f"{_prices['coral_deco']}",
+    )
+    check(
+        _prices["tide_incense"] == 18000 and _prices["jade_lantern"] == 18000
+        and _prices["coral_king"] == 40000,
+        f"三件手气/装饰道具的 ROI 也被压到 2 倍以内 -> "
+        f"{_prices['tide_incense']}/{_prices['jade_lantern']}/{_prices['coral_king']}",
     )
     check(
         all(it.get("unlock_level", 1) >= 1 for it in item_plugin.items.values())
@@ -8357,6 +8375,60 @@ async def main():
         mod._daily_left({"daily_used": {"buff": 99999}}, "buff", 0) is None
         and mod._daily_line(mod._default_player("x"), free_q.cfg, "2026-01-01") == "",
         "额度设 0 = 不限（档案里也不显示那一行）",
+    )
+
+    # =====================================================================
+    print("\n[10ad] 同类手气道具不叠加（v1.18.20）")
+    # 站长：「同类效果不能叠加，比如说都加手气的道具」——
+    # 同时用两件手气道具时只按**较强的那个**算，绝不把 +20% 和 +35% 加成 +55%；
+    # 时长取较长的那次。插曲一次性手气 / 供奉手气仍然照旧叠加（他确认过）。
+    stack = make_plugin(dict(_CFG, buff_daily_cast_limit=0))
+    sp2 = mod._default_player("89721")
+    sp2["items"] = {"lucky_jade": 3, "jade_lantern": 3, "tide_incense": 3}
+    await stack._save_player(sp2)
+    await cmd(stack, FakeEvent("89721"), "用", "锦鲤玉佩", "")
+    sp2 = await stack._load_player("89721")
+    jade_gain = mod._safe_number(sp2.get("buff_quality"), 0.0)
+    check(
+        abs(jade_gain - 0.20) < 1e-9 and sp2["buff_casts_left"] == 20,
+        f"先戴玉佩 -> +{jade_gain:.0%} / {sp2['buff_casts_left']} 竿",
+    )
+    out = await cmd(stack, FakeEvent("89721"), "用", "玉髓灯", "")
+    sp2 = await stack._load_player("89721")
+    check(
+        abs(mod._safe_number(sp2.get("buff_quality"), 0.0) - 0.35) < 1e-9,
+        f"再用玉髓灯 -> 只按较强的 +35%（不是 +55%）-> "
+        f"+{mod._safe_number(sp2.get('buff_quality'), 0.0):.0%}",
+    )
+    check(
+        sp2["buff_casts_left"] == 20,
+        f"时长取较长的那次（20 > 15）-> {sp2['buff_casts_left']} 竿",
+    )
+    check("不叠加" in text_of(out), f"回复里写明不叠加 -> {text_of(out).splitlines()[-2][:26]}")
+    # 再用一件**更弱**的：数值不动，只续时长
+    sp2["buff_casts_left"] = 3
+    await stack._save_player(sp2)
+    out = await cmd(stack, FakeEvent("89721"), "用", "潮汐香", "")
+    sp2 = await stack._load_player("89721")
+    check(
+        abs(mod._safe_number(sp2.get("buff_quality"), 0.0) - 0.35) < 1e-9
+        and sp2["buff_casts_left"] == 40
+        and "原来那件更强" in text_of(out),
+        f"用更弱的潮汐香：数值不降、只把时长续到 {sp2['buff_casts_left']} 竿（它自己 40 竿）",
+    )
+    # 每件道具的持续竿数写在它自己身上（buff_casts），而不是全都用全局 20 竿
+    check(
+        stack.items["tide_incense"]["effects"].get("buff_casts") == 40
+        and stack.items["jade_lantern"]["effects"].get("buff_casts") == 15
+        and not stack.items["lucky_jade"]["effects"].get("buff_casts"),
+        "潮汐香 40 竿 / 玉髓灯 15 竿写在道具上，玉佩沿用全局 buff_cast_count",
+    )
+    # 插曲一次性手气仍然叠加（他明确说可以叠）
+    sp2["luck_charges"] = 0.5
+    await stack._save_player(sp2)
+    check(
+        abs(mod._effective_luck(sp2, stack.cfg) - 0.85) < 1e-9,
+        f"插曲一次性 +0.5 仍然与道具叠加 -> {mod._effective_luck(sp2, stack.cfg):.2f}",
     )
 
     # =====================================================================

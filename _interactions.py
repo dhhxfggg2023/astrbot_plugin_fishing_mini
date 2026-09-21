@@ -457,7 +457,16 @@ class InteractionsMixin:
         center = _clamp(0.5 + drift, half + 0.05, 1.0 - half - 0.05)
 
         base_escape = self.escape_map.get(rarity, DEFAULT_ESCAPE_RATE)
-        escape = _clamp(base_escape * (0.75 + 0.5 * diff) * escape_mult, 0.0, 0.95)
+        # 难度对逃脱率的影响权重（v1.18.19，站长问「逃脱率提高生效了吗」时加的）：
+        #   factor = (1 − 0.5×w) + w×diff
+        # 默认 w = 0.5 → 0.75 + 0.5×diff，**与历史曲线逐字一致**；
+        # w = 0 → factor 恒为 1，也就是「配置里写多少，窗口期就是多少」
+        #（天气倍率与鱼竿的逃脱率系数仍然照常生效）。
+        diff_weight = _clamp(
+            _safe_number(self.cfg.get("escape_difficulty_weight"), 0.5), 0.0, 2.0
+        )
+        diff_factor = (1.0 - 0.5 * diff_weight) + diff_weight * diff
+        escape = _clamp(base_escape * diff_factor * escape_mult, 0.0, 0.95)
 
         return {
             "window": window,

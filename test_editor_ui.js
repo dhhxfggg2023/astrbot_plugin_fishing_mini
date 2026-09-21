@@ -247,6 +247,17 @@ function runAssertions() {
   check(pageKeys.slice().sort().join(",") === registryKeys.slice().sort().join(","),
     "页面兜底清单与注册表一致（在线时会被插件发来的清单覆盖）",
     "页面=" + pageKeys.join("/") + " 注册表=" + registryKeys.join("/"));
+  /* 顺序也逐项等于注册表（_effects.py 里写明「顺序 = 页面上的展示顺序」）：
+     在线时插件下发的 effect_keys 就是这个顺序，兜底清单跟着排，
+     效果列表头的 tooltip 与「插件不认识的效果键」报错提示才不会和插件两副面孔。 */
+  check(pageKeys.join(",") === registryKeys.join(","),
+    "页面兜底清单的顺序逐项等于 _effects.BUILTIN_EFFECTS 的顺序",
+    "页面=" + pageKeys.join("/") + " 注册表=" + registryKeys.join("/"));
+  check(pageKeys[pageKeys.length - 1] === "buff_casts" &&
+    T.ITEM_EFFECT_KEYS[T.ITEM_EFFECT_KEYS.length - 1][0] === "buff_casts" &&
+    registryKeys[registryKeys.length - 1] === "buff_casts",
+    "新增的 buff_casts 追加在清单末尾（没插进历史 8 键里）",
+    "页面末项=" + pageKeys[pageKeys.length - 1] + " 注册表末项=" + registryKeys[registryKeys.length - 1]);
   check(/function applyEffectKeys\(/.test(html) && /ITEM_EFFECT_KEYS = rows/.test(html) &&
     /applyEffectKeys\(config\.effect_keys\)/.test(html),
     "页面会用插件发来的 effect_keys 覆盖兜底清单（效果清单不再写死）", "");
@@ -276,6 +287,12 @@ function runAssertions() {
   const unknownRow = { id: "t_unknown", name: "乱写", emoji: "🔮", price: 1, effects: "nope=1" };
   check(Object.keys(T.validateRow(T.TAB_BY_ID.items, unknownRow)).length > 0,
     "真不认识的效果键照样报错（没把校验放松）");
+  /* v1.18.19 的 buff_casts：潮汐香 / 玉髓灯现在写「buff_quality=0.15;buff_casts=40」这种串，
+     新键必须在白名单里，否则道具页会把本来完全合法的一行标红。 */
+  const castsRow = { id: "t_casts", name: "潮汐香", emoji: "🕯️", price: 18000, effects: "buff_quality=0.15;buff_casts=40" };
+  check(Object.keys(T.validateRow(T.TAB_BY_ID.items, castsRow)).length === 0,
+    "buff_casts 是合法效果键（潮汐香 / 玉髓灯那种写法不报错）",
+    JSON.stringify(T.validateRow(T.TAB_BY_ID.items, castsRow)));
 
   const ALLOWED_EFFECTS = T.ITEM_EFFECT_KEY_NAMES;
   const badEffects = [];
@@ -1391,7 +1408,7 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 126, "配置 schema 里是 126 个键", schemaKeys.length);
+  check(schemaKeys.length === 127, "配置 schema 里是 127 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
   check(pageKeys.indexOf("hostile_keywords") < 0,
@@ -1421,6 +1438,20 @@ async function configKeysCoverage() {
   check(dailyGroups.buff_daily_cast_limit === "基础" && dailyGroups.hot_soup_daily_limit === "基础" &&
     dailyGroups.reroll_daily_total === "稀有度" && dailyGroups.offering_daily_limit === "水族馆",
     "这 4 个键跟同族键待在「基础 / 稀有度 / 水族馆」三组里", JSON.stringify(dailyGroups));
+  /* v1.18.19 的 escape_difficulty_weight（难度对逃脱率的权重）：登记 + 入口 ""（数值页直接改）
+     + 分组跟着同族的拉线键走 + 说明讲清后果。 */
+  const edwKey = "escape_difficulty_weight";
+  const edwItem = T.NUMBER_KEYS.filter(function (x) { return x[0] === edwKey; })[0];
+  check(!!edwItem, "v1.18.19 新增的 escape_difficulty_weight 登记在 NUMBER_KEYS 里",
+    edwItem ? edwItem.join(" / ") : "没找到 " + edwKey);
+  const edwRow = edwItem ? T.numberRowFromItem(edwItem, schema[edwKey].default) : {};
+  check(!!edwItem && T.numberEntryOf(edwItem) === "" && edwRow.entry === "",
+    "它的入口是 \"\"（数值页直接改，不是跳转 / 只读行）", String(edwRow.entry));
+  check(edwRow.group === "拉线",
+    "它跟 window_min / sweet_spot_width / perfect_escape_factor 一起待在「拉线」组", String(edwRow.group));
+  check(String(edwRow.desc || "").length >= 30,
+    "说明是「讲清后果」的长句（默认 = 历史曲线、填 0 = 难度不再缩放逃脱率）",
+    String(edwRow.desc || "").length + " 字");
   const missingPage = schemaKeys.filter(function (k) { return pageKeys.indexOf(k) < 0; });
   const extraPage = pageKeys.filter(function (k) { return schemaKeys.indexOf(k) < 0; });
   check(missingPage.length === 0, "schema 里的键页面上全部登记了（没有遗漏）",
@@ -1436,9 +1467,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 126 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 126,
-    "126 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 127 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 127,
+    "127 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1446,12 +1477,12 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "126/126 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "127/127 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/126 条 ≥30 字");
+    longDoc.length + "/127 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
@@ -1486,12 +1517,12 @@ async function configKeysCoverage() {
     "backup_export_file,backup_import_file,data_action,data_confirm,data_status,data_target,editor_status",
     "插件面板只读的键正好是这 7 个（Python 侧再放开白名单时这里跟着改）", panelKeys.join(","));
 
-  /* 数值页：126 个键铺成 126 行，入口行给跳转按钮、只读行不给输入框 */
+  /* 数值页：127 个键铺成 127 行，入口行给跳转按钮、只读行不给输入框 */
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 126 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 126 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 127 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 127 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
@@ -1535,7 +1566,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 126, "清空搜索词 -> 又看到全部 126 个键");
+  check(T.keysFilteredRows().length === 127, "清空搜索词 -> 又看到全部 127 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -1578,20 +1609,21 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 126 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 126 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 127 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 127 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
   const noDemo = T.NUMBER_KEYS.filter(function (item) {
     return T.DEMO_NUMBER_VALUES[item[0]] === undefined;
   }).map(function (item) { return item[0]; });
   check(noDemo.length === 0, "演示值表覆盖每一个键（不会出现「这行是空的」）",
-    noDemo.join(",") || "126/126 都有演示值");
+    noDemo.join(",") || "127/127 都有演示值");
   const staleDemo = ["order_reward_mult", "pond_income_cap_hours", "aquarium_slots", "button_defs",
-    "command_aliases"].concat(newKeys).concat(dailyKeys).filter(function (k) {
+    "command_aliases"].concat(newKeys).concat(dailyKeys).concat([edwKey]).filter(function (k) {
     return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) !== JSON.stringify(schema[k].default);
   });
-  check(staleDemo.length === 0, "刷新过的 5 个 + 新增的 10 个 + 4 个每日额度的演示值 == _conf_schema.json 的默认值",
-    staleDemo.join(",") || "19/19 与 schema 一致");
+  check(staleDemo.length === 0,
+    "刷新过的 5 个 + 新增的 10 个 + 4 个每日额度 + 逃脱率权重的演示值 == _conf_schema.json 的默认值",
+    staleDemo.join(",") || "20/20 与 schema 一致");
   /* 4 个每日额度键逐字核对：演示值 JSON 全等于 schema default（不是手抄的近似值） */
   const dailyDemoBad = dailyKeys.filter(function (k) {
     return JSON.stringify(T.DEMO_NUMBER_VALUES[k]) !== JSON.stringify(schema[k].default);
@@ -1607,6 +1639,16 @@ async function configKeysCoverage() {
     return r.entry === "" && r.value !== "" && r.value !== undefined && r.value !== null;
   }), "演示态里这 4 行也铺出来了：入口 \"\" + 有值（离线打开就能看见今天的额度）",
     dailyDemoRows.map(function (r) { return r.key + "=" + JSON.stringify(r.value); }).join(" "));
+  /* v1.18.19 的 escape_difficulty_weight：演示值 JSON 全等于 schema 默认值（不是手抄的近似值），
+     而且这一行在演示态里真铺得出来（入口 "" + 值 = 默认值）。 */
+  check(JSON.stringify(T.DEMO_NUMBER_VALUES[edwKey]) === JSON.stringify(schema[edwKey].default) &&
+    typeof T.DEMO_NUMBER_VALUES[edwKey] === "number",
+    "escape_difficulty_weight 的演示值 JSON 全等于 _conf_schema.json 的默认值",
+    JSON.stringify(T.DEMO_NUMBER_VALUES[edwKey]) + " vs " + JSON.stringify(schema[edwKey].default));
+  const edwDemoRow = demo.filter(function (r) { return r.key === edwKey; })[0];
+  check(!!edwDemoRow && edwDemoRow.entry === "" && edwDemoRow.value === schema[edwKey].default,
+    "演示态里这一行也铺出来了：入口 \"\" + 值 = schema 默认值（离线打开就能看见）",
+    edwDemoRow ? JSON.stringify(edwDemoRow.value) : "没铺出来");
   check(T.DEMO_NUMBER_VALUES.stamina_max === 20 && T.DEMO_NUMBER_VALUES.level_xp_ratio === 1.08 &&
     T.DEMO_NUMBER_VALUES.quality_myth_chance === 0.0025,
     "演示值就是 _conf_schema.json 里的真实默认值（体力 20 / 曲线 1.08 / 洗髓 0.0025）",

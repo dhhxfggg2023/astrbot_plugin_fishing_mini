@@ -101,6 +101,10 @@ BUILTIN_EFFECTS: tuple[EffectSpec, ...] = (
         "洗髓丹：重掷这条鱼的个体品质，取更好的那次（值 = 掷几次）", "feed", "次数",
         "_commands._cmd_use_item（quality_reroll 分支）",
     ),
+    EffectSpec(
+        "buff_casts", "钓手手气：这件道具持续几竿（省略 = buff_cast_count）", "cast", "竿数",
+        "_commands._cmd_use_item（buff_quality 分支）",
+    ),
 )
 
 #: 旧写法 -> 正式键名（``quality_up`` 是 v1.9 之前的写法，老配置照常可用）

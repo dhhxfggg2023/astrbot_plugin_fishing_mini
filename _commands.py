@@ -2382,7 +2382,6 @@ class CommandsMixin:
                 left = _daily_left(
                     player, "buff", self.cfg.get("buff_daily_cast_limit")
                 )
-                cap_casts = int(self.cfg["buff_cast_count"])
                 if left is not None and left <= 0:
                     async for _r in self._say_msg(event, "item.used", event.plain_result(
                             f"🌙 今天的手气额度用完了"
@@ -2393,29 +2392,49 @@ class CommandsMixin:
                         yield _r
                     return
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
-                gain = _safe_number(effects.get("buff_quality"), 0.0)
+                gain = _clamp(_safe_number(effects.get("buff_quality"), 0.0), 0.0, 2.0)
+                # 每件道具自己的持续竿数（v1.18.20）：`buff_casts=40`；
+                # 没写就用全局 buff_cast_count。以前**所有**手气道具都用全局值，
+                # 于是「潮汐香 40 竿 / 玉髓灯 15 竿」只是说明文字，实际都是 20 竿。
+                cap_casts = int(
+                    _safe_int(
+                        effects.get("buff_casts"), self.cfg["buff_cast_count"], 1
+                    )
+                )
+                cap_casts = int(_clamp(cap_casts, 1, 9999))
                 # 额度不够一整轮时就只给剩下的那几竿（不浪费这一件道具的其余部分）
                 casts = cap_casts if left is None else max(1, min(cap_casts, left))
                 _daily_add(player, "buff", casts)
-                active = _safe_int(player.get("buff_casts_left"), 0, 0) > 0
-                if active:
-                    # 同一件道具的效果不叠加：还在生效就只把剩余竿数刷新回满，
-                    # 手气数值保持原样（不给玩家添提示，按站长要求静默处理）
-                    if _safe_number(player.get("buff_quality"), 0.0) <= 0:
-                        player["buff_quality"] = _clamp(gain, 0.0, 2.0)
+                # ---- 同类效果**不叠加**（v1.18.20，站长：「同类效果不能叠加，
+                # 比如说都加手气的道具」）----
+                # 手气道具只有一份 buff：同时用两件时取**较高的那个数值**，
+                # 时长取较长的那个，绝不把 +20% 和 +35% 加成 +55%。
+                old_gain = _safe_number(player.get("buff_quality"), 0.0)
+                old_left = _safe_int(player.get("buff_casts_left"), 0, 0)
+                replaced = old_left > 0 and gain > old_gain + 1e-9
+                if old_left > 0:
+                    player["buff_quality"] = _clamp(max(old_gain, gain), 0.0, 2.0)
                 else:
-                    player["buff_quality"] = _clamp(gain, 0.0, 2.0)
-                player["buff_casts_left"] = max(
-                    _safe_int(player.get("buff_casts_left"), 0, 0), casts
-                )
+                    player["buff_quality"] = gain
+                player["buff_casts_left"] = max(old_left, casts)
                 saved = await self._save_player(player)
                 _limit_cap = _safe_int(self.cfg.get("buff_daily_cast_limit"), 0, 0)
                 lines = [
                     f"🎐 使用 {self._item_label(item_id)}",
-                    f"　作用在你自己身上：接下来 {casts} 竿手气更好"
+                    f"　作用在你自己身上：接下来 {player['buff_casts_left']} 竿手气更好"
                     f"（{_luck_stars(_safe_number(player.get('buff_quality'), 0.0), 0.3)}）",
                     "　（不是喂鱼，鱼的三维不会变）",
                 ]
+                if old_left > 0:
+                    lines.append(
+                        f"　🧷 同类手气**不叠加**：按较强的那个算 "
+                        f"+{_safe_number(player.get('buff_quality'), 0.0):.0%}"
+                        + (
+                            f"（这件更强，替掉了原来的 +{old_gain:.0%}）"
+                            if replaced
+                            else f"（原来那件更强，这件只续时长）"
+                        )
+                    )
                 if _limit_cap > 0:
                     lines.append(
                         f"　📅 今日手气额度 {_daily_used(player, 'buff')}/{_limit_cap} 竿"
