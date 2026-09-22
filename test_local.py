@@ -4648,6 +4648,120 @@ async def main():
         f"{[b['action']['data'] for b in (_prowsD[-1]['buttons'] if _prowsD else [])]}",
     )
 
+    # --- v1.18.34：道具用完之后补一排「再次使用」按钮 ---
+    # 规则：照玩家刚才那条指令再发一次（参数原样带走）；背包里没货了就不给
+    # （省得按下去只得到一句「你没有」）；失败路径（额度用完 / 体力已满）没有按钮。
+    def _again_of(calls):
+        """最后一条消息的键盘里，「再次使用」那个按钮要发的指令（没有就空）。"""
+        rows = calls[-1]["keyboard"]["content"]["rows"] if calls else []
+        return [
+            b["action"]["data"]
+            for row in rows
+            for b in row["buttons"]
+            if b["render_data"]["label"] == plugin.AGAIN_LABEL
+        ]
+
+    check(plugin._again_rows("item.used", "") == [], "拼不出指令时不出「再次使用」那一排")
+    check(
+        make_plugin(dict(_CFG, button_empty_scenes="item.used"))._again_rows(
+            "item.used", "/钓鱼 用 姜汤"
+        )
+        == [],
+        "场景写进 button_empty_scenes 时「再次使用」也不出现（那个开关要算数）",
+    )
+    _np = mod._default_player("89603")
+    check(
+        plugin._use_again_command(_np, "hot_soup", "") == "",
+        "背包里没存货就不拼指令（按钮跟着消失）",
+    )
+    _np["items"] = {"hot_soup": 1}
+    check(
+        plugin._use_again_command(_np, "hot_soup", "1 2") == "/钓鱼 用 姜汤 1 2",
+        f"指令按「登记名 + 原来的参数」拼 -> "
+        f"{plugin._use_again_command(_np, 'hot_soup', '1 2')}",
+    )
+
+    # 洗髓丹：用完之后按钮就是「再洗这条」（参数原样带走）
+    _ip = make_plugin()
+    _ipp = mod._default_player("89604")
+    _ipp["items"] = {"pill_quality": 2}
+    _ipp["aquarium"] = [
+        mod._new_instance("carp", 1.0),
+        mod._new_instance("crucian", 1.0),
+    ]
+    await _ip._save_player(_ipp)
+    _iapi = FakeApi()
+    await cmd(_ip, PlatEvent("89604", api=_iapi), "用", "洗髓丹", "1")
+    check(
+        _again_of(_iapi.calls) == ["/钓鱼 用 洗髓丹 1"],
+        f"洗髓丹用完之后带「再次使用」按钮（还是洗栏位 1）-> {_again_of(_iapi.calls)}",
+        str([[b["action"]["data"] for b in r["buttons"]] for r in (
+            _iapi.calls[-1]["keyboard"]["content"]["rows"] if _iapi.calls else []
+        )]),
+    )
+    _iapi2 = FakeApi()
+    await cmd(_ip, PlatEvent("89604", api=_iapi2), "用", "洗髓丹", "1")   # 最后一颗
+    check(
+        _again_of(_iapi2.calls) == [],
+        "最后一颗用掉之后就不给按钮了（没货了）",
+    )
+
+    # 姜汤：喝下去给按钮；体力已满（没真的用出去）不给
+    _hp = make_plugin(dict(_CFG, stamina_max=100, stamina_regen_seconds=45))
+    _hpp = mod._default_player("89605")
+    _hpp["items"] = {"hot_soup": 3}
+    _hpp["stamina"] = 10
+    _hpp["stamina_ts"] = int(time.time())
+    await _hp._save_player(_hpp)
+    _hapi = FakeApi()
+    await cmd(_hp, PlatEvent("89605", api=_hapi), "用", "姜汤", "")
+    check(
+        _again_of(_hapi.calls) == ["/钓鱼 用 姜汤"],
+        f"姜汤喝下去给「再次使用」按钮 -> {_again_of(_hapi.calls)}",
+    )
+    _hpp["stamina"] = 100
+    _hpp["stamina_ts"] = int(time.time())
+    await _hp._save_player(_hpp)
+    _hapi2 = FakeApi()
+    await cmd(_hp, PlatEvent("89605", api=_hapi2), "用", "姜汤", "")
+    check(
+        _again_of(_hapi2.calls) == [],
+        "体力满了（这一口没真的用出去）时不给「再次使用」按钮",
+    )
+
+    # 另外两条「用完还能接着用」的路子：投喂（item.feed_done）、
+    # 培育（item.breed_done）—— 参数原样带走，按一下就是再喂/再培育一遍
+    _fp = make_plugin()
+    _fpp = mod._default_player("89606")
+    _fpp["items"] = {"feed_premium": 3}
+    _fpp["aquarium"] = [
+        mod._new_instance("carp", 1.0),
+        mod._new_instance("crucian", 1.0),
+    ]
+    await _fp._save_player(_fpp)
+    _fapi = FakeApi()
+    await cmd(_fp, PlatEvent("89606", api=_fapi), "用", "高级饲料", "1", "2")
+    check(
+        _again_of(_fapi.calls) == ["/钓鱼 用 高级饲料 1 2"],
+        f"投喂之后给「再次使用」按钮（批量参数原样带走）-> {_again_of(_fapi.calls)}",
+    )
+    _fapi2 = FakeApi()
+    await cmd(_fp, PlatEvent("89607", api=_fapi2), "用", "育灵水", "1")
+    check(
+        _again_of(_fapi2.calls) == [],
+        "这条测试玩家没有育灵水（没真的用出去）→ 不给按钮",
+    )
+    _fpp2 = mod._default_player("89607")
+    _fpp2["items"] = {"growth_tonic": 2}
+    _fpp2["aquarium"] = [mod._new_instance("carp", 1.0)]
+    await _fp._save_player(_fpp2)
+    _fapi2 = FakeApi()
+    await cmd(_fp, PlatEvent("89607", api=_fapi2), "用", "育灵水", "1")
+    check(
+        _again_of(_fapi2.calls) == ["/钓鱼 用 育灵水 1"],
+        f"培育（育灵水）之后也带「再次使用」-> {_again_of(_fapi2.calls)}",
+    )
+
     # --- 🔘 按钮表全部可配置（button_defs）---
     # v1.18.17 大扩充：站长要求「所有需要的地方都加按钮」，官方给每个回复场景都配了按钮，
     # 所以这里不再逐字抄一整张表（240+ 行、改一次就得跟着改一次），改成三层验证：

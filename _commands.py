@@ -2412,9 +2412,14 @@ class CommandsMixin:
                 ext_lines = _ext_effect_lines(self, player, item_id, effects)
                 items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
                 await self._save_player(player)
-                async for _r in self._say_msg(event, "item.used", event.plain_result(
+                async for _r in self._say_msg(
+                    event,
+                    "item.used",
+                    event.plain_result(
                         f"🧩 {self._item_label(item_id)}（扩展效果）\n" + "\n".join(ext_lines)
-                    )):
+                    ),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
             if has_ext:
@@ -2492,7 +2497,13 @@ class CommandsMixin:
                     )
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
+                # 还有货就给「再次使用」按钮（照着刚才那条指令再发一次）
+                async for _r in self._say_msg(
+                    event,
+                    "item.used",
+                    event.plain_result("\n".join(lines)),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
 
@@ -2564,7 +2575,13 @@ class CommandsMixin:
                     )
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
+                # 还有货就给「再次使用」按钮（照着刚才那条指令再发一次）
+                async for _r in self._say_msg(
+                    event,
+                    "item.used",
+                    event.plain_result("\n".join(lines)),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
 
@@ -2688,7 +2705,12 @@ class CommandsMixin:
                     )
                 if not saved:
                     head.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "item.reroll_done", event.plain_result("\n".join(head + lines[:6]))):
+                async for _r in self._say_msg(
+                    event,
+                    "item.reroll_done",
+                    event.plain_result("\n".join(head + lines[:6])),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
 
@@ -2755,7 +2777,12 @@ class CommandsMixin:
                     lines.append(f"　（顺带清理了 {expired} 个已失效的装饰）")
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "item.deco_used", event.plain_result("\n".join(lines))):
+                async for _r in self._say_msg(
+                    event,
+                    "item.deco_used",
+                    event.plain_result("\n".join(lines)),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
 
@@ -2814,7 +2841,13 @@ class CommandsMixin:
                     lines.append(f"　📅 今日额度 {_daily_used(player, 'heal')}/{_soup_cap} 次")
                 if not saved:
                     lines.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "item.used", event.plain_result("\n".join(lines))):
+                # 还有货就给「再次使用」按钮（照着刚才那条指令再发一次）
+                async for _r in self._say_msg(
+                    event,
+                    "item.used",
+                    event.plain_result("\n".join(lines)),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
 
@@ -2868,7 +2901,12 @@ class CommandsMixin:
                 ]
                 if not saved:
                     head.append("⚠️ 保存失败")
-                async for _r in self._say_msg(event, "item.breed_done", event.plain_result("\n".join(head + lines[:6]))):
+                async for _r in self._say_msg(
+                    event,
+                    "item.breed_done",
+                    event.plain_result("\n".join(head + lines[:6])),
+                    again=self._use_again_command(player, item_id, a3),
+                ):
                     yield _r
                 return
 
@@ -2945,7 +2983,13 @@ class CommandsMixin:
                 lines.append(
                     f"　（跳过已喂满的栏位 {len(skipped_full)} 条）"
                 )
-            async for _r in self._say_msg(event, "item.feed_done", event.plain_result("\n".join(lines))):
+            # 还有货就给「再次使用」按钮（照着刚才那条指令再发一次）
+            async for _r in self._say_msg(
+                event,
+                "item.feed_done",
+                event.plain_result("\n".join(lines)),
+                again=self._use_again_command(player, item_id, a3),
+            ):
                 yield _r
 
     # =========================================================================

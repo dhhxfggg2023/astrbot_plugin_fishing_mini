@@ -198,6 +198,7 @@ class InteractionsMixin:
         scene: str | None = None,
         values: dict[str, Any] | None = None,
         page: tuple[int, int, str] | None = None,
+        again: str | None = None,
     ):
         """**统一输出出口**：先按场景叠加文案覆盖，再能发按钮就发按钮，否则退回纯文本。
 
@@ -210,13 +211,16 @@ class InteractionsMixin:
         * ``page``：**需要翻页的界面**传 ``(当前页, 总页数, 指令前缀)``，
           就会在按钮末尾多出一排「上一页 / 下一页」（见 ``_views._page_rows``）：
           第一页不给「上一页」、最后一页不给「下一页」，只有一页时整排不出现。
+        * ``again``：**道具用完了**传那条「再发一次」的指令（``/钓鱼 用 洗髓丹 2``），
+          会多出一排「再次使用」按钮（见 ``_views._use_again_command``）。
 
         用法：``async for r in self._say(event, text, "bag.list"): yield r``
         """
         text = self._scene_text(scene, text, values)
         rows = self._scene_rows(scene) if scene else []
-        # 翻页按钮固定排在最后一行（不占按钮表：它跟着页码走）
-        rows = rows + self._page_rows(scene, page)
+        # 动态按钮排在最后：先「上一页 / 下一页」，再「再次使用」
+        # （两者不占按钮表：都跟着当前情境走）
+        rows = rows + self._page_rows(scene, page) + self._again_rows(scene, again)
         if rows and await self._send_with_buttons(event, text, rows):
             return
         yield event.plain_result(text)
@@ -228,18 +232,19 @@ class InteractionsMixin:
         message: Any,
         values: dict[str, Any] | None = None,
         page: tuple[int, int, str] | None = None,
+        again: str | None = None,
     ):
         """``_say`` 的「消息对象版」：``message`` 一般来自 ``event.plain_result(文字)``。
 
         存在的意义：让几百处已经在用的 ``yield event.plain_result(...)`` 只需要
         在外面套一层就能带上场景按钮与文案覆盖，不用把里面的文案重写一遍。
-        取不到文本时原样交出对象（功能不受影响）。``page`` 同 ``_say``。
+        取不到文本时原样交出对象（功能不受影响）。``page`` / ``again`` 同 ``_say``。
         """
         text = _message_text(message)
         if not text:
             yield message
             return
-        async for reply in self._say(event, text, scene, values, page):
+        async for reply in self._say(event, text, scene, values, page, again):
             yield reply
 
     async def _push(
