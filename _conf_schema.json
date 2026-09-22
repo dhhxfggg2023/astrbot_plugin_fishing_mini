@@ -533,9 +533,9 @@
   },
   "location_hook_factors": {
     "invisible": true,
-    "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理。v1.18.16 重定阶梯：从 1.0 平滑降到 0.82（原来最深只有 0.54，拿最好的饵也有一半空竿）——现在最深的地图用最好的饵有 82% 中鱼，用中档饵（蚯蚓 0.70）才是 57%。",
+    "description": "各钓点的上钩难度系数（格式：钓点id:系数）。≥1.0 = 这个钓点必出鱼（默认前 3 张图）；<1.0 = 中鱼率 × 系数（越深的地图越容易空竿）。没写的钓点按 1.0（必出）处理。v1.18.27 抬到「1.0 → 0.92」：最深的地图拿最好的饵 92% 中鱼（空竿 8%），拿中档饵（蚯蚓 0.70）也有 64%；想要一张图都不空竿就把最后几项填 1.0。",
     "type": "string",
-    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,night:0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,trench:0.86,glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,dragon_palace:0.82"
+    "default": "novice:1.0,bamboo:1.0,canal:1.0,lake:0.99,reed:0.98,sea:0.97,dock:0.96,night:0.95,mangrove:0.95,swamp:0.94,cave:0.94,ruins:0.93,abyss:0.93,trench:0.93,glacier:0.92,aurora:0.92,starfall:0.92,void_sea:0.92,dragon_palace:0.92"
   },
   "location_codex_gate": {
     "invisible": true,

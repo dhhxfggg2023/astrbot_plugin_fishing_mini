@@ -412,15 +412,16 @@ DEFAULTS: dict[str, Any] = {
     # 上钩率：空钩基本靠运气，带饵才容易上鱼（"id:概率" 逗号分隔，站长可调）
     # 钓点难度系数：≥1.0 = 这个钓点必出鱼；<1.0 = 上钩率 × 系数（越深越容易空竿）
     #
-    # ⚠️ v1.18.16 重定过阶梯：原来从新手村 1.0 一路滑到龙宫 0.54，
-    # 配上最好的饵（1.0）在深层也只有 54% 中鱼 —— 站长报「倒数第四个钓点
-    # 用最好的配置依旧相当于一半空杆」。现在的梯度是 1.0 → 0.82：
-    # 最深的地图（龙宫）拿最好的饵也有 82% 中鱼，用蚯蚓这种中档饵才是 57%，
-    # 「饵越好越不空竿」这条感受仍然成立，但不会让人觉得概率坏了。
+    # ⚠️ 站长两次要求「提高」这张表：
+    #   v1.18.16 原来从 1.0 一路滑到龙宫 0.54 —— 拿最好的饵在深层也只有 54% 中鱼，
+    #     他报「倒数第四个钓点用最好的配置依旧相当于一半空杆」→ 改成 1.0 → 0.82；
+    #   v1.18.27 他说「我让你提高这个」→ 再抬到 **1.0 → 0.92**：
+    #     最深的地图（龙宫）拿最好的饵 92% 中鱼（空竿 8%），拿蚯蚓这种中档饵 64%；
+    #     前 3 张图仍然必出鱼。想要「一张图都不空竿」就把最后几项填 1.0。
     "location_hook_factors": (
-        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,night"
-        ":0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,trench:0.86"
-        ",glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,dragon_palace:0.82"
+        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.99,reed:0.98,sea:0.97,dock:0.96,night"
+        ":0.95,mangrove:0.95,swamp:0.94,cave:0.94,ruins:0.93,abyss:0.93,trench:0.93"
+        ",glacier:0.92,aurora:0.92,starfall:0.92,void_sea:0.92,dragon_palace:0.92"
     ),
     # 前往下一个钓点需要上一个钓点图鉴开到多少比例
     "location_codex_gate": 0.8,
@@ -654,16 +655,32 @@ def _synced_default_keys() -> list[str]:
 
 
 def _defaults_fingerprint() -> str:
-    """把参与同步的默认值做稳定序列化后取哈希前 8 位。
+    """把参与同步的默认值 + **迁移表**做稳定序列化后取哈希前 8 位。
 
     只要代码里任何一个数值/内容表变了，指纹就会变，插件启动时据此
     把新默认值写回配置——不需要人工维护版本号。
+
+    ⚠️ **必须把迁移表也算进来**（v1.18.27 修的坑）：
+    ``DEFAULTS_VALUE_FIXES`` / ``LOCAL_CONTENT_ROW_FIXES`` 是「官方改过哪些旧值」的登记表，
+    但它们本身**不是 DEFAULTS**。以前只哈希 DEFAULTS，于是「只加了一条迁移、没动默认值」的
+    版本（比如 v1.18.24 补的深水空竿率阶梯迁移）启动时 `stored == current` → 直接
+    early-return，**迁移永远不会执行** —— 站长那边看到的就是「代码改了、配置一个字没变」。
+    现在迁移表一变，指纹就变，启动时必然跑一遍同步。
+    内容表迁移（`LOCAL_CONTENT_ROW_FIXES`）走的是另一条路（每次启动都跑），
+    这里一起算进去只是为了让它更早被复核。
 
     ⚠️ 必须**调用时现算**：模块初始化后半段会重写 ``DEFAULTS["location_defs"]``
     （由钓点常量生成），提前算出来的指纹会和实际默认值对不上，导致每次启动
     都误判成「数值变了」。
     """
-    payload = {key: DEFAULTS[key] for key in _synced_default_keys()}
+    payload = {
+        "defaults": {key: DEFAULTS[key] for key in _synced_default_keys()},
+        "value_fixes": {
+            key: [[str(old), str(new)] for old, new in pairs]
+            for key, pairs in DEFAULTS_VALUE_FIXES.items()
+        },
+        "row_fixes": [[str(k), str(o), str(n)] for k, o, n in LOCAL_CONTENT_ROW_FIXES],
+    }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
@@ -744,6 +761,15 @@ DEFAULTS_VALUE_FIXES: dict[str, tuple[tuple[Any, Any], ...]] = {
             "night:0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,"
             "trench:0.65,glacier:0.62,aurora:0.60,starfall:0.58,void_sea:0.56,"
             "dragon_palace:0.54",
+            DEFAULTS["location_hook_factors"],
+        ),
+        # v1.18.27：站长「我让你提高这个」—— 0.82 那一版也得跟着抬到 0.92。
+        # 已经在 v1.18.16 之后升过级的配置落在这条上（同样只在逐字相等时替换）。
+        (
+            "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,"
+            "night:0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,"
+            "trench:0.86,glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,"
+            "dragon_palace:0.82",
             DEFAULTS["location_hook_factors"],
         ),
     ),

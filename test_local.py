@@ -2543,9 +2543,9 @@ async def main():
         f"最后 6 个钓点拿最好的饵都 ≥80% 中鱼（不达标的：{_bad or '无'}）",
     )
     check(
-        abs(_catch_rate("aurora", "secret") - 0.85) < 1e-9
-        and abs(_catch_rate("dragon_palace", "secret") - 0.82) < 1e-9,
-        f"倒数第四个（极光冰渊）85%、最后一个（龙宫）82% -> "
+        abs(_catch_rate("aurora", "secret") - 0.92) < 1e-9
+        and abs(_catch_rate("dragon_palace", "secret") - 0.92) < 1e-9,
+        f"倒数第四个（极光冰渊）92%、最后一个（龙宫）92% -> "
         f"{_catch_rate('aurora', 'secret'):.0%}/{_catch_rate('dragon_palace', 'secret'):.0%}",
     )
     check(
@@ -2554,24 +2554,38 @@ async def main():
         f" < 秘制饵 {_catch_rate('dragon_palace', 'secret'):.0%}）",
     )
     check(
-        _ladder.get("novice") == 1.0 and _ladder.get("dragon_palace") == 0.82,
-        f"阶梯从 1.0 平滑降到 0.82 -> {_ladder.get('novice')}→{_ladder.get('dragon_palace')}",
+        _ladder.get("novice") == 1.0 and _ladder.get("dragon_palace") == 0.92,
+        f"阶梯从 1.0 平滑降到 0.92（v1.18.27 又抬高了一档）-> "
+        f"{_ladder.get('novice')}→{_ladder.get('dragon_palace')}",
+    )
+    check(
+        all(v >= 0.92 for v in _ladder.values()),
+        f"最低的钓点也有 92%（v1.18.16 那版是 0.82，最早那版只有 0.54）-> "
+        f"最低 {min(_ladder.values())}",
     )
     check(
         len(_ladder) == len(hook_plugin.locations),
         f"每个钓点都有系数（{len(_ladder)}/{len(hook_plugin.locations)}）",
     )
-    # 老配置里的旧阶梯（1.0 → 0.54）必须能**自动**换到新阶梯：
-    # v1.18.16 改这张表时漏登记了整串迁移，而它是「键:值 映射表」——
-    # 升级只补缺项，19 个钓点一个不缺 → 站长那边一直还是旧阶梯（他报「还是没变」）。
+    # 老配置里的旧阶梯必须能**自动**换到新阶梯。这里钉两个历史版本：
+    #   * 最早那版 1.0 → 0.54（站长配置里就是它）
+    #   * v1.18.16 那版 1.0 → 0.82（已经升过一次级的服务器）
+    # ⚠️ 这两条迁移曾经**跑不起来**：`_defaults_fingerprint()` 只哈希 DEFAULTS，
+    # 「只加迁移、没动默认值」的版本（v1.18.24）指纹没变 → `_sync_defaults` 直接 early-return。
+    # v1.18.27 把迁移表也算进指纹，所以下面还要顺手验一遍指纹对迁移表敏感。
     _ladder_fix = dict(mod.DEFAULTS_VALUE_FIXES)["location_hook_factors"]
     check(
         any(
             old.split(",")[-1] == "dragon_palace:0.54"
             and new == mod.DEFAULTS["location_hook_factors"]
             for old, new in _ladder_fix
+        )
+        and any(
+            old.split(",")[-1] == "dragon_palace:0.82"
+            and new == mod.DEFAULTS["location_hook_factors"]
+            for old, new in _ladder_fix
         ),
-        "旧阶梯登记了整串迁移（逐字等于旧默认才替换）",
+        "两个历史版本的阶梯都登记了整串迁移（0.54 与 0.82 都会抬到 0.92）",
     )
     _old_ladder = (
         "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,"
@@ -2586,8 +2600,23 @@ async def main():
     await p_hook._sync_defaults()
     _new_ladder = str(p_hook.config["location_hook_factors"])
     check(
-        "dragon_palace:0.82" in _new_ladder and "dragon_palace:0.54" not in _new_ladder,
-        f"老配置的旧阶梯被换成新阶梯 -> 龙宫 {_new_ladder.split('dragon_palace:')[-1]}",
+        "dragon_palace:0.92" in _new_ladder and "dragon_palace:0.54" not in _new_ladder,
+        f"老配置的 0.54 阶梯被换成 0.92 -> 龙宫 {_new_ladder.split('dragon_palace:')[-1]}",
+    )
+    p_hook2 = make_plugin()
+    p_hook2.config["location_hook_factors"] = (
+        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.96,reed:0.95,sea:0.94,dock:0.92,"
+        "night:0.91,mangrove:0.90,swamp:0.89,cave:0.88,ruins:0.87,abyss:0.87,"
+        "trench:0.86,glacier:0.85,aurora:0.85,starfall:0.84,void_sea:0.83,"
+        "dragon_palace:0.82"
+    )
+    p_hook2.config["config_fingerprint"] = "旧指纹"
+    p_hook2._refresh_config()
+    await p_hook2._sync_defaults()
+    check(
+        "dragon_palace:0.92" in str(p_hook2.config["location_hook_factors"]),
+        f"0.82 那版（v1.18.16 升过级的服务器）也会被抬到 0.92 -> "
+        f"{str(p_hook2.config['location_hook_factors']).split('dragon_palace:')[-1]}",
     )
     p_own = make_plugin()
     p_own.config["location_hook_factors"] = "novice:1.0,dragon_palace:0.30"
@@ -2598,6 +2627,20 @@ async def main():
         "dragon_palace:0.30" in str(p_own.config["location_hook_factors"]),
         f"站长自己改过的阶梯一个字都不动 -> {p_own.config['location_hook_factors']}",
     )
+    # 指纹必须对「迁移表」敏感：否则「只加迁移、没改默认值」的版本会被 early-return 掉
+    _fp_now = mod._defaults_fingerprint()
+    _saved_fixes = mod.DEFAULTS_VALUE_FIXES["location_hook_factors"]
+    try:
+        mod.DEFAULTS_VALUE_FIXES["location_hook_factors"] = _saved_fixes + (
+            ("占位旧值-只为验证指纹", "占位新值"),
+        )
+        _fp_changed = mod._defaults_fingerprint()
+    finally:
+        mod.DEFAULTS_VALUE_FIXES["location_hook_factors"] = _saved_fixes
+    check(
+        _fp_changed != _fp_now and mod._defaults_fingerprint() == _fp_now,
+        f"改动迁移表会让默认值指纹变化（v1.18.27 修的坑）-> {_fp_now} → {_fp_changed}",
+    )
     # 游戏里能看见空竿率（以前只能靠手感）：/钓鱼 查 <钓点>
     _hook_look = make_plugin(dict(load_schema_config("hook_look"), enable_weather=False))
     _lp = await _hook_look._load_player("89501")
@@ -2606,8 +2649,8 @@ async def main():
     await _hook_look._save_player(_lp)
     _card = text_of(await cmd(_hook_look, FakeEvent("89501"), "查", "龙宫", "", ""))
     check(
-        "空竿18%" in _card,
-        f"/钓鱼 查 龙宫 写出空竿率（秘制饵 1.00 × 0.82 = 18%）-> "
+        "空竿8%" in _card,
+        f"/钓鱼 查 龙宫 写出空竿率（秘制饵 1.00 × 0.92 = 8%）-> "
         f"{[l for l in _card.splitlines() if '空竿' in l][:1]}",
     )
 
@@ -3423,19 +3466,19 @@ async def main():
     )
 
     # --- 新默认值的上鱼率矩阵（3000 竿采样，区间断言非恒真） ---
-    # 上鱼率 = 饵的上钩率 × 钓点系数（v1.18.16 的阶梯：极光 0.85、湖泊 0.96、
-    # 前三张图 1.0），所以面包屑在极光是 0.58×0.85≈0.49、在新手村是 0.58。
+    # 上鱼率 = 饵的上钩率 × 钓点系数（v1.18.27 的阶梯：极光/龙宫 0.92、湖泊 0.99、
+    # 前三张图 1.0），所以面包屑在极光是 0.58×0.92≈0.53、在新手村是 0.58。
     mat = make_plugin(load_schema_config())
     for bait_id, loc_id, lo, hi in (
-        ("bread", "aurora", 0.45, 0.54),
-        ("secret", "aurora", 0.80, 0.90),
-        ("bread", "lake", 0.51, 0.60),
-        ("secret", "lake", 0.92, 0.99),
-        ("none", "aurora", 0.17, 0.25),
+        ("bread", "aurora", 0.49, 0.58),
+        ("secret", "aurora", 0.88, 0.96),
+        ("bread", "lake", 0.53, 0.62),
+        ("secret", "lake", 0.95, 1.00),
+        ("none", "aurora", 0.19, 0.27),
         # 前三张图的系数是 1.0：`_roll_cast_outcome` 里 >= 1.0 直接判「必出鱼」，
         # 所以新手村不管挂什么饵都是 100%（这是设计，不是 bug）
         ("bread", "novice", 1.00, 1.00),
-        ("dragon_bait", "dragon_palace", 0.78, 0.86),
+        ("dragon_bait", "dragon_palace", 0.88, 0.96),
     ):
         hit = sum(
             1 for _ in range(3000) if mat._roll_cast_outcome(bait_id, True, loc_id)[0] == "fish"
