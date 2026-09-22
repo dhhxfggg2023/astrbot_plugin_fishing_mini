@@ -3898,6 +3898,65 @@ async def main():
         f"{[l for l in body.splitlines() if '连钓不拉线' in l][:1]}",
     )
 
+    # --- 5) 真实分派链：整批持仓时「/钓鱼 拉」照样进得来 ---
+    # 连钓整批持着 self._lock_for(user_id)，而「拉」走的是 fishing() 里的 PULL_WORDS
+    # 分支（不取锁）。这条断言专防「改成逐条拉线之后，玩家的拉线指令反而被自己那批
+    # 锁死」这种上线事故 —— 一旦撞上，表现就是玩家发了拉线、鱼照样超时跑掉。
+    lock_cfg = dict(pull_cfg)
+    lock_cfg["window_min"] = 6
+    lock_cfg["window_max"] = 6
+    _kc = make_plugin(lock_cfg)
+    pk = mod._default_player("89205")
+    pk["gold"] = 1000
+    pk["equipped_bait"] = "worm"
+    pk["baits"] = {"worm": 10}
+    await _kc._save_player(pk)
+
+    _kout: list[str] = []
+
+    async def _kconsume():
+        async for r in _kc.fishing(FakeEvent("89205"), "3", "", ""):
+            _kout.append(r.text if hasattr(r, "text") else str(r))
+
+    _ktask = asyncio.create_task(_kconsume())
+    for _ in range(300):
+        if "89205" in _kc._pending_pulls:
+            break
+        if _ktask.done():
+            break
+        await asyncio.sleep(0.01)
+    check(
+        _kc._lock_for("89205").locked(),
+        "逐条等拉的时候这批也持着这个玩家的锁（别的子命令会排队等它走完）",
+    )
+    _t0 = time.monotonic()
+    try:
+        _pull_replies = await asyncio.wait_for(
+            run(_kc.fishing, FakeEvent("89205", message="/钓鱼 拉"), "拉", "", ""),
+            timeout=3,
+        )
+        _pull_ok = True
+    except asyncio.TimeoutError:
+        _pull_ok, _pull_replies = False, []
+    check(
+        _pull_ok and "收到" in text_of(_pull_replies),
+        f"整批持仓时「/钓鱼 拉」照样能进来（{time.monotonic() - _t0:.3f}s 就返回，没被锁挡）"
+        f" -> {_pull_replies}",
+    )
+    if _pull_ok:
+        while not _ktask.done():
+            if "89205" in _kc._pending_pulls:
+                await run(_kc.fishing, FakeEvent("89205", message="/钓鱼 拉"), "拉", "", "")
+            await asyncio.sleep(0.01)
+        await _ktask
+        check(
+            "上鱼 3 条" in text_of(_kout),
+            f"全程只用真实指令「拉」，3 条也一条不落地收上来 -> "
+            f"{[l for l in text_of(_kout).splitlines() if '上鱼' in l]}",
+        )
+    else:
+        _ktask.cancel()
+
     print("\n[10j] 彩蛋事件 / 里程碑 / 最佳渔获纪录")
     plugin6 = make_plugin()
     ev6 = FakeEvent("89006")
