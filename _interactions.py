@@ -544,10 +544,30 @@ class InteractionsMixin:
             yield reply
 
         started = time.monotonic()
+        # 反应时间护栏（只有连钓会设 spec["min_reaction"]，见 main.MULTI_PULL_MIN_REACTION）：
+        # 连钓自动接续下一条，上一条的「余震」（连点 / 消息重投）会落在这条窗口刚开时，
+        # 不加护栏就会以落点 ≈0 判成「偏差」，玩家连提示都没看见。这段里的「拉」丢弃后
+        # **继续等剩下那点时间**，不是直接判超时。
+        min_reaction = _safe_number(spec.get("min_reaction"), 0.0)
+        hit = False
+        elapsed = window
         try:
-            await asyncio.wait_for(asyncio.shield(future), timeout=window)
-            hit = True
-            elapsed = time.monotonic() - started
+            while True:
+                remaining = window - (time.monotonic() - started)
+                if remaining <= 0:
+                    break
+                await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
+                elapsed = time.monotonic() - started
+                if elapsed >= min_reaction:
+                    hit = True
+                    break
+                # 太早了：换一个新 future 接着等（旧的那个已经 done，换掉即可）
+                future = loop.create_future()
+                self._pending_pulls[user_id] = {
+                    "future": future,
+                    "session": self._session_key(event),
+                    "deadline": time.monotonic() + remaining,
+                }
         except asyncio.TimeoutError:
             hit = False
             elapsed = window

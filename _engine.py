@@ -721,6 +721,9 @@ class EngineMixin:
                     spec["rod_value_bonus"] = rod_value
                     spec["location_mult"] = loc_value
                     spec["codex_mult"] = codex_mult
+                    # 窗口开头这段收到的「拉」丢掉：连钓自动接续，上一条的余震
+                    # （连点 / 消息重投）会撞在这条刚弹出来的瞬间（见常量的说明）
+                    spec["min_reaction"] = MULTI_PULL_MIN_REACTION
                     result: dict[str, Any] | None = None
                     async for kind, payload in self._iter_minigame(
                         event, user_id, fish, bait_id, spec

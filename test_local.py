@@ -3726,11 +3726,11 @@ async def main():
     print("\n[6m] 连钓里的拉线互动：要拉线的鱼**逐条**弹（v1.18.28）")
 
     async def _multi_pull_run(plugin, event, times, max_pulls=99):
-        """连钓，并在每次「等玩家拉」时点一下。
+        """连钓，并在每次「等玩家拉」时点一下（**记得越过反应时间护栏**）。
 
-        返回 ``(回复列表, 实际响应次数, 首次等到玩家时提示是否已经发出)``。
+        返回 ``(回复列表, 实际响应次数, 首次等待越过护栏时提示是否已经发出)``。
         第三个值是这次改动的**关键断言**：连钓必须「先把提示交给玩家、再开始等」，
-        否则（像单竿那样先攒成 messages 再吐）玩家要等窗口走完才看到「咬钩了」，
+        否则（像以前那样先攒成 messages 再吐）玩家要等窗口走完才看到「咬钩了」，
         非 QQ 官方平台（提示走纯文本）根本来不及拉。
         """
         uid = event.get_sender_id()
@@ -3743,11 +3743,16 @@ async def main():
         task = asyncio.create_task(_consume())
         pulls = 0
         prompt_first = False
-        seen_wait = False
+        handled: set = set()
         while not task.done():
-            if uid in plugin._pending_pulls:
-                if not seen_wait:
-                    seen_wait = True
+            pending = plugin._pending_pulls.get(uid)
+            if pending is not None and pending.get("future") not in handled:
+                handled.add(pending.get("future"))
+                # 连钓会丢弃窗口开头 MULTI_PULL_MIN_REACTION 秒里的「拉」（那是上一条的
+                # 余震），所以这里先等过去再点。顺便在这个时刻验证「提示已经发出去了」：
+                # v1.18.28 以前的代码要等整局跑完才吐提示，这 0.3 秒时 out 里一条都没有。
+                await asyncio.sleep(0.3)
+                if len(handled) == 1:
                     prompt_first = any("咬钩了" in m for m in out)
                 if pulls < max_pulls and plugin._resolve_pull(event):
                     pulls += 1
@@ -3929,6 +3934,9 @@ async def main():
         _kc._lock_for("89205").locked(),
         "逐条等拉的时候这批也持着这个玩家的锁（别的子命令会排队等它走完）",
     )
+    # 反应时间护栏：窗口开头 0.25 秒的「拉」会被丢掉（那是上一条的余震），
+    # 所以真实指令也要等过去再发 —— 顺便验证「提示那时已经发出去了」。
+    await asyncio.sleep(0.3)
     _t0 = time.monotonic()
     try:
         _pull_replies = await asyncio.wait_for(
@@ -3943,9 +3951,17 @@ async def main():
         f"整批持仓时「/钓鱼 拉」照样能进来（{time.monotonic() - _t0:.3f}s 就返回，没被锁挡）"
         f" -> {_pull_replies}",
     )
+    check(
+        any("咬钩了" in m for m in _kout),
+        "等过去这 0.3 秒时提示早就发出去了（不是等窗口走完才吐）",
+    )
     if _pull_ok:
+        _khandled: set = set()
         while not _ktask.done():
-            if "89205" in _kc._pending_pulls:
+            _kpend = _kc._pending_pulls.get("89205")
+            if _kpend is not None and _kpend.get("future") not in _khandled:
+                _khandled.add(_kpend.get("future"))
+                await asyncio.sleep(0.3)        # 越过反应时间护栏
                 await run(_kc.fishing, FakeEvent("89205", message="/钓鱼 拉"), "拉", "", "")
             await asyncio.sleep(0.01)
         await _ktask
@@ -3956,6 +3972,92 @@ async def main():
         )
     else:
         _ktask.cancel()
+
+    # --- 6) 反应时间护栏：连点两下不会把下一条鱼也判掉 ---
+    # 连钓是「这条判完立刻注册下一条」，所以玩家点第 1 条的那一下很容易撞在
+    # 第 2 条的窗口刚开时。不加护栏时那条会以落点 ≈0 被判成「偏差」（中心在 0.5），
+    # 而玩家连提示都还没看见 —— 连点的人等于白拿一串「偏差」。
+    guard_cfg = dict(pull_cfg)
+    guard_cfg["window_min"] = 4
+    guard_cfg["window_max"] = 4
+    _gc = make_plugin(guard_cfg)
+    pg = mod._default_player("89206")
+    pg["gold"] = 1000
+    pg["equipped_bait"] = "worm"
+    pg["baits"] = {"worm": 10}
+    await _gc._save_player(pg)
+
+    _gout: list[str] = []
+
+    async def _gconsume():
+        async for r in _gc.fishing(FakeEvent("89206"), "2", "", ""):
+            _gout.append(r.text if hasattr(r, "text") else str(r))
+
+    async def _gpend(exclude=None, timeout=8.0):
+        """等下一次「等玩家拉」，返回那个待拉会话（拿得到 deadline）。
+
+        ``exclude`` 用来跳过**还没退场的旧会话**：上一条的待拉条目是在结算收尾时
+        才 pop 掉的，这里只想等新冒出来的那一个。
+        """
+        _t = time.monotonic()
+        while time.monotonic() - _t < timeout:
+            _pp = _gc._pending_pulls.get("89206")
+            if _pp is not None and _pp.get("future") is not exclude:
+                return _pp
+            await asyncio.sleep(0.005)
+        return None
+
+    _gtask = asyncio.create_task(_gconsume())
+
+    # 第 1 条：按 deadline 反推窗口长度，卡在窗口中途拉 -> 「完美」
+    _g1 = await _gpend()
+    check(_g1 is not None, "第 1 条弹出了咬钩提示")
+    await asyncio.sleep(max(0.0, (_g1["deadline"] - time.monotonic()) * 0.5))
+    _gc._resolve_pull(FakeEvent("89206"))
+
+    # 第 2 条刚注册，记下它的 future
+    _g2 = await _gpend(exclude=_g1.get("future"))
+    check(
+        _g2 is not None,
+        "第 2 条已经接上（换了一个新的待拉会话）",
+    )
+    _fut_a = _g2.get("future")
+    # 手快连点：连着再点一下 —— 这一下必然落在第 2 条的窗口开头（人还没看见提示）
+    await asyncio.sleep(0.15)
+    _gc._resolve_pull(FakeEvent("89206"))
+    # 护栏应当把它丢掉、并**重新挂一个新的待拉会话**（而不是就此判定这条鱼）
+    _rearmed = False
+    for _ in range(120):
+        _pp = _gc._pending_pulls.get("89206")
+        if _pp is not None and _pp.get("future") is not _fut_a:
+            _rearmed = True
+            break
+        await asyncio.sleep(0.005)
+    check(
+        _rearmed,
+        "窗口开头那 0.25 秒里的「拉」被丢掉了，第 2 条还挂着等玩家重新出手"
+        "（没被这一下判成偏差）",
+    )
+
+    # 之后正常把第 2 条拉完（同样卡窗口中途）
+    _g2b = _gc._pending_pulls.get("89206")
+    if _g2b is not None:
+        await asyncio.sleep(max(0.0, (_g2b["deadline"] - time.monotonic()) * 0.5))
+        _gc._resolve_pull(FakeEvent("89206"))
+    await asyncio.wait_for(_gtask, timeout=8)
+    _gbody = text_of(_gout)
+    _grades = [
+        l for l in _gbody.splitlines()
+        if "偏差" in l or "良好" in l or "完美" in l
+    ]
+    check(
+        len(_grades) == 2 and not any("偏差" in l for l in _grades),
+        f"两条都在窗口中途拉，评价都不该掉到「偏差」-> {_grades}",
+    )
+    check(
+        "上鱼 2 条" in _gbody,
+        f"两条都照常收上来 -> {[l for l in _gbody.splitlines() if '上鱼' in l]}",
+    )
 
     print("\n[10j] 彩蛋事件 / 里程碑 / 最佳渔获纪录")
     plugin6 = make_plugin()
