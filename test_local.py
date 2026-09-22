@@ -1674,6 +1674,41 @@ async def main():
     p = await plugin._load_player("89001")
     check(len(p["aquarium"]) == 0, "「水族馆取1」= 水族馆 取 1")
 
+    # --- v1.18.31：短写法的**一级**粘连形式也要认（`/钓鱼 放1`）---
+    # 以前只有两级写法认（`水族馆放1`）：`放` 没登记进 SUBCOMMAND_WORDS，于是
+    # 同类 `卖1` 认、`放1` 却回「不认识」。而文档的规则是「残留部分看起来像参数
+    # 就拆」——`1` 明显像。这里既验真实状态，也把粘写与打空格写的输出对成一致。
+    p["inventory"] = fill(6)
+    await plugin._save_player(p)
+    await cmd(plugin, ev, "放1", "2")
+    p = await plugin._load_player("89001")
+    check(len(p["aquarium"]) == 2, f"「放1 2」= 放 1 2 -> 缸里 {len(p['aquarium'])} 条")
+    await cmd(plugin, ev, "取1", "2")
+    p = await plugin._load_player("89001")
+    check(len(p["aquarium"]) == 0, "「取1 2」= 取 1 2")
+
+    _glue_no = 0
+    for _glued, _spaced in (
+        ("洗1", ("洗", "1")),
+        ("喂高级饲料1", ("喂", "高级饲料", "1")),
+        ("投喂高级饲料1", ("投喂", "高级饲料", "1")),
+        ("放入1", ("放入", "1")),
+        ("取出1", ("取出", "1")),
+        ("装备竹竿", ("装备", "竹竿")),
+        ("换竿竹竿", ("换竿", "竹竿")),
+        ("交1", ("交", "1")),
+        ("领", ("领",)),
+    ):
+        _glue_no += 1
+        # 两个不同的玩家各跑一次：粘写与打空格写要落在**同样的初始状态**上
+        _ga = text_of(await cmd(plugin, FakeEvent(f"891{_glue_no:02d}a"), _glued, ""))
+        _gb = text_of(await cmd(plugin, FakeEvent(f"891{_glue_no:02d}b"), *_spaced, ""))
+        check(
+            _ga == _gb and "不认识" not in _ga,
+            f"粘写「{_glued}」== 「{' '.join(_spaced)}」逐字一致"
+            f" -> {_ga.splitlines()[0][:34] if _ga else '(空)'}",
+        )
+
     # 已删除的子命令不能被「少打空格」容错重新拼出来
     out = await cmd(plugin, ev, "赠送鱼", "89002", "1")
     check("不认识" in text_of(out), "「赠送鱼」不会被误拆回已删除的「赠送」")
