@@ -754,7 +754,17 @@ class EngineMixin:
                     }
                     catch = result.get("catch")
                     rating = str(result.get("rating") or "失败")
-                    # 拉线技巧计数（成就「完美一拉」等）与单竿同一套
+                    if catch is None:
+                        stats["escaped"] += 1
+                        lines.append(
+                            f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
+                            f"（{self._rarity_name(fish['rarity'])}，{rating}）"
+                        )
+                        continue
+                    # 拉线技巧计数（成就「神之一手 / 惊险一刻」等）与单竿同一套。
+                    # ⚠️ 必须写在「鱼跑了」的 continue **之后**：脱钩的那条不算拉上来
+                    # （v1.18.36 修：以前写在前面，偏差拉线即使脱钩也+1，成就会当场弹
+                    #  「偏差拉线也把鱼拉了上来」，跟战报里的「跑了」自相矛盾）。
                     if rating == "完美":
                         player["perfect_pulls"] = (
                             _safe_int(player.get("perfect_pulls"), 0, 0) + 1
@@ -763,13 +773,6 @@ class EngineMixin:
                         player["clutch_wins"] = (
                             _safe_int(player.get("clutch_wins"), 0, 0) + 1
                         )
-                    if catch is None:
-                        stats["escaped"] += 1
-                        lines.append(
-                            f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
-                            f"（{self._rarity_name(fish['rarity'])}，{rating}）"
-                        )
-                        continue
                     self._record_catch(player, catch)
                     stats["fish"] += 1
                     value = _instance_value(catch)

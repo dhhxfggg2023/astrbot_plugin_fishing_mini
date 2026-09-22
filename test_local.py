@@ -3888,6 +3888,45 @@ async def main():
         any("偏差" in l for l in body.splitlines()),
         f"连钓战报里带出每条的拉线评价 -> {[l for l in body.splitlines() if '偏差' in l][:1]}",
     )
+    # --- 1b) 脱钩的那条**不算**「拉上来过」（v1.18.36 修）---
+    # 连钓里评价计数以前写在「鱼跑了」的 continue **之前**：偏差拉线即使脱钩也 +1，
+    # 于是同一批里既报「跑了」、又弹出成就「😱 惊险一刻：偏差拉线也把鱼拉了上来」。
+    esc_pull_cfg = dict(pull_cfg)
+    esc_pull_cfg["rarity_escape_chance"] = "常见:0.95"   # 逃脱率拉满
+    _ep = make_plugin(esc_pull_cfg)
+    pep = mod._default_player("89208")
+    pep["gold"] = 1000
+    pep["equipped_bait"] = "worm"
+    pep["baits"] = {"worm": 10}
+    pep["clutch_wins"] = 0
+    pep["perfect_pulls"] = 0
+    await _ep._save_player(pep)
+    # 逃脱判定必中（0 < 0.95）：钉死 random.random，不靠运气。
+    # 模块级的 random 是同一个对象，插件侧（_calc / _engine）看到的也跟着变。
+    _real_random = mod.random.random
+    mod.random.random = lambda: 0.0
+    try:
+        out, pulls, _pf = await _multi_pull_run(_ep, FakeEvent("89208"), 2)
+    finally:
+        mod.random.random = _real_random
+    _esc_body = text_of(out)
+    pep = await _ep._load_player("89208")
+    check(
+        pulls == 2 and _esc_body.count("跑了（") == 2
+        and "跑掉 2 条" in _esc_body,
+        f"两条都拉了、但都脱钩（pulls={pulls}，战报跑了×{_esc_body.count('跑了（')}）-> "
+        f"{[l for l in _esc_body.splitlines() if '跑了（' in l][:2]}"
+        f"　{[l for l in _esc_body.splitlines() if '跑掉' in l][:1]}",
+    )
+    check(
+        pep.get("clutch_wins") == 0 and pep.get("perfect_pulls") == 0,
+        f"脱钩的偏差/完美拉线都不计数 -> 压线成功 {pep.get('clutch_wins')}、"
+        f"完美 {pep.get('perfect_pulls')}",
+    )
+    check(
+        "惊险一刻" not in _esc_body,
+        "也就不会再弹「偏差拉线也把鱼拉了上来」那条成就（和战报自相矛盾）",
+    )
     # 「依次」：3 条提示都在最后那条汇总之前
     _lines = body.splitlines()
     _sum_at = [i for i, l in enumerate(_lines) if "上鱼 3 条" in l]
