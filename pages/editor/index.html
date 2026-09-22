@@ -1513,6 +1513,11 @@ table.grid td.actions .btn { vertical-align: middle; }
     baits: {
       configKey: "bait_defs",
       configType: "list",
+      /* 咬钩率**不在** bait_defs 这一行里，它在另一个配置键 `bait_hook_rates`
+         （`id:概率,id:概率`）。所以这一列是「外挂列」：读的时候从那个键取、
+         保存时写回那个键的「数值」页行（白名单内的键，走 save_numbers 提交）。
+         留空 = 这一项不动（想删条目请去数值页删）。 */
+      externalMap: { column: "hook", configKey: "bait_hook_rates" },
       /* id|名称|emoji|单价|一组数量|品质幸运|稀有度权重|解锁等级|需要鱼竿|说明 */
       parse: function (line) {
         var p = splitLine(line);
@@ -2077,6 +2082,105 @@ table.grid td.actions .btn { vertical-align: middle; }
     return tables;
   }
 
+  /**
+   * 解析 `id:0.7,中文名:0.8` 这种「键:值」小表（咬钩率 / 钓点系数都是这个形态）。
+   * 返回 `{order: [键...], map: {键: 数值文本}}` —— **保留原始写法**，
+   * 这样回写时不会把站长写的中文名或百分数改掉。
+   */
+  function parseNamedFloats(text0) {
+    var order = [];
+    var map = {};
+    toText(text0).split(/[,，\n]/).forEach(function (part) {
+      var s = toText(part).trim();
+      if (!s) return;
+      var i = s.indexOf(":");
+      if (i < 0) i = s.indexOf("：");
+      if (i < 0) return;
+      var k = s.slice(0, i).trim();
+      var v = s.slice(i + 1).trim();
+      if (!k || !v) return;
+      if (!Object.prototype.hasOwnProperty.call(map, k)) order.push(k);
+      map[k] = v;
+    });
+    return { order: order, map: map };
+  }
+
+  /** 外挂列（例如鱼饵的「咬钩率」）的原始文本：读配置时记下来，保存时以它为底。 */
+  function externalColumnState() {
+    if (!state.externalBase) state.externalBase = {};
+    return state.externalBase;
+  }
+
+  /**
+   * 把「外挂列」的值补进表格行 —— 在线读配置与离线演示**共用这一段**。
+   *
+   * 鱼饵的咬钩率存在 `bait_hook_rates`（`id:概率,...`）里，不在 `bait_defs` 行里，
+   * 所以鱼饵页那一列要在解析完之后再填：先按 id 找，找不到再按中文名找
+   * （插件解析也认中文名，站长可能写成「蚯蚓:0.7」）。
+   */
+  function fillExternalColumns(tabId, rows, raw) {
+    var def = TABLE_DEFS[tabId];
+    if (!def || !def.externalMap || !rows) return rows;
+    var em = def.externalMap;
+    var mapText = toText((raw || {})[em.configKey]);
+    externalColumnState()[em.configKey] = mapText;
+    var parsed = parseNamedFloats(mapText);
+    rows.forEach(function (row) {
+      var keys = [toText(row.id).trim(), toText(row.name).trim()];
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i] && Object.prototype.hasOwnProperty.call(parsed.map, keys[i])) {
+          row[em.column] = parsed.map[keys[i]];
+          row[em.column + "_key"] = keys[i];
+          break;
+        }
+      }
+    });
+    return rows;
+  }
+
+  /**
+   * 把「外挂列」的值回写进它真正的那个配置键（数值页里的那一行）。
+   *
+   * 例：鱼饵页的「咬钩率」列 → `bait_hook_rates`。以**数值页当前那行文本**为底
+   * （站长可能在数值页手改过），只覆盖表格里填了值的那些条目；留空 = 不动它。
+   * 这样两个界面看的是同一份数据，不会各存一份。
+   */
+  function applyExternalColumns() {
+    var out = [];
+    TABS.forEach(function (tab) {
+      // ⚠️ 列的声明在 TABLE_DEFS 里（TABS 只管表格长什么样），两处都要看
+      var def = TABLE_DEFS[tab.id] || {};
+      if (!def.externalMap || !tab.columns) return;
+      var em = def.externalMap;
+      var row = (state.data.numbers || []).filter(function (r) { return r.key === em.configKey; })[0];
+      var baseText = row && row.value !== "" && row.value !== null && row.value !== undefined
+        ? row.value
+        : (externalColumnState()[em.configKey] || "");
+      var base = parseNamedFloats(baseText);
+      var values = {};
+      base.order.forEach(function (k) { values[k] = base.map[k]; });
+      var touched = 0;
+      (state.data[tab.id] || []).forEach(function (r) {
+        var id = toText(r.id).trim();
+        if (!id) return;
+        var raw = r[em.column];
+        if (raw === "" || raw === null || raw === undefined) return;   // 留空 = 这一项不动
+        if (!isFinite(Number(raw))) return;                            // 填错的不动（校验会拦下来）
+        var n = Number(raw);
+        if (n > 1) n = n / 100;                                        // 写 70 = 70%（与插件解析口径一致）
+        n = Math.min(1, Math.max(0, n));
+        if (base.order.indexOf(id) < 0) base.order.push(id);
+        values[id] = fmtNum(n);
+        touched += 1;
+      });
+      if (!touched || !row || row.entry || row.writable === false) return;
+      row.value = base.order.map(function (k) { return k + ":" + values[k]; }).join(",");
+      row.touched = true;
+      out.push(em.configKey);
+    });
+    return out;
+  }
+
   /** 页面「数值」表格 -> 只挑插件白名单里的键（白名单外的绝不发）。 */
   function numberValuesFromPage(statusHint) {
     var allowed = (statusHint && statusHint.numbers_editable) || null;
@@ -2155,6 +2259,7 @@ table.grid td.actions .btn { vertical-align: middle; }
         }
         rows.push(row);
       });
+      fillExternalColumns(tabId, rows, raw);
       out[tabId] = rows;
     });
     return out;
@@ -2259,6 +2364,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     var results = [];
     try {
+      // 外挂列（鱼饵咬钩率这类）先合回它真正的配置键，再一起提交
+      applyExternalColumns();
       results.push(await sendCommand("save_content", { tables: serializeContentTables() }));
       var numbers = numberValuesFromPage(lastStatus);
       if (Object.keys(numbers).length) {
@@ -2929,6 +3036,12 @@ table.grid td.actions .btn { vertical-align: middle; }
   function demoConfig() {
     var cfg = deepClone(DEMO.config);
     cfg.numbers = demoNumberRows();
+    // 外挂列（鱼饵咬钩率）：演示态也从「数值」页那一行的值里取，和在线时同一套逻辑
+    var raw = {};
+    cfg.numbers.forEach(function (r) { raw[r.key] = r.value; });
+    Object.keys(TABLE_DEFS).forEach(function (tabId) {
+      fillExternalColumns(tabId, cfg[tabId] || [], raw);
+    });
     // 演示态的「插件下发了哪些键」= 全量清单（在线时由 loadConfig 用真实配置覆盖）
     state.configKeys = NUMBER_KEYS.map(function (item) { return toText(item[0]); });
     return cfg;
@@ -3005,6 +3118,10 @@ table.grid td.actions .btn { vertical-align: middle; }
         { key: "price",        label: "单价",     type: "number", w: "84px", num: true, step: 1, valueKey: true },
         { key: "bundle",       label: "一组数量", type: "number", w: "92px", num: true, step: 1 },
         { key: "luck",         label: "品质幸运", type: "number", w: "100px", num: true, step: 0.02 },
+        { key: "hook",         label: "咬钩率",   type: "number", w: "92px", num: true, step: 0.02,
+          optional: true,
+          title: "这一竿中鱼的概率（0.70 = 70%；也可以写 70）。实际中鱼率 = 它 × 钓点系数（「⚙️ 数值」页的「各钓点咬钩系数」）。" +
+                 "⚠️ 这一列存在配置键 bait_hook_rates 里（不在鱼饵行里）：改它就等于改那一行，留空 = 这一项不动" },
         { key: "unlock_level", label: "解锁等级", type: "number", w: "92px", num: true, step: 1,
           optional: true, title: "到几级才上架；省略 = 1 级（老行没有这一段）" },
         { key: "required_rod", label: "需要鱼竿", type: "text",   w: "110px" },
@@ -3531,6 +3648,16 @@ table.grid td.actions .btn { vertical-align: middle; }
 
       if (tab.id === "baits" && col.key === "required_rod" && String(v || "").trim()) {
         if (rodIds.indexOf(String(v).trim()) < 0) errs[col.key] = "鱼竿 id 不存在";
+      }
+
+      // 咬钩率（外挂列）：留空 = 不动这一项；填了就要是 0~1 或 1~100 的百分数
+      if (tab.id === "baits" && col.key === "hook") {
+        var hv = String(v === null || v === undefined ? "" : v).trim();
+        if (hv) {
+          var hn = Number(hv);
+          if (!isFinite(hn)) errs[col.key] = "需要是数字（0.7 或 70）";
+          else if (hn < 0 || hn > 100) errs[col.key] = "只能是 0~1 或 1~100（百分数）";
+        }
       }
 
       if (tab.id === "buttons") {

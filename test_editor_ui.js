@@ -116,6 +116,8 @@ const hookNames = [
   "loadConfig", "saveConfig", "loadSnapshots", "runSnapshotAction", "ENV", "RARITIES",
   // 数据通道（B 组）：解析/序列化/状态/指令收发
   "TABLE_DEFS", "NUMBER_KEYS", "splitLine", "cell", "serializeContentTables",
+  // v1.18.25：鱼饵页的「咬钩率」外挂列（读/写 bait_hook_rates）
+  "applyExternalColumns", "fillExternalColumns", "parseNamedFloats", "externalColumnState",
   "numberValuesFromPage", "parseEditorStatus", "autobackupFromStatus", "autobackupPayload",
   "sendCommand", "bridgeRequest", "describeError", "resolvePluginBase", "fetchRawConfig",
   "sleep", "waitForStatus", "renderBanner", "downloadSnapshot",
@@ -540,9 +542,67 @@ function runAssertions() {
     check(["dark", "light"].indexOf(documentStub.documentElement.getAttribute("data-theme")) >= 0,
       "data-theme 被规范成 dark/light", documentStub.documentElement.getAttribute("data-theme"));
     check(T.ENV.isDark === true, "离线默认深色");
-  }).then(channelHelpers).then(repliesPure).then(configKeysCoverage).then(wrappingRules)
+  }).then(channelHelpers).then(repliesPure).then(configKeysCoverage).then(baitHookColumn)
+    .then(wrappingRules)
     .then(buttonPicker).then(channelRoundTrip).then(repliesOnline)
     .then(saveScope).then(legacyRecovery).then(finish);
+}
+
+/* =============================================================================
+   [13c] 鱼饵页的「咬钩率」列（v1.18.25：外挂列，真正的值存在 bait_hook_rates）
+   ============================================================================= */
+async function baitHookColumn() {
+  console.log("\n[13c] 🪱 鱼饵页的「咬钩率」列（站长：「ui 里面咬钩率还是没修好」）");
+  const tab = T.TABS.filter(function (t) { return t.id === "baits"; })[0];
+  const col = (tab.columns || []).filter(function (c) { return c.key === "hook"; })[0];
+  check(!!col && col.label === "咬钩率" && col.optional === true,
+    "鱼饵页多了一列「咬钩率」（留空 = 不动这一项）",
+    (tab.columns || []).map(function (c) { return c.label; }).join("/"));
+  const ext = (T.TABLE_DEFS.baits || {}).externalMap || {};
+  check(ext.column === "hook" && ext.configKey === "bait_hook_rates",
+    "这一列声明了外挂键：值存在 bait_hook_rates，不在鱼饵行里", JSON.stringify(ext));
+
+  // 演示态：值是从 bait_hook_rates 那一行读出来的
+  const rows = T.state.data.baits || [];
+  const byId = {};
+  rows.forEach(function (r) { byId[r.id] = r; });
+  check(rows.length > 0 && String((byId.none || {}).hook) === "0.25" &&
+    String((byId.worm || {}).hook) === "0.70" && String((byId.dragon_bait || {}).hook) === "1.0",
+    "每款饵的咬钩率都填进了表格（空钩 0.25 / 蚯蚓 0.70 / 龙涎 1.0）",
+    rows.map(function (r) { return r.id + "=" + r.hook; }).join(" "));
+
+  // 改一行 -> 回写进「数值」页那一行（配置键 bait_hook_rates）
+  const numRow = (T.state.data.numbers || []).filter(function (r) { return r.key === "bait_hook_rates"; })[0];
+  check(!!numRow, "「数值」页里有 bait_hook_rates 这一行（两个界面共用同一份数据）",
+    numRow ? String(numRow.value).slice(0, 40) + "…" : "没找到");
+  const backup = { hook: byId.worm.hook, text: numRow.value };
+  byId.worm.hook = "0.66";
+  const touched = T.applyExternalColumns();
+  const afterText = numRow.value;
+  const beforeMap = T.parseNamedFloats(backup.text).map;
+  const afterMap = T.parseNamedFloats(afterText).map;
+  const kept = Object.keys(beforeMap).every(function (k) {
+    return k === "worm" ? true : Number(afterMap[k]) === Number(beforeMap[k]);
+  });
+  check(touched.indexOf("bait_hook_rates") >= 0 && afterText.indexOf("worm:0.66") >= 0 && kept &&
+    Object.keys(afterMap).length === Object.keys(beforeMap).length,
+    "改了蚯蚓的咬钩率 -> 回写 bait_hook_rates，别的条目一个没动", afterText.slice(0, 60) + "…");
+  // 百分数写法与「留空不动」
+  byId.worm.hook = "70";
+  byId.bread.hook = "";
+  T.applyExternalColumns();
+  check(numRow.value.indexOf("worm:0.7") >= 0 && numRow.value.indexOf("bread:0.58") >= 0,
+    "写 70 = 70%；留空的饵保持原值", numRow.value.slice(0, 50) + "…");
+  // 校验：填错要拦、留空不报错
+  check(!!T.validateRow(tab, { id: "worm", hook: "abc", text: "" }).hook &&
+    !!T.validateRow(tab, { id: "worm", hook: "300", text: "" }).hook &&
+    !T.validateRow(tab, { id: "worm", hook: "", text: "" }).hook,
+    "填字母 / 填 300 会被拦，留空不报错");
+  // 还原现场（后面的用例还要用这份演示数据）
+  byId.worm.hook = backup.hook;
+  byId.bread.hook = T.parseNamedFloats(backup.text).map.bread;
+  numRow.value = backup.text;
+  return Promise.resolve();
 }
 
 /* =============================================================================
