@@ -1388,11 +1388,24 @@ class CommandsMixin:
                 for fid, w in (LOCATION_WEIGHTS.get(loc_cfg["id"]) or {}).items()
                 if w > 0 and fid in FISH_BY_ID
             ]
+            # 空竿率（v1.18.24 加上）：上鱼率 = 鱼饵上钩率 × 钓点系数；
+            # 系数 ≥ 1.0 的钓点（前 3 张图）是**必出鱼**，所以那里写 0%。
+            # 以前游戏里完全看不到这个数，站长只能靠手感 —— 「感觉没变」有一半是没处可看。
+            _eq = player.get("equipped_bait")
+            _eq = _eq if isinstance(_eq, str) and _eq in self.baits else "none"
+            _factor = self._location_hook_factor(loc_cfg["id"])
+            _factor = 1.0 if _factor is None else _factor
+            _empty = (
+                0.0
+                if _factor >= 1.0
+                else max(0.0, 1.0 - min(1.0, self._hook_rate(_eq) * _factor))
+            )
             out = [
                 f"{loc_cfg['emoji']} {loc_cfg['name']}　共 {len(ids)} 种"
                 f"　价值×{loc_cfg['value_mult']:.2f}"
                 f"　需{loc_cfg['level_gate']}级"
                 + (f"/{_fmt_gold(loc_cfg['gold_gate'])}金" if loc_cfg["gold_gate"] else "")
+                + f"　空竿{_empty:.0%}（{self._bait_label(_eq)}）"
             ]
             hidden = 0
             # 结尾固定还有「…还有 N 种」+「/钓鱼 查 <鱼名>」两行，先扣掉

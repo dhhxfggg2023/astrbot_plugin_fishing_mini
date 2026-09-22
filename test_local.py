@@ -2561,6 +2561,55 @@ async def main():
         len(_ladder) == len(hook_plugin.locations),
         f"每个钓点都有系数（{len(_ladder)}/{len(hook_plugin.locations)}）",
     )
+    # 老配置里的旧阶梯（1.0 → 0.54）必须能**自动**换到新阶梯：
+    # v1.18.16 改这张表时漏登记了整串迁移，而它是「键:值 映射表」——
+    # 升级只补缺项，19 个钓点一个不缺 → 站长那边一直还是旧阶梯（他报「还是没变」）。
+    _ladder_fix = dict(mod.DEFAULTS_VALUE_FIXES)["location_hook_factors"]
+    check(
+        any(
+            old.split(",")[-1] == "dragon_palace:0.54"
+            and new == mod.DEFAULTS["location_hook_factors"]
+            for old, new in _ladder_fix
+        ),
+        "旧阶梯登记了整串迁移（逐字等于旧默认才替换）",
+    )
+    _old_ladder = (
+        "novice:1.0,bamboo:1.0,canal:1.0,lake:0.95,reed:0.92,sea:0.89,dock:0.86,"
+        "night:0.83,mangrove:0.80,swamp:0.77,cave:0.74,ruins:0.71,abyss:0.68,"
+        "trench:0.65,glacier:0.62,aurora:0.60,starfall:0.58,void_sea:0.56,"
+        "dragon_palace:0.54"
+    )
+    p_hook = make_plugin()
+    p_hook.config["location_hook_factors"] = _old_ladder
+    p_hook.config["config_fingerprint"] = "旧指纹"
+    p_hook._refresh_config()
+    await p_hook._sync_defaults()
+    _new_ladder = str(p_hook.config["location_hook_factors"])
+    check(
+        "dragon_palace:0.82" in _new_ladder and "dragon_palace:0.54" not in _new_ladder,
+        f"老配置的旧阶梯被换成新阶梯 -> 龙宫 {_new_ladder.split('dragon_palace:')[-1]}",
+    )
+    p_own = make_plugin()
+    p_own.config["location_hook_factors"] = "novice:1.0,dragon_palace:0.30"
+    p_own.config["config_fingerprint"] = "旧指纹"
+    p_own._refresh_config()
+    await p_own._sync_defaults()
+    check(
+        "dragon_palace:0.30" in str(p_own.config["location_hook_factors"]),
+        f"站长自己改过的阶梯一个字都不动 -> {p_own.config['location_hook_factors']}",
+    )
+    # 游戏里能看见空竿率（以前只能靠手感）：/钓鱼 查 <钓点>
+    _hook_look = make_plugin(dict(load_schema_config("hook_look"), enable_weather=False))
+    _lp = await _hook_look._load_player("89501")
+    _lp["baits"] = {"secret": 5}
+    _lp["equipped_bait"] = "secret"
+    await _hook_look._save_player(_lp)
+    _card = text_of(await cmd(_hook_look, FakeEvent("89501"), "查", "龙宫", "", ""))
+    check(
+        "空竿18%" in _card,
+        f"/钓鱼 查 龙宫 写出空竿率（秘制饵 1.00 × 0.82 = 18%）-> "
+        f"{[l for l in _card.splitlines() if '空竿' in l][:1]}",
+    )
 
     # =====================================================================
     print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
