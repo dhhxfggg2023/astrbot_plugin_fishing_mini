@@ -3248,10 +3248,13 @@ async def main():
     out = await cmd(free_plugin, FakeEvent("89031"), "体力", "", "")
     check("未启用体力" in text_of(out), "不限体力时体力页明确说明")
 
-    # --- 连钓不弹拉线：高逃脱率下会「跑掉」，但绝不注册互动会话 ---
+    # --- 连钓不弹拉线（multi_pull_enabled=false 的老行为）：高逃脱率下会「跑掉」，
+    #     但绝不注册互动会话 ---
     esc_cfg = dict(stam_cfg)
     esc_cfg["interactive_rarities"] = "常见"
     esc_cfg["rarity_escape_chance"] = "常见:0.95"
+    # v1.18.28 起连钓默认**逐条弹拉线**；这里要测的是「关掉之后」的一次判定路径
+    esc_cfg["multi_pull_enabled"] = False
     # 只让常见鱼出现：否则「4 竿全是高稀有度」会偶发（约 1%），
     # 而高稀有度不在 interactive_rarities 里、不会走「跑掉」分支，断言就随机变红。
     esc_cfg["rarity_spawn_weights"] = "常见:100,少见:0,稀有:0,传说:0,神话:0"
@@ -3270,7 +3273,7 @@ async def main():
     )
     check(
         not esc_plugin._pending_pulls,
-        "连钓不会注册拉线互动（不会留下等玩家「拉」的会话）",
+        "关掉 multi_pull_enabled 后连钓不注册拉线互动（不会留下等玩家「拉」的会话）",
     )
     pe = await esc_plugin._load_player("89032")
     check(
@@ -3590,6 +3593,8 @@ async def main():
     real_esc_cfg["easter_egg_chance"] = 0.0
     real_esc_cfg["story_chance"] = 0.0
     real_esc_cfg["multi_cast_max"] = 20
+    # v1.18.28 起连钓默认逐条弹拉线；这一节测的是「关掉之后」的一次判定路径
+    real_esc_cfg["multi_pull_enabled"] = False
     real_esc_plugin = make_plugin(real_esc_cfg)
     p_esc = mod._default_player("89120")
     p_esc["gold"] = 1000
@@ -3615,7 +3620,7 @@ async def main():
     )
     check(
         not real_esc_plugin._pending_pulls,
-        "连钓照旧不注册拉线互动：只是判定变狠，没有偷偷变成单竿",
+        "关掉 multi_pull_enabled 时连钓照旧不注册拉线互动：只是判定变狠，没有偷偷变成单竿",
     )
 
     old_esc_plugin = make_plugin(dict(real_esc_cfg, multi_escape_mult=1.0))
@@ -3715,6 +3720,182 @@ async def main():
     check(
         p_dp["baits"]["worm"] == 5 and "本可扣 5" in body,
         f"深水连钓一个饵都不扣，并说明本可扣几份 -> {p_dp['baits']['worm']}",
+    )
+
+    # =====================================================================
+    print("\n[6m] 连钓里的拉线互动：要拉线的鱼**逐条**弹（v1.18.28）")
+
+    async def _multi_pull_run(plugin, event, times, max_pulls=99):
+        """连钓，并在每次「等玩家拉」时点一下。
+
+        返回 ``(回复列表, 实际响应次数, 首次等到玩家时提示是否已经发出)``。
+        第三个值是这次改动的**关键断言**：连钓必须「先把提示交给玩家、再开始等」，
+        否则（像单竿那样先攒成 messages 再吐）玩家要等窗口走完才看到「咬钩了」，
+        非 QQ 官方平台（提示走纯文本）根本来不及拉。
+        """
+        uid = event.get_sender_id()
+        out: list[str] = []
+
+        async def _consume():
+            async for r in plugin.fishing(event, str(times), "", ""):
+                out.append(r.text if hasattr(r, "text") else str(r))
+
+        task = asyncio.create_task(_consume())
+        pulls = 0
+        prompt_first = False
+        seen_wait = False
+        while not task.done():
+            if uid in plugin._pending_pulls:
+                if not seen_wait:
+                    seen_wait = True
+                    prompt_first = any("咬钩了" in m for m in out)
+                if pulls < max_pulls and plugin._resolve_pull(event):
+                    pulls += 1
+            await asyncio.sleep(0.005)
+        await task
+        return out, pulls, prompt_first
+
+    # --- 1) 默认开启：3 条要拉线的鱼 = 3 次「咬钩了」，每条都要玩家亲自拉 ---
+    pull_cfg = dict(_CFG)
+    pull_cfg["interactive_rarities"] = "常见"
+    pull_cfg["rarity_escape_chance"] = "常见:0.0"          # 必不跑，专测流程
+    pull_cfg["rarity_spawn_weights"] = "常见:100,少见:0,稀有:0,传说:0,神话:0"
+    pull_cfg["enable_weather"] = False
+    pull_cfg["easter_egg_chance"] = 0.0
+    pull_cfg["story_chance"] = 0.0
+    pull_cfg["multi_cast_max"] = 5
+    pull_cfg["fish_cost"] = 0
+    _pc = make_plugin(pull_cfg)
+    check(
+        _pc.cfg.get("multi_pull_enabled") is True,
+        f"「连钓弹拉线」默认是开的 -> {_pc.cfg.get('multi_pull_enabled')!r}",
+    )
+    for _raw, _want in (("false", False), ("true", True), ("0", False), ("是", True), ("", True)):
+        _fp = make_plugin(dict(pull_cfg, multi_pull_enabled=_raw))
+        _fp._refresh_config()
+        check(
+            _fp.cfg["multi_pull_enabled"] is _want,
+            f"multi_pull_enabled 写成 {_raw!r} 时按字面解析为 {_want}"
+            f"（认不出的回退默认值 {_want}）",
+        )
+
+    pp = mod._default_player("89201")
+    pp["gold"] = 1000
+    pp["equipped_bait"] = "worm"
+    pp["baits"] = {"worm": 10}
+    await _pc._save_player(pp)
+    out, pulls, prompt_first = await _multi_pull_run(_pc, FakeEvent("89201"), 3)
+    body = text_of(out)
+    check(
+        body.count("咬钩了") == 3,
+        f"连钓 3 条要拉线的鱼 -> 弹 3 次「咬钩了」（v1.18.28 以前一次都不弹）-> "
+        f"命中 {body.count('咬钩了')} 次",
+    )
+    check(pulls == 3, f"每条都真的停在「等你拉」上 -> 响应 {pulls} 次")
+    check(
+        prompt_first,
+        "提示是**先发出去再等**的（不是等窗口走完才吐出来）—— 非 QQ 官方平台也能拉",
+    )
+    check(
+        "上鱼 3 条" in body,
+        f"逐条拉住的鱼全部入账 -> {[l for l in body.splitlines() if '上鱼' in l]}",
+    )
+    pp = await _pc._load_player("89201")
+    check(
+        pp["total_caught"] == 3 and len(pp["inventory"]) == 3,
+        f"3 条都写进背包/累计 -> 累计 {pp['total_caught']}　背包 {len(pp['inventory'])}",
+    )
+    check(
+        pp.get("clutch_wins") == 3,
+        f"拉线评价照常算（秒拉 = 落点 0 = 偏差）-> 压线成功 {pp.get('clutch_wins')}",
+    )
+    check(
+        any("偏差" in l for l in body.splitlines()),
+        f"连钓战报里带出每条的拉线评价 -> {[l for l in body.splitlines() if '偏差' in l][:1]}",
+    )
+    # 「依次」：3 条提示都在最后那条汇总之前
+    _lines = body.splitlines()
+    _sum_at = [i for i, l in enumerate(_lines) if "上鱼 3 条" in l]
+    _hook_at = [i for i, l in enumerate(_lines) if "咬钩了" in l]
+    check(
+        len(_hook_at) == 3 and _sum_at and _hook_at[-1] < _sum_at[0],
+        f"3 条提示按顺序先来、汇总最后才出（hook@{_hook_at} < sum@{_sum_at}）",
+    )
+    check(not _pc._pending_pulls, "整批跑完不会留下等拉的会话")
+
+    # --- 2) 只有名单里的品质才弹：常见鱼照旧直接上钩，整批一次跑完 ---
+    low_cfg = dict(_CFG)
+    low_cfg["interactive_rarities"] = "神话"        # 常见鱼不在名单里
+    low_cfg["rarity_spawn_weights"] = "常见:100,少见:0,稀有:0,传说:0,神话:0"
+    low_cfg["enable_weather"] = False
+    low_cfg["easter_egg_chance"] = 0.0
+    low_cfg["story_chance"] = 0.0
+    low_cfg["fish_cost"] = 0
+    _lc = make_plugin(low_cfg)
+    pl = mod._default_player("89202")
+    pl["gold"] = 1000
+    pl["equipped_bait"] = "worm"
+    pl["baits"] = {"worm": 10}
+    await _lc._save_player(pl)
+    out, pulls, _pf = await _multi_pull_run(_lc, FakeEvent("89202"), 4)
+    body = text_of(out)
+    check(
+        pulls == 0 and "咬钩了" not in body,
+        f"不用拉线的鱼一条都不弹（只有 interactive_rarities 里的才弹）-> 弹了 {pulls} 次",
+    )
+    check(
+        "上鱼 4 条" in body,
+        f"这批照常一次跑完 -> {[l for l in body.splitlines() if '上鱼' in l]}",
+    )
+
+    # --- 3) 不拉就超时：那条鱼跑掉，并计入汇总的「跑掉」 ---
+    to_cfg = dict(pull_cfg)
+    to_cfg["window_min"] = 2
+    to_cfg["window_max"] = 2          # 窗口钉死在 2 秒，超时用例只花 2 秒
+    _tc = make_plugin(to_cfg)
+    pt = mod._default_player("89203")
+    pt["gold"] = 1000
+    pt["equipped_bait"] = "worm"
+    pt["baits"] = {"worm": 10}
+    await _tc._save_player(pt)
+    # 只拉第 1 条，第 2 条撒手不管 —— 等它自己超时
+    out, pulls, _pf = await _multi_pull_run(_tc, FakeEvent("89203"), 2, max_pulls=1)
+    body = text_of(out)
+    check(
+        pulls == 1 and "超时" in body,
+        f"没拉的鱼超时跑掉（不再替玩家自动判定）-> 响应 {pulls} 次　"
+        f"{[l for l in body.splitlines() if '超时' in l][:1]}",
+    )
+    check(
+        "跑掉 1 条" in body,
+        f"跑掉的照样进连钓汇总 -> {[l for l in body.splitlines() if '跑掉' in l]}",
+    )
+    pt = await _tc._load_player("89203")
+    check(
+        pt["total_caught"] == 1,
+        f"只有拉住的那条入账 -> 累计 {pt['total_caught']}",
+    )
+
+    # --- 4) 关掉开关 = 老行为：不弹互动，按逃脱率一次判定 ---
+    off_cfg = dict(pull_cfg)
+    off_cfg["multi_pull_enabled"] = False
+    off_cfg["rarity_escape_chance"] = "常见:0.95"
+    _oc = make_plugin(off_cfg)
+    po = mod._default_player("89204")
+    po["gold"] = 1000
+    po["equipped_bait"] = "worm"
+    po["baits"] = {"worm": 10}
+    await _oc._save_player(po)
+    out, pulls, _pf = await _multi_pull_run(_oc, FakeEvent("89204"), 4)
+    body = text_of(out)
+    check(
+        pulls == 0 and "咬钩了" not in body,
+        "关掉开关后一条互动都不弹（回到一次判定）",
+    )
+    check(
+        "连钓不拉线" in body,
+        f"跑掉的写明「连钓不拉线」+ 实际概率 -> "
+        f"{[l for l in body.splitlines() if '连钓不拉线' in l][:1]}",
     )
 
     print("\n[10j] 彩蛋事件 / 里程碑 / 最佳渔获纪录")
@@ -6702,7 +6883,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 129,
+        len(_schema) == 130,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -6716,7 +6897,8 @@ async def main():
         f" + v1.18.17 的 order_level_growth/order_factor_max + 三个自动补给开关"
         f" + title_defs/offering_* 四项"
         f" + v1.18.18 的四个每日额度 + v1.18.20 的 escape_difficulty_weight"
-        f" + v1.18.22 的 luck_weight_step/luck_cap；"
+        f" + v1.18.22 的 luck_weight_step/luck_cap"
+        f" + v1.18.28 的 multi_pull_enabled；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -6725,7 +6907,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 126, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 127, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。

@@ -609,15 +609,41 @@ class InteractionsMixin:
         )
         yield {"catch": catch, "rating": rating, "bonus": bonus, "mark": mark}
 
-    async def _run_minigame(self, event, user_id, fish, bait_id, spec):
-        """驱动 minigame，返回 (消息列表, 结果 dict)。"""
-        messages: list[Any] = []
-        result: dict[str, Any] | None = None
+    async def _iter_minigame(self, event, user_id, fish, bait_id, spec):
+        """``_play_minigame`` 的流式包装，产出 ``("msg", 回复)`` / ``("result", dict)``。
+
+        **单竿与连钓都走这里**，理由只有一个：`_play_minigame` 是「先 yield 提示、
+        后 ``wait_for`` 等玩家拉」，所以调用方必须**把提示当场交出去再等**。
+
+        单竿以前是 `_run_minigame`：先把消息攒成一个 list、等整局跑完才一起 yield ——
+        那会让「咬钩了」滞后到窗口结束才出现。只有 QQ 官方那条路看不出来（`_say`
+        命中内联键盘时是直发、不走 yield），**走纯文本的平台（aiocqhttp 等）玩家
+        永远来不及拉**，只能眼睁睁超时。连钓更严重：整批都会卡在这儿。
+
+        异步生成器不能带值 return，所以结果用最后那条 ``("result", ...)`` 回传。
+        """
         async for item in self._play_minigame(event, user_id, fish, bait_id, spec):
             if isinstance(item, dict):
-                result = item
+                yield ("result", item)
             else:
-                messages.append(item)
+                yield ("msg", item)
+
+    async def _run_minigame(self, event, user_id, fish, bait_id, spec):
+        """驱动 minigame，返回 (消息列表, 结果 dict)。
+
+        ⚠️ 保留是为了不打断外部调用方（扩展 / 老测试）；插件内部已经改走
+        ``_iter_minigame`` —— 这个方法会把提示攒到最后才交出去，用它就会重现
+        「提示滞后」的老毛病，新代码别再用。
+        """
+        messages: list[Any] = []
+        result: dict[str, Any] | None = None
+        async for kind, payload in self._iter_minigame(
+            event, user_id, fish, bait_id, spec
+        ):
+            if kind == "result":
+                result = payload
+            else:
+                messages.append(payload)
         if result is None:
             result = {"catch": None, "rating": "失败", "bonus": 0.0}
         return messages, result

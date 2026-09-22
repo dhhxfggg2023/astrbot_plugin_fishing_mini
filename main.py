@@ -312,7 +312,12 @@ DEFAULTS: dict[str, Any] = {
     # 1.0 = 旧行为（连钓里这些鱼几乎不会跑，比单竿还稳）；
     # v1.18.10 起默认 2.5（「连钓不能比单竿还稳」），v1.18.26 降到 2.0 ——
     # 2.5 会让深水图的神话鱼 95% 必跑，玩家体感就是「连钓等于白钓」。
+    # ⚠️ v1.18.28 起这项**只在 multi_pull_enabled 关掉时**才生效。
     "multi_escape_mult": 2.0,
+    # v1.18.28：连钓里要拉线的鱼**逐条弹拉线互动**（默认开）。
+    # 开 = 和单竿同一套窗口/评价/逃脱判定，一条一条拉；
+    # 关 = 回到老行为（不弹互动，按 multi_escape_mult 一次判定）。
+    "multi_pull_enabled": True,
     "feed_max_uses": 10,
     "quality_weights": [44, 28, 16, 9, 3, 0],
     # v1.18.22：手气改成「按档位放大权重」，两个旋钮见 _roll_quality_mult。
@@ -3043,6 +3048,8 @@ class FishingPlugin(
         cfg["multi_cast_max"] = int(
             _clamp(_safe_int(cfg.get("multi_cast_max"), 20, 1), 1, 100)
         )
+        # v1.18.28：连钓里要拉线的鱼是否逐条弹拉线互动（默认开）
+        cfg["multi_pull_enabled"] = _cfg_bool(cfg, "multi_pull_enabled", True)
 
         # 防御性归一化：配置面板给的是真 bool，但手改配置文件可能写成字符串。
         # ⚠️ 不能只用 bool()：Python 里 bool("false") 是 True（非空字符串为真），

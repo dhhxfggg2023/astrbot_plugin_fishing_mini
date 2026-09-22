@@ -425,11 +425,18 @@ class EngineMixin:
                 spec["rod_value_bonus"] = rod_value
                 spec["location_mult"] = loc_value
                 spec["codex_mult"] = codex_mult
-                messages, result = await self._run_minigame(
+                # ⚠️ **边产生边 yield**：提示要先送到玩家手里，他才来得及在窗口内
+                # 发「拉」。以前这里是先攒成 messages 再一起吐，纯文本平台直接没法拉
+                # （见 _interactions._iter_minigame 的说明）。
+                result: dict[str, Any] | None = None
+                async for kind, payload in self._iter_minigame(
                     event, user_id, fish, bait_id, spec
-                )
-                for message in messages:
-                    yield message
+                ):
+                    if kind == "result":
+                        result = payload
+                    else:
+                        yield payload
+                result = result or {"catch": None, "rating": "失败", "bonus": 0.0}
                 player = await self._load_player(user_id)
                 catch = result.get("catch")
                 rating = result.get("rating")
@@ -499,9 +506,15 @@ class EngineMixin:
 
         与单竿的差别：
           * 体力与鱼饵按**实际钓的次数**一次扣除（不够就整批拒绝，不做半途扣款）
-          * 不弹拉线互动：传说/神话按逃脱率直接判定（过了就是钓上来了）
+          * 要拉线的鱼（默认 传说/神话）**逐条**弹拉线互动：窗口、最佳点位、评价、
+            逃脱判定全走单竿那一套（v1.18.28 起）。站长想回到「连钓求快、一次判定」
+            就关掉 ``multi_pull_enabled``，那时按「逃脱率 × ``multi_escape_mult``」判一次
           * 插曲、彩蛋、群播报都不触发 —— 连钓求的是快，不是刷屏
           * 成就 / 里程碑 / 排行榜在最后统一结算一次
+
+        ⚠️ 拉了互动就意味着**整批期间会一直持着这个玩家的锁**：其他子命令要等这批
+        走完（没拉的窗口也得等超时）。这是「逐条触发」的代价，站长可以用
+        ``multi_cast_max`` 限制一次钓多少竿。
         """
         cfg = self.cfg
         limit = max(1, _safe_int(cfg.get("multi_cast_max"), 20, 1))
@@ -606,11 +619,15 @@ class EngineMixin:
             rod_value = _safe_number(rod.get("value_bonus"), 0.0)
             loc_value = _safe_number(loc.get("value_mult"), 1.0)
             codex_mult = self._codex_mult(player)
+            weather_luck = _safe_number((weather or {}).get("luck"), 0.0)
             bait_luck = (
                 _safe_number(bait.get("luck"), 0.0)
                 + _safe_number(rod.get("luck_bonus"), 0.0)
-                + _safe_number((weather or {}).get("luck"), 0.0)
+                + weather_luck
             )
+            # 连钓里要拉线的鱼：默认**逐条弹拉线互动**（v1.18.28）。
+            # 站长想保留「连钓求快、一次判定」的老手感，就把 multi_pull_enabled 关掉。
+            multi_pull = _cfg_bool(cfg, "multi_pull_enabled", True)
             # 手气：**每一竿各自结算、各自消耗**（v1.18.9 修的）。
             # 以前整批只消耗 1 竿的玉佩额度 —— 连钓 15 次只掉 1 次 buff，站长报的就是这个。
             # 一次性储备（插曲/彩蛋给的那种）仍然只作用于**第 1 竿**，用完即清。
@@ -661,14 +678,20 @@ class EngineMixin:
                     continue
 
                 fish = self._roll_species(bait_id, loc["id"], weather)
-                # 连钓不拉线，但鱼竿的拉线手感照样算进去（口径与单竿一致）
+                # 鱼竿的「拉线手感」照样算进去（口径与单竿一致）
                 spec = self._apply_rod_pull_bonus(
                     self._interaction_window(fish, weather), rod
                 )
-                if spec is not None:
-                    # 不弹拉线：按「逃脱率 × 没亲自拉线的惩罚」一次性判定
-                    # （惩罚系数 multi_escape_mult，默认 2.5 —— 不然连钓里的
+                # 变异只在上钩瞬间掷一次：拉线那条路径也要带着它（单竿同款顺序）
+                variant = self._roll_variant()
+
+                if spec is not None and not multi_pull:
+                    # 关掉「连钓弹拉线」时的老行为：不弹互动，按
+                    # 「鱼种逃脱率 × 没亲自拉线的惩罚」一次性判定
+                    # （惩罚系数 multi_escape_mult，默认 2.0 —— 不然连钓里的
                     #   传说鱼几乎不会跑，比单竿还稳）
+                    # ⚠️ 这里**必须是 elif**（下面那支才是弹互动）：写成两个独立 if 的话，
+                    #   判定侥幸通过的鱼会接着掉进互动分支，等于开关没关掉 —— 踩过。
                     escape = _multi_escape_chance(spec, cfg)
                     if random.random() < escape:
                         stats["escaped"] += 1
@@ -679,7 +702,68 @@ class EngineMixin:
                         )
                         continue
 
-                variant = self._roll_variant()
+                elif spec is not None:
+                    # ---- 连钓里的拉线互动（v1.18.28）----
+                    # 要拉线的鱼**逐条**弹互动：窗口 / 最佳点位 / 评价 / 逃脱判定
+                    # 全走单竿那一套（`_play_minigame`），所以「连钓赌手速」和
+                    # 「单竿赌手速」现在是同一件事，不再是一条捷径。
+                    #
+                    # ⚠️ 提示必须**边产生边 yield**（和单竿走同一个 `_iter_minigame`），
+                    # 不能先攒成 messages 再一次性吐出去 —— 那样玩家要等窗口走完才
+                    # 看到「咬钩了」，非 QQ 官方（提示走纯文本）的平台直接没法拉，
+                    # 连钓更惨：整批都卡在这儿。
+                    spec = dict(spec)
+                    spec["variant"] = variant
+                    spec["weather_luck"] = weather_luck
+                    spec["gear_luck"] = _safe_number(rod.get("luck_bonus"), 0.0)
+                    spec["player_luck"] = luck
+                    spec["player_floor"] = floor
+                    spec["rod_value_bonus"] = rod_value
+                    spec["location_mult"] = loc_value
+                    spec["codex_mult"] = codex_mult
+                    result: dict[str, Any] | None = None
+                    async for kind, payload in self._iter_minigame(
+                        event, user_id, fish, bait_id, spec
+                    ):
+                        if kind == "result":
+                            result = payload
+                        else:
+                            yield payload
+                    result = result or {
+                        "catch": None,
+                        "rating": "失败",
+                        "bonus": 0.0,
+                    }
+                    catch = result.get("catch")
+                    rating = str(result.get("rating") or "失败")
+                    # 拉线技巧计数（成就「完美一拉」等）与单竿同一套
+                    if rating == "完美":
+                        player["perfect_pulls"] = (
+                            _safe_int(player.get("perfect_pulls"), 0, 0) + 1
+                        )
+                    elif rating == "偏差":
+                        player["clutch_wins"] = (
+                            _safe_int(player.get("clutch_wins"), 0, 0) + 1
+                        )
+                    if catch is None:
+                        stats["escaped"] += 1
+                        lines.append(
+                            f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
+                            f"（{self._rarity_name(fish['rarity'])}，{rating}）"
+                        )
+                        continue
+                    self._record_catch(player, catch)
+                    stats["fish"] += 1
+                    value = _instance_value(catch)
+                    gained += value
+                    lines.append(
+                        f"{index}. {_fish_emoji(fish)}{fish['name']}"
+                        + (" ✨变异" if catch.get("variant") else "")
+                        + f" {self._rarity_name(fish['rarity'])} {_fmt_gold(value)}金"
+                        + f"　{rating}"
+                    )
+                    continue
+
                 quality_mult = _roll_quality_mult(
                     self.cfg["quality_weights"],
                     bait_luck=bait_luck,

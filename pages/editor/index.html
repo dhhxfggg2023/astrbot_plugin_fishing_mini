@@ -1714,7 +1714,7 @@ table.grid td.actions .btn { vertical-align: middle; }
    *   - `"tab:xxx"`  = 在别的标签页里可视化编辑（数值页只留一个可点的跳转行）
    *   - `"panel"`    = 插件配置面板自己的键（页面通道不给写，只读展示 + 说明为什么）
    * 兜底断言在 `configKeyCoverage()`：插件下发了页面不认识的键会当场报出来
-   * （`test_editor_ui.js` 会拿 `_conf_schema.json` 的 127 个键逐个核对，漏一个就红）。
+   * （`test_editor_ui.js` 会拿 `_conf_schema.json` 的 130 个键逐个核对，漏一个就红）。
    *
    * 第 5 位 `true` = 文本行（逗号/冒号分隔的名单，例如 `常见:14,少见:4.6`）。
    */
@@ -1779,7 +1779,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["good_bonus", "良好拉线加成", "倍", "没拉到完美、但也没跑时给的少量品质幸运加成（比 perfect_bonus 小一档）。", false, "拉线"],
     ["perfect_escape_factor", "完美区逃脱系数", "倍", "完美区里逃跑概率的折扣：0.35 = 只有原本 35% 的逃跑率（<1 就是更不容易跑）。", false, "拉线"],
     ["edge_escape_factor", "压线逃脱系数", "倍", "拉到窗口边缘（压线）时逃跑率的倍数：>1 = 比平时更容易跑鱼。", false, "拉线"],
-    ["multi_escape_mult", "连钓逃脱系数", "倍", "连钓里要拉线的鱼（默认 传说/神话）：连钓不弹拉线，按「鱼种逃脱率 × 这个系数」一次判定。默认 2.0（传说 20% → 40%、神话 28% → 56%）；填 1.0 = 连钓按标称逃脱率（最宽松）；0 = 连钓里永远不跑。v1.18.26 从 2.5 降到 2.0 —— 2.5 会让深水图的神话鱼 95% 必跑", false, "拉线"],
+    ["multi_pull_enabled", "连钓弹拉线", "开关", "连钓（/钓鱼 N，N≥2）里要拉线的鱼（默认 传说/神话）是否**逐条弹出拉线互动**：开（1，默认）= 一条一条来，窗口/评价/逃脱判定与单竿完全一套，每条都要玩家亲自拉；关（0）= 回到老行为，不弹互动、按「鱼种逃脱率 × multi_escape_mult」一次性判定。注意：开着的时候这批会一直占着该玩家的操作，直到每条都拉完（或超时）。", false, "拉线"],
+    ["multi_escape_mult", "连钓逃脱系数", "倍", "⚠️ 仅当「连钓弹拉线」关掉时生效。连钓里要拉线的鱼（默认 传说/神话）：不弹拉线，按「鱼种逃脱率 × 这个系数」一次判定。默认 2.0（传说 20% → 40%、神话 28% → 56%）；填 1.0 = 连钓按标称逃脱率（最宽松）；0 = 连钓里永远不跑。v1.18.26 从 2.5 降到 2.0 —— 2.5 会让深水图的神话鱼 95% 必跑", false, "拉线"],
     ["default_escape_rate", "默认逃脱率", "概率", "没有被 rarity_escape_chance 列出的品质，其默认逃脱率（只影响需要拉线的品质）", false, "拉线"],
     ["escape_difficulty_weight", "难度逃脱率权重", "权重", "难度对「拉线逃脱率」的影响权重（v1.18.26 从 0.5 降到 0.4 = 0.8+0.4×难度）：窗口逃脱率 = rarity_escape_chance × ((1−0.5w) + w×鱼种难度) × 天气逃脱倍率 × 鱼竿逃脱率系数。填 0 = 难度不再缩放逃脱率、传说神话会明显好拉；想更极端就填 1~2。", false, "拉线", ""],
 
@@ -2663,6 +2664,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     "good_bonus": 0.1,
     "perfect_escape_factor": 0.3,
     "edge_escape_factor": 1.6,
+    "multi_pull_enabled": true,
     "multi_escape_mult": 2.0,
     "default_escape_rate": 0.25,
     "escape_difficulty_weight": 0.4,
