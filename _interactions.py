@@ -197,6 +197,7 @@ class InteractionsMixin:
         text: str,
         scene: str | None = None,
         values: dict[str, Any] | None = None,
+        page: tuple[int, int, str] | None = None,
     ):
         """**统一输出出口**：先按场景叠加文案覆盖，再能发按钮就发按钮，否则退回纯文本。
 
@@ -206,11 +207,16 @@ class InteractionsMixin:
           默认没有按钮的场景传进来也只是纯文本。
         * ``values``：文案模板的占位符取值（只有少数场景用到）。``{原文}`` 永远
           等于代码拼好的这段文本，所以站长不改文案时行为完全不变。
+        * ``page``：**需要翻页的界面**传 ``(当前页, 总页数, 指令前缀)``，
+          就会在按钮末尾多出一排「上一页 / 下一页」（见 ``_views._page_rows``）：
+          第一页不给「上一页」、最后一页不给「下一页」，只有一页时整排不出现。
 
         用法：``async for r in self._say(event, text, "bag.list"): yield r``
         """
         text = self._scene_text(scene, text, values)
         rows = self._scene_rows(scene) if scene else []
+        # 翻页按钮固定排在最后一行（不占按钮表：它跟着页码走）
+        rows = rows + self._page_rows(scene, page)
         if rows and await self._send_with_buttons(event, text, rows):
             return
         yield event.plain_result(text)
@@ -221,18 +227,19 @@ class InteractionsMixin:
         scene: str | None,
         message: Any,
         values: dict[str, Any] | None = None,
+        page: tuple[int, int, str] | None = None,
     ):
         """``_say`` 的「消息对象版」：``message`` 一般来自 ``event.plain_result(文字)``。
 
         存在的意义：让几百处已经在用的 ``yield event.plain_result(...)`` 只需要
         在外面套一层就能带上场景按钮与文案覆盖，不用把里面的文案重写一遍。
-        取不到文本时原样交出对象（功能不受影响）。
+        取不到文本时原样交出对象（功能不受影响）。``page`` 同 ``_say``。
         """
         text = _message_text(message)
         if not text:
             yield message
             return
-        async for reply in self._say(event, text, scene, values):
+        async for reply in self._say(event, text, scene, values, page):
             yield reply
 
     async def _push(
@@ -518,10 +525,14 @@ class InteractionsMixin:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[float] = loop.create_future()
         # 先注册等待、再提示玩家，避免「提示已发出但还没开始监听」的竞态
+        # ``quiet``：这一条鱼要不要回「✅ 收到，正在收线…」（连钓里逐条弹互动时
+        # 每条都回一句就是刷屏，见 ``_pull_is_quiet`` / ``_engine`` 的 quiet_ack）
+        quiet = bool(spec.get("quiet_ack"))
         self._pending_pulls[user_id] = {
             "future": future,
             "session": self._session_key(event),
             "deadline": time.monotonic() + window,
+            "quiet": quiet,
         }
 
         tips = ["竿尖猛地弯了下去", "浮漂一下子沉进水里", "线被拽得吱吱响",
@@ -567,6 +578,7 @@ class InteractionsMixin:
                     "future": future,
                     "session": self._session_key(event),
                     "deadline": time.monotonic() + remaining,
+                    "quiet": quiet,
                 }
         except asyncio.TimeoutError:
             hit = False
@@ -678,6 +690,23 @@ class InteractionsMixin:
                 return f"{event.get_platform_name()}:{event.get_group_id()}"
             except Exception:
                 return "unknown"
+
+    def _pull_is_quiet(self, event: AstrMessageEvent) -> bool:
+        """这一竿的「拉」要不要回一句「✅ 收到，正在收线…」。
+
+        单竿要回（玩家只拉这一条，回执让人确认指令生效了）；
+        **连钓不要**：连钓是逐条弹互动的，玩家得连点好几下，
+        每条都回一句「收到」就是刷屏（v1.18.33，站长要求）。
+
+        ⚠️ 必须在 ``_resolve_pull()`` **之前**问 —— 解开等待后这条记录很快就被
+        互动收尾清掉了。记录不在（没在等人拉）时返回 False，不影响原有提示。
+        """
+        try:
+            user_id = str(event.get_sender_id())
+        except Exception:
+            return False
+        pending = self._pending_pulls.get(user_id)
+        return bool(isinstance(pending, dict) and pending.get("quiet"))
 
     def _resolve_pull(self, event: AstrMessageEvent) -> bool:
         """若该玩家正在等「拉」，唤醒等待。返回是否触发。"""

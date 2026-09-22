@@ -58,6 +58,9 @@ class EngineMixin:
         3. **自动补手气道具**：玩家用 ``/钓鱼 自动 <道具名>`` 指定过的话，
            buff 用光时自动买 1 个并**立刻用上**（不指定就绝不替他买，
            免得一觉醒来被自动买掉一个 1.2 万的玉髓灯）。
+           ``buff_casts_left`` / ``buff_floor_casts`` 任意一个还 > 0 时**只买不补的
+           那一段整段跳过**（v1.18.33 修：以前只挡了额度检查，buff 生效期间每竿
+           都会再买一个玉髓灯）。
 
         返回 ``(这一竿实际用的饵 id, 要写进结果里的说明行)``。
         """
@@ -138,13 +141,23 @@ class EngineMixin:
             _safe_number(auto_effects.get("buff_quality"), 0.0) > 0
             or _safe_number(auto_effects.get("quality_floor"), 0.0) > 0
         )
+        # buff 还在身上时**什么都不做**：既不买、也不从背包里再吃一个。
+        # ⚠️ v1.18.33 修的（站长报「玉髓灯的自动购买消耗异常」）：以前这个判断
+        # 只挡着下面那段「每日额度」检查，买/用那一段却在它外面 —— 于是 buff
+        # 生效期间**每一竿都会再买一个玉髓灯**（27000 金/竿，顺带把 15 竿的
+        # 保底时长一直续着），一觉醒来金币就空了。
+        # 手气 buff（buff_casts_left）与品质保底（buff_floor_casts）各算各的竿数，
+        # 但都由同一件道具续，所以**任意一种在生效**就等它用完再说。
+        _buff_active = (
+            _safe_int(player.get("buff_casts_left"), 0, 0) > 0
+            or _safe_int(player.get("buff_floor_casts"), 0, 0) > 0
+        )
+        if auto_item and _buff_active:
+            auto_item = ""
         if (
             auto_item
             and _is_caster_item
             and _cfg_bool(cfg, "auto_supply_buff", True)
-            # 手气 buff 与品质保底都在身上时就别再补了（两者的竿数各算各的）
-            and _safe_int(player.get("buff_casts_left"), 0, 0) <= 0
-            and _safe_int(player.get("buff_floor_casts"), 0, 0) <= 0
         ):
             # 每日额度（v1.18.18）：额度用完了就别再自动买了 —— 不然「限额」等于没有，
             # 玩家挂机一整天会一直自动续上手气道具。
@@ -724,6 +737,8 @@ class EngineMixin:
                     # 窗口开头这段收到的「拉」丢掉：连钓自动接续，上一条的余震
                     # （连点 / 消息重投）会撞在这条刚弹出来的瞬间（见常量的说明）
                     spec["min_reaction"] = MULTI_PULL_MIN_REACTION
+                    # 连钓的「拉」不回「✅ 收到，正在收线…」（一条一条拉，回执就是刷屏）
+                    spec["quiet_ack"] = True
                     result: dict[str, Any] | None = None
                     async for kind, payload in self._iter_minigame(
                         event, user_id, fish, bait_id, spec

@@ -1602,6 +1602,22 @@ async function configKeysCoverage() {
   check(new Set(pageKeys).size === pageKeys.length, "页面清单里没有重复的键",
     pageKeys.length + " 个键 / " + new Set(pageKeys).size + " 个唯一");
 
+  /* 单个数值（int/float/bool）的键**都不能被登记成文本行**。
+     文本行的值是按字符串提交的（row.text = true -> 输入框不与 Number() 打交道），
+     插件侧 _coerce_number 按数字校验，会把整批 save_numbers 一起拒掉 ——
+     站长看到的就是「配置面板保存不了数据」（v1.18.33 的两行：
+     luck_weight_step / luck_cap 就标成了文本行，两行都是单个数值，不是列表）。
+     列表型（quality_weights 这种）本来就该是文本行，所以只卡 int/float/bool。 */
+  const textNumberRows = schemaKeys.filter(function (k) {
+    const t = String((schema[k] || {}).type || "");
+    if (t !== "int" && t !== "float" && t !== "bool") return false;
+    const item = T.NUMBER_KEYS.filter(function (x) { return x[0] === k; })[0];
+    return !!item && !!item[4];
+  });
+  check(textNumberRows.length === 0,
+    "int/float/bool 的键没有一个被当成文本行（文本行按字符串提交，插件会整批拒收）",
+    textNumberRows.join(",") || "0 个");
+
   /* 兜底函数：插件下发了页面不认识的键要能当场抓出来 */
   const cov = T.configKeyCoverage(schemaKeys);
   check(cov.missing.length === 0, "configKeyCoverage：没有一个键是「没有入口」的",
@@ -2114,7 +2130,8 @@ const FAKE_STATUS = {
   ok: true,
   players: 12,
   next_auto_backup: "2026-09-19 04:00:00",
-  numbers_editable: ["stamina_max", "multi_cast_max", "fish_value_mult"],
+  numbers_editable: ["stamina_max", "multi_cast_max", "fish_value_mult",
+    "luck_weight_step", "luck_cap"],
   autobackup: { enable: true, daily_hour: 4, interval_hours: 6, keep_daily: 30, keep_interval: 20 },
   snapshots: [
     { name: "2026-09-18_1820.json", rel: "manual/2026-09-18_1820.json", kind: "manual",
@@ -2169,6 +2186,9 @@ const FAKE_CONFIG = {
   stamina_max: 25,
   multi_cast_max: 15,
   fish_value_mult: 1.0,
+  // v1.18.33：这两行曾经是文本行（true），保存时按字符串提交 -> 插件整批拒收
+  luck_weight_step: 1.0,
+  luck_cap: 2.0,
   data_status: "不该出现在数值表里",
   editor_status: JSON.stringify(FAKE_STATUS)
 };
@@ -2282,6 +2302,17 @@ async function channelRoundTrip() {
     "数值指令只带白名单内的键", JSON.stringify(numberEnv && numberEnv.payload));
   check(!numberEnv.payload.data_status && !numberEnv.payload.location_defs,
     "数值指令里没有 data_status / location_defs");
+  /* v1.18.33：单个数值的键必须以**数字**提交 —— 以前 luck_weight_step / luck_cap
+     被登记成文本行，值按字符串发出去，插件按数字校验、整批拒收，
+     站长看到的就是「保存不了数据，请求失败 config（luck_weight_step）需要数字」。 */
+  check(numberEnv.payload.luck_weight_step === 1
+    && numberEnv.payload.luck_cap === 2,
+    "单个数值的键按数字提交（不是字符串 \"1\"）—— 否则插件会整批拒收",
+    JSON.stringify({ luck_weight_step: numberEnv.payload.luck_weight_step,
+      luck_cap: numberEnv.payload.luck_cap }));
+  check(typeof numberEnv.payload.luck_weight_step === "number",
+    "luck_weight_step 提交的是 number 类型",
+    typeof numberEnv.payload.luck_weight_step);
   const autoEnv = bodies.filter(function (b) { return b.action === "save_autobackup"; })[0];
   check(!!autoEnv && autoEnv.payload.daily_hour === 4 && autoEnv.payload.enable === true,
     "自动备份设置用插件字段名提交", JSON.stringify(autoEnv && autoEnv.payload));

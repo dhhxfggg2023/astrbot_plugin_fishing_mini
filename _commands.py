@@ -764,7 +764,11 @@ class CommandsMixin:
             body.append("💡 /钓鱼 去 <钓点名> 前往，/钓鱼 图鉴 <钓点名> 看收集进度")
             if len(chunks) > 1:
                 body.append(f"　翻页：/钓鱼 钓点 {page % len(chunks) + 1}")
-            async for reply in self._say(event, "\n".join(body), "location.list"):
+            # 「上一页 / 下一页」按钮（首尾页各缺一个，只有一页时整排不出现）
+            async for reply in self._say(
+                event, "\n".join(body), "location.list",
+                page=(page, len(chunks), "/钓鱼 钓点"),
+            ):
                 yield reply
 
     async def _cmd_rods(
@@ -1210,7 +1214,11 @@ class CommandsMixin:
         lines.append("　/钓鱼 水族馆 放 1 2　放进水族馆")
         if total_pages > 1:
             lines.append(f"💡 /钓鱼 背包 {page % total_pages + 1} 看下一页")
-        async for reply in self._say(event, "\n".join(lines), "bag.list"):
+        # 「上一页 / 下一页」按钮（首尾页各缺一个，只有一页时整排不出现）
+        async for reply in self._say(
+            event, "\n".join(lines), "bag.list",
+            page=(page, total_pages, "/钓鱼 背包"),
+        ):
             yield reply
 
     async def _cmd_sell(self, event: AstrMessageEvent, user_id: str, *rest):
@@ -1642,7 +1650,12 @@ class CommandsMixin:
             if total_pages > 1:
                 tail_page = page % total_pages + 1
                 lines.append(f"💡 /钓鱼 图鉴 详 {tail_page} 看下一页")
-            async for _r in self._say_msg(event, "collection.detail", event.plain_result("\n".join(lines))):
+            async for _r in self._say_msg(
+                event,
+                "collection.detail",
+                event.plain_result("\n".join(lines)),
+                page=(page, total_pages, "/钓鱼 图鉴 详"),
+            ):
                 yield _r
             return
 

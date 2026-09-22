@@ -315,6 +315,25 @@ def _split_list_text(text: str) -> list[str]:
     return [piece.strip() for piece in raw.replace("\n", ",").split(",") if piece.strip()]
 
 
+def _as_number(value: Any) -> float | None:
+    """数字 / **数字字符串** -> float；其它一律 ``None``。
+
+    ⚠️ 字符串也算（v1.18.33）：页面上「值是文本」的那几行是按字符串提交的，
+    只要有一行标错（历史上 `luck_weight_step` / `luck_cap` 就被标成了文本行），
+    整批 ``save_numbers`` 会被拒收 —— 表现就是「配置面板保存不了数据」。
+    宽容收下数字字符串，页面标错也不会把保存卡死；真写了非数字（``abc``）照样拒。
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):  # NaN / ±inf
+        return None
+    return number
+
+
 def _coerce_number(key: str, value: Any, default: Any) -> tuple[Any, str]:
     """按 DEFAULTS 里的类型校验一个数值配置。
 
@@ -326,17 +345,25 @@ def _coerce_number(key: str, value: Any, default: Any) -> tuple[Any, str]:
             return value, ""
         if isinstance(value, (int, float)) and value in (0, 1):
             return bool(value), ""
+        # 文本行形态的开关（页面按字符串提交）：「true / false / 1 / 0 / 是 / 否」都认
+        text = str(value).strip().lower()
+        if text in ("true", "1", "是", "开", "on", "yes"):
+            return True, ""
+        if text in ("false", "0", "否", "关", "off", "no"):
+            return False, ""
         return None, f"「{key}」需要 true/false（布尔值）"
     if isinstance(default, int):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        number = _as_number(value)
+        if number is None:
             return None, f"「{key}」需要整数"
-        if isinstance(value, float) and not float(value).is_integer():
+        if not number.is_integer():
             return None, f"「{key}」需要整数（收到 {value}）"
-        return int(value), ""
+        return int(number), ""
     if isinstance(default, float):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
+        number = _as_number(value)
+        if number is None:
             return None, f"「{key}」需要数字"
-        return float(value), ""
+        return number, ""
     if isinstance(default, list):
         # 列表型（品质权重 / 品质显示名 / 扩建价格 …）：页面按逗号分隔的文本提交，
         # 这里拆成列表；列表里本来是数字的（例如 quality_weights）再转回数字，

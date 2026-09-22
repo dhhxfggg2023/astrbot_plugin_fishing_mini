@@ -4017,10 +4017,50 @@ async def main():
     except asyncio.TimeoutError:
         _pull_ok, _pull_replies = False, []
     check(
-        _pull_ok and "收到" in text_of(_pull_replies),
-        f"整批持仓时「/钓鱼 拉」照样能进来（{time.monotonic() - _t0:.3f}s 就返回，没被锁挡）"
+        _pull_ok and "收到" not in text_of(_pull_replies),
+        f"整批持仓时「/钓鱼 拉」照样能进来、且**不回**「收到，正在收线」（连钓一条一条拉，"
+        f"回执就是刷屏；{time.monotonic() - _t0:.3f}s 就返回，没被锁挡）"
         f" -> {_pull_replies}",
     )
+    check(
+        _pull_replies == [],
+        "连钓的「拉」一条消息都不回（指令照常生效，见下面「提示早就发出去了」）",
+        str(_pull_replies),
+    )
+
+    # --- 5b) 单竿照旧回「✅ 收到，正在收线…」（v1.18.33 只对连钓静音）---
+    _sc = make_plugin(pull_cfg)
+    ps = mod._default_player("89207")
+    ps["gold"] = 1000
+    ps["equipped_bait"] = "worm"
+    ps["baits"] = {"worm": 10}
+    await _sc._save_player(ps)
+    _sout: list[str] = []
+
+    async def _sconsume():
+        async for r in _sc.fishing(FakeEvent("89207"), "", "", ""):
+            _sout.append(r.text if hasattr(r, "text") else str(r))
+
+    _stask = asyncio.create_task(_sconsume())
+    for _ in range(300):
+        if "89207" in _sc._pending_pulls:
+            break
+        if _stask.done():
+            break
+        await asyncio.sleep(0.01)
+    check("89207" in _sc._pending_pulls, "单竿也会进「等玩家拉线」")
+    _s_replies = await run(
+        _sc.fishing, FakeEvent("89207", message="/钓鱼 拉"), "拉", "", ""
+    )
+    check(
+        "收到" in text_of(_s_replies),
+        f"单竿的「拉」照样回「✅ 收到，正在收线…」（静音的只有连钓）-> {_s_replies}",
+    )
+    # 收尾：单竿这一竿同样要跑完（断了就取消任务，别把后面的断言拖住）
+    try:
+        await asyncio.wait_for(_stask, timeout=15)
+    except asyncio.TimeoutError:
+        _stask.cancel()
     check(
         any("咬钩了" in m for m in _kout),
         "等过去这 0.3 秒时提示早就发出去了（不是等窗口走完才吐）",
@@ -4502,6 +4542,111 @@ async def main():
         PlatEvent("b4", api=api, group="", openid="U1"), "文本", rows
     )
     check(ok and any(c["kind"] == "c2c" for c in api.calls), "单聊走 post_c2c_message")
+
+    # --- v1.18.33：需要翻页的界面多一排「上一页 / 下一页」按钮 ---
+    # 规则：只有一页 → 整排不出现；第一页不给「上一页」、最后一页不给「下一页」
+    # （不做首尾循环 —— 按钮还在 = 还能往那边翻，不骗人）。
+    def _page_labels(page_arg, scene="bag.list"):
+        return [
+            [b["render_data"]["label"] + "=>" + b["action"]["data"] for b in row]
+            for row in plugin._page_rows(scene, page_arg)
+        ]
+
+    check(plugin._page_rows("bag.list", None) == [], "没给页码信息时不出翻页按钮")
+    check(_page_labels((1, 1, "/钓鱼 背包")) == [], "只有一页时整排不出现")
+    check(
+        _page_labels((1, 3, "/钓鱼 背包"))
+        == [[plugin.PAGE_NEXT_LABEL + "=>/钓鱼 背包 2"]],
+        f"第一页只有「下一页」 -> {_page_labels((1, 3, '/钓鱼 背包'))}",
+    )
+    check(
+        _page_labels((2, 3, "/钓鱼 背包")) == [[
+            plugin.PAGE_PREV_LABEL + "=>/钓鱼 背包 1",
+            plugin.PAGE_NEXT_LABEL + "=>/钓鱼 背包 3",
+        ]],
+        f"中间页两个都在，而且就一排 -> {_page_labels((2, 3, '/钓鱼 背包'))}",
+    )
+    check(
+        _page_labels((3, 3, "/钓鱼 背包"))
+        == [[plugin.PAGE_PREV_LABEL + "=>/钓鱼 背包 2"]],
+        f"最后一页只有「上一页」 -> {_page_labels((3, 3, '/钓鱼 背包'))}",
+    )
+    check(
+        plugin._page_rows("bag.list", (2, 0, "/钓鱼 背包")) == []
+        and plugin._page_rows("bag.list", (2, 3, "   ")) == [],
+        "总页数 ≤1 / 指令前缀是空的时不硬塞按钮",
+    )
+    check(
+        make_plugin(dict(_CFG, button_empty_scenes="bag.list"))._page_rows(
+            "bag.list", (2, 3, "/钓鱼 背包")
+        ) == [],
+        "场景写进 button_empty_scenes 时连翻页按钮也不出现（那个开关要算数）",
+    )
+
+    # 真指令走一遍：背包 45 条 = 3 页，第 2 页键盘最后一行就是那排翻页按钮
+    _pb = make_plugin()
+    _pbp = mod._default_player("89501")
+    _pbp["inventory"] = [mod._new_instance("carp", 1.0) for _ in range(45)]
+    await _pb._save_player(_pbp)
+    _papi = FakeApi()
+    await cmd(_pb, PlatEvent("89501", api=_papi), "背包", "2", "")
+    _prows = _papi.calls[-1]["keyboard"]["content"]["rows"] if _papi.calls else []
+    check(
+        [b["action"]["data"] for b in _prows[-1]["buttons"]]
+        == ["/钓鱼 背包 1", "/钓鱼 背包 3"]
+        and [b["render_data"]["label"] for b in _prows[-1]["buttons"]]
+        == [plugin.PAGE_PREV_LABEL, plugin.PAGE_NEXT_LABEL],
+        "「/钓鱼 背包 2」发出去时键盘最后一行是「上一页 / 下一页」，指令指向 1 / 3",
+        str([[b["action"]["data"] for b in r["buttons"]] for r in _prows][-1:]),
+    )
+    _papi2 = FakeApi()
+    await cmd(_pb, PlatEvent("89501", api=_papi2), "背包", "3", "")
+    _prows3 = (
+        _papi2.calls[-1]["keyboard"]["content"]["rows"] if _papi2.calls else []
+    )
+    check(
+        [b["action"]["data"] for b in _prows3[-1]["buttons"]] == ["/钓鱼 背包 2"],
+        f"尾页只给「上一页」 -> "
+        f"{[b['action']['data'] for b in (_prows3[-1]['buttons'] if _prows3 else [])]}",
+    )
+    _papi3 = FakeApi()
+    await cmd(_pb, PlatEvent("89502", api=_papi3), "帮助", "1", "")
+    _prowsH = (
+        _papi3.calls[-1]["keyboard"]["content"]["rows"] if _papi3.calls else []
+    )
+    check(
+        len(_pb._help_pages()) > 1
+        and [b["action"]["data"] for b in _prowsH[-1]["buttons"]] == ["/钓鱼 帮助 2"],
+        f"「/钓鱼 帮助」第一页只给「下一页」 -> "
+        f"{[b['action']['data'] for b in (_prowsH[-1]['buttons'] if _prowsH else [])]}",
+    )
+    # 钓点固定 19 个 / 每页 10 个 = 2 页，最后一页同样只给「上一页」
+    _papi4 = FakeApi()
+    await cmd(_pb, PlatEvent("89503", api=_papi4), "钓点", "2", "")
+    _prowsL = (
+        _papi4.calls[-1]["keyboard"]["content"]["rows"] if _papi4.calls else []
+    )
+    check(
+        [b["action"]["data"] for b in _prowsL[-1]["buttons"]] == ["/钓鱼 钓点 1"],
+        f"「/钓鱼 钓点 2」是尾页，只给「上一页」 -> "
+        f"{[b['action']['data'] for b in (_prowsL[-1]['buttons'] if _prowsL else [])]}",
+    )
+    # 图鉴「详」是第四个翻页界面：集了 30 种 = 2 页，第一页要给「下一页 → 2」
+    _pbp["collection"] = {
+        f["id"]: {"count": 1, "best_value": 10, "first_ts": 0}
+        for f in mod.FISH_POOL[:30]
+    }
+    await _pb._save_player(_pbp)
+    _papi5 = FakeApi()
+    await cmd(_pb, PlatEvent("89501", api=_papi5), "图鉴", "详", "1")
+    _prowsD = (
+        _papi5.calls[-1]["keyboard"]["content"]["rows"] if _papi5.calls else []
+    )
+    check(
+        [b["action"]["data"] for b in _prowsD[-1]["buttons"]] == ["/钓鱼 图鉴 详 2"],
+        f"「/钓鱼 图鉴 详 1」（共 2 页）给「下一页 → /钓鱼 图鉴 详 2」 -> "
+        f"{[b['action']['data'] for b in (_prowsD[-1]['buttons'] if _prowsD else [])]}",
+    )
 
     # --- 🔘 按钮表全部可配置（button_defs）---
     # v1.18.17 大扩充：站长要求「所有需要的地方都加按钮」，官方给每个回复场景都配了按钮，
@@ -5162,6 +5307,59 @@ async def main():
         "自动用上" in text_of(out_auto) and "保底" in text_of(out_auto),
         "结果里写明自动用了哪件道具、给的是什么",
     )
+    # --- v1.18.33：buff 还在身上时**不再买、也不再吃一个**（站长报的
+    #     「玉髓灯的自动购买消耗异常」）---
+    # 以前那个判断只挡着「每日额度」检查，买/用那一段在它外面，于是 buff 生效期间
+    # **每一竿都会再买一个玉髓灯**（27000 金/竿），还把保底时长一直续着 ——
+    # 挂机一觉醒来金币就空了。
+    _lantern = plugin_auto.items["jade_lantern"]
+    _price = mod._safe_int(_lantern.get("price"), 0, 0)
+    p_auto["auto_buff_item"] = "jade_lantern"
+    p_auto["items"] = {}
+    p_auto["buff_casts_left"] = 0
+    p_auto["buff_floor_casts"] = 0
+    p_auto["gold"] = _price * 3
+    p_auto["baits"] = {"worm": 50}
+    p_auto["equipped_bait"] = "worm"
+    p_auto["inventory"] = []          # 别让背包在半路满了（那会让抛竿提前结束）
+    await plugin_auto._save_player(p_auto)
+    out_auto = await cast(plugin_auto, ev_auto)
+    p_auto = await plugin_auto._load_player("89605")
+    _cast1_left = mod._safe_int(p_auto.get("buff_floor_casts"), 0, 0)
+    check(
+        p_auto["gold"] == _price * 2 and _cast1_left > 1,
+        f"指定玉髓灯后 buff 用光时买 1 个（{_price} 金）并用上 -> 保底剩 {_cast1_left} 竿",
+    )
+    _gold_after_buy = p_auto["gold"]
+    # 第二竿：buff 还在身上 —— 一分钱都不该再花，背包也不该再少一个
+    out_auto = await cast(plugin_auto, ev_auto)
+    p_auto = await plugin_auto._load_player("89605")
+    _cast2_left = mod._safe_int(p_auto.get("buff_floor_casts"), 0, 0)
+    check(
+        p_auto["gold"] == _gold_after_buy,
+        f"buff 生效期间不再买玉髓灯（余额 {_gold_after_buy} → {p_auto['gold']}）",
+    )
+    check(
+        _cast2_left == _cast1_left - 1,
+        f"保底时长照常往前扣 1 竿（{_cast1_left} → {_cast2_left}），没有被重置回满",
+    )
+    check(
+        "自动补货" not in text_of(out_auto) and "自动用上" not in text_of(out_auto),
+        "第二竿的结果里没有「自动补货 / 自动用上」（不刷这句，也不多花钱）",
+    )
+    # 背包里本来就有货时同样不吃：buff 在身 = 一个道具都不动
+    p_auto["items"] = {"jade_lantern": 1}
+    p_auto["gold"] = _gold_after_buy
+    _bag_before = mod._safe_int(p_auto["items"]["jade_lantern"], 0, 0)
+    await plugin_auto._save_player(p_auto)
+    await cast(plugin_auto, ev_auto)
+    p_auto = await plugin_auto._load_player("89605")
+    check(
+        p_auto["items"].get("jade_lantern") == _bag_before
+        and p_auto["gold"] == _gold_after_buy,
+        f"buff 还在身上时背包里的玉髓灯也不会被自动吃掉（{_bag_before} → "
+        f"{p_auto['items'].get('jade_lantern')}）",
+    )
     # 没指定就不替他买
     p_auto["auto_buff_item"] = ""
     p_auto["buff_casts_left"] = 0
@@ -5767,6 +5965,48 @@ async def main():
     check(
         data.get("status") == "error" and "不认识的动作" in str(data.get("message")),
         f"未知 action 被拒 -> {data.get('message')}",
+    )
+
+    # --- 数字字符串也得收下（v1.18.33，站长报的「保存不了数据，luck_weight_step 需要数字」）---
+    # 起因：页面上这两行被误登记成**文本行**，值按字符串提交（"1"），
+    # 插件按数字校验就把整批 save_numbers 拒了 —— 表现是「配置面板保存不了数据」。
+    # 页面那两行已经改回数字行（test_editor_ui.js 里卡了对账），但插件这边也放宽：
+    # 数字字符串照收，真写了非数字照样拒。两边都守住，站长改不了值这种事不会再发生。
+    check(
+        BRIDGE._coerce_number("luck_weight_step", "0.5", 1.0) == (0.5, ""),
+        f"数字字符串按数字收下 -> {BRIDGE._coerce_number('luck_weight_step', '0.5', 1.0)}",
+    )
+    check(
+        BRIDGE._coerce_number("stamina_max", "25", 20) == (25, "")
+        and "整数" in BRIDGE._coerce_number("stamina_max", "2.5", 20)[1],
+        f"整数键同样收数字字符串，但小数照旧拒 -> "
+        f"{BRIDGE._coerce_number('stamina_max', '2.5', 20)}",
+    )
+    for _bad in ("abc", "", "1,2", None, True):
+        _why = BRIDGE._coerce_number("luck_weight_step", _bad, 1.0)[1]
+        check(
+            bool(_why),
+            f"「{_bad}」这种不是数字的写法照样被拒（不会静默写进去）-> {_why}",
+        )
+    check(
+        BRIDGE._coerce_number("enable_group_broadcast", "true", True) == (True, "")
+        and BRIDGE._coerce_number("enable_group_broadcast", "false", True) == (False, "")
+        and "true/false" in BRIDGE._coerce_number("enable_group_broadcast", "嗯", True)[1],
+        "开关也能用 true/false 的文本形态提交（文本行形态的布尔值）",
+    )
+    # 端到端：老页面（还没升级的那份）发字符串过来，现在也能存下去
+    res = await plugin_d.editor_api_config_save(
+        {
+            "action": "save_numbers",
+            "payload": {"luck_weight_step": "0.5", "luck_cap": "2.5"},
+        }
+    )
+    data = api_dict(res)
+    check(
+        data.get("ok") is True
+        and abs(mod._safe_number(plugin_d.config.get("luck_weight_step"), 0) - 0.5) < 1e-9
+        and abs(mod._safe_number(plugin_d.config.get("luck_cap"), 0) - 2.5) < 1e-9,
+        f"整批一起提交字符串也能存下去（老页面不升级也不卡）-> {data.get('message')}",
     )
 
     # --- POST snapshot：四个动作 + refresh ---

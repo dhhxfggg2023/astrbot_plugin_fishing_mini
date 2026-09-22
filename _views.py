@@ -174,6 +174,48 @@ class ViewsMixin:
             ])
         return rows
 
+    # -------------------------------------------------------------------------
+    # 翻页按钮（v1.18.33）
+    # -------------------------------------------------------------------------
+    # 这一排**不进按钮表**：它跟着「现在是第几页 / 一共几页」走，静态的 button_defs
+    # 配不出来（同一行按钮在不同页要发不同指令）。所以固定两条，指令由调用方给。
+    #: 「上一页」的文案（按下 = 发那条翻页指令，和别的按钮一样走指令链路）
+    PAGE_PREV_LABEL = "上一页"
+    #: 「下一页」的文案
+    PAGE_NEXT_LABEL = "下一页"
+
+    def _page_rows(self, scene: str | None, page: Any) -> list[list[dict[str, Any]]]:
+        """需要翻页的界面：补一排「上一页 / 下一页」按钮。
+
+        ``page`` = ``(当前页, 总页数, 指令前缀)``，例如 ``(2, 3, "/钓鱼 背包")``
+        （按钮发的是 ``/钓鱼 背包 1`` / ``/钓鱼 背包 3``）。不给 ``page``、
+        只有一页、或者指令前缀是空的 → 这一排不出现。
+
+        * 第一页不给「上一页」、最后一页不给「下一页」（**不做首尾循环**，
+          这样「这个按钮还在 = 还能往那边翻」不会骗人）；
+        * 场景在 ``button_empty_scenes`` 里（站长明确要「这里就是没按钮」）
+          的话，连翻页按钮也不加 —— 否则那个开关等于无效。
+        """
+        if not page:
+            return []
+        if scene and scene in BUTTON_EMPTY_SCENES:
+            return []
+        try:
+            current, total = int(page[0]), int(page[1])
+            command = str(page[2]).strip()
+        except (IndexError, TypeError, ValueError):
+            return []
+        if total <= 1 or not command:
+            return []
+        items: list[tuple[str, str, int]] = []
+        if current > 1:
+            items.append((self.PAGE_PREV_LABEL, f"{command} {current - 1}", 0))
+        if current < total:
+            items.append((self.PAGE_NEXT_LABEL, f"{command} {current + 1}", 0))
+        if not items:
+            return []
+        return [[self._btn(text, data, style) for text, data, style in items]]
+
     def _button_rows(
         self, scene: str, label: str = "", n: int = 0
     ) -> list[list[dict[str, Any]]]:

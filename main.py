@@ -4526,9 +4526,13 @@ class FishingPlugin(
 
         # ---- 拉线（互动）----
         if key in PULL_WORDS:
+            # 连钓里逐条弹拉线时不回「✅ 收到，正在收线…」：连钓要连点好几下，
+            # 每条都回一句就是刷屏（v1.18.33）。先问再解，解开后记录就没了。
+            quiet = self._pull_is_quiet(event)
             if self._resolve_pull(event):
-                async for _r in self._say_msg(event, "pull.confirm", event.plain_result("✅ 收到，正在收线…")):
-                    yield _r
+                if not quiet:
+                    async for _r in self._say_msg(event, "pull.confirm", event.plain_result("✅ 收到，正在收线…")):
+                        yield _r
                 return
             async for _r in self._say_msg(event, "pull.none", event.plain_result(
                     "🤔 现在没有鱼咬钩。直接发 /钓鱼 下竿，"
@@ -4539,9 +4543,15 @@ class FishingPlugin(
 
         # ---- 帮助（分页：/钓鱼 帮助 2）----
         if key in ("帮助", "help", "?", "？", "菜单", "指令"):
-            help_text = self._help_text(_to_int(after_sub, 1))
+            # 页码先夹到合法区间：按钮要按「第几页 / 共几页」决定给不给上一页、下一页
+            total_pages = max(1, len(self._help_pages()))
+            page_no = int(_clamp(_to_int(after_sub, 1), 1, total_pages))
+            help_text = self._help_text(page_no)
             first = True
-            async for reply in self._say(event, help_text, "help.page"):
+            async for reply in self._say(
+                event, help_text, "help.page",
+                page=(page_no, total_pages, "/钓鱼 帮助"),
+            ):
                 yield self._with_at(event, reply) if first else reply
                 first = False
             return
