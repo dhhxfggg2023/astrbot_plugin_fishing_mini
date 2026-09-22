@@ -2641,6 +2641,40 @@ async def main():
         _fp_changed != _fp_now and mod._defaults_fingerprint() == _fp_now,
         f"改动迁移表会让默认值指纹变化（v1.18.27 修的坑）-> {_fp_now} → {_fp_changed}",
     )
+    # v1.18.29：洗髓丹的两层上限默认放开成 0 = 不限。老配置里还是旧默认（3 / 30）
+    # 的实例要能**自动**跟上；站长自己填过的数一个字都不动。
+    _reroll_fix = dict(mod.DEFAULTS_VALUE_FIXES)
+    check(
+        _reroll_fix.get("reroll_daily_limit")
+        == ((3, mod.DEFAULTS["reroll_daily_limit"]),)
+        and _reroll_fix.get("reroll_daily_total")
+        == ((30, mod.DEFAULTS["reroll_daily_total"]),),
+        "洗髓丹的两层上限都登记了整串迁移（每条鱼 3 → 不限、全缸 30 → 不限）",
+    )
+    p_rl = make_plugin()
+    p_rl.config["reroll_daily_limit"] = 3
+    p_rl.config["reroll_daily_total"] = 30
+    p_rl.config["config_fingerprint"] = "旧指纹"
+    p_rl._refresh_config()
+    await p_rl._sync_defaults()
+    check(
+        mod._safe_int(p_rl.config.get("reroll_daily_limit"), -1, -1) == 0
+        and mod._safe_int(p_rl.config.get("reroll_daily_total"), -1, -1) == 0,
+        f"老配置里的 3 颗 / 30 颗被自动放成不限 -> "
+        f"{p_rl.config.get('reroll_daily_limit')} / {p_rl.config.get('reroll_daily_total')}",
+    )
+    p_ro = make_plugin()
+    p_ro.config["reroll_daily_limit"] = 5
+    p_ro.config["reroll_daily_total"] = 99
+    p_ro.config["config_fingerprint"] = "旧指纹"
+    p_ro._refresh_config()
+    await p_ro._sync_defaults()
+    check(
+        mod._safe_int(p_ro.config.get("reroll_daily_limit"), 0, 0) == 5
+        and mod._safe_int(p_ro.config.get("reroll_daily_total"), 0, 0) == 99,
+        f"站长自己填过的颗数一个字都不动 -> "
+        f"{p_ro.config.get('reroll_daily_limit')} / {p_ro.config.get('reroll_daily_total')}",
+    )
     # 游戏里能看见空竿率（以前只能靠手感）：/钓鱼 查 <钓点>
     _hook_look = make_plugin(dict(load_schema_config("hook_look"), enable_weather=False))
     _lp = await _hook_look._load_player("89501")
@@ -7506,7 +7540,7 @@ async def main():
     )
 
     # --- 个体品质最高档：只能洗髓丹洗出来（v1.18.7 加档、v1.18.8 起叫「神品」）---
-    print("\n[10r] 神品个体品质：自然洗不出、只能洗髓丹洗、每条鱼每天 3 颗")
+    print("\n[10r] 神品个体品质：自然洗不出、只能洗髓丹洗（每日颗数可配，默认不限）")
     check(
         mod.QUALITY_ORDER[-1] == "神品" and len(mod.QUALITY_TIERS) == 6,
         f"个体品质 6 档，最高是神品（和鱼种稀有度分两套名字）-> {mod.QUALITY_ORDER}",
@@ -7539,7 +7573,10 @@ async def main():
     )
 
     # 洗髓丹：概率拉到 1 = 必出神品（验证「洗得出来」这条链路）
-    cfg_myth = dict(cfg_r, quality_myth_chance=1.0, easter_egg_chance=0.0)
+    # 上限**显式**配成 3：v1.18.29 起出厂默认为 0（不限），这里要测的是「配了上限才挡」
+    cfg_myth = dict(
+        cfg_r, quality_myth_chance=1.0, easter_egg_chance=0.0, reroll_daily_limit=3
+    )
     plugin_m = make_plugin(cfg_myth)
     p_m = await plugin_m._load_player("96006")
     p_m["items"]["pill_quality"] = 5
@@ -7559,7 +7596,7 @@ async def main():
         f"这条鱼今天记了 1 颗 -> {got.get('reroll_today')}",
     )
 
-    # 每天上限：默认 3 颗，第 4 颗被拒且「厌恶」
+    # 每天上限：显式配成 3 颗时，第 4 颗被拒且「厌恶」
     for i in range(2, 4):
         await cmd(plugin_m, FakeEvent("96006"), "洗", "1")
     p_m = await plugin_m._load_player("96006")
@@ -7623,6 +7660,43 @@ async def main():
         mod._safe_int(p_f["aquarium"][0].get("reroll_today"), 0, 0) == 4
         and mod._safe_int(p_f["items"].get("pill_quality"), 0, 0) == 1,
         "reroll_daily_limit=0 = 不限：连吃 4 颗都让吃",
+    )
+
+    # v1.18.29：出厂默认就是「不限」—— 配置里根本不写这两项时，两层都不该拦人
+    plugin_dflt = make_plugin(dict(cfg_r, easter_egg_chance=0.0))
+    check(
+        mod.DEFAULTS["reroll_daily_limit"] == 0
+        and mod._reroll_daily_cap(plugin_dflt.cfg) == 0
+        and not mod._reroll_averse(
+            mod._new_instance("carp", 1.0), plugin_dflt.cfg, plugin_dflt._today_text()
+        ),
+        f"出厂 reroll_daily_limit = 0 = 不限 -> {mod._reroll_daily_cap(plugin_dflt.cfg)}",
+    )
+    check(
+        mod.DEFAULTS["reroll_daily_total"] == 0
+        and mod._daily_left(
+            mod._default_player("96010"), "reroll", plugin_dflt.cfg.get("reroll_daily_total")
+        )
+        is None,
+        "出厂 reroll_daily_total = 0 = 不限（没有「今日额度」这层约束）",
+    )
+    p_d = await plugin_dflt._load_player("96010")
+    p_d["items"]["pill_quality"] = 5
+    p_d["aquarium"] = [mod._new_instance("carp", 1.1, value_override=100)]
+    await plugin_dflt._save_player(p_d)
+    for _ in range(4):
+        await cmd(plugin_dflt, FakeEvent("96010"), "洗", "1")
+    p_d = await plugin_dflt._load_player("96010")
+    check(
+        mod._safe_int(p_d["aquarium"][0].get("reroll_today"), 0, 0) == 4
+        and mod._safe_int(p_d["items"].get("pill_quality"), 0, 0) == 1,
+        "不改任何配置时洗髓丹默认可劲吃：连吃 4 颗都让吃（不会「厌恶」）",
+    )
+    _arc = text_of(await cmd(plugin_dflt, FakeEvent("96010"), "档案"))
+    _dline = [l for l in _arc.splitlines() if "今日额度" in l]
+    check(
+        all("洗髓丹" not in l for l in _dline),
+        f"档案的「今日额度」不列洗髓丹（两层都没开限额就不占版面）-> {_dline}",
     )
     # 概率可配：填 0 = 永远洗不出神话
     plugin_nomyth = make_plugin(dict(cfg_r, quality_myth_chance=0.0, easter_egg_chance=0.0))
@@ -8889,9 +8963,9 @@ async def main():
     check(
         mod.DEFAULTS["buff_daily_cast_limit"] == 120
         and mod.DEFAULTS["hot_soup_daily_limit"] == 5
-        and mod.DEFAULTS["reroll_daily_total"] == 30
+        and mod.DEFAULTS["reroll_daily_total"] == 0
         and mod.DEFAULTS["offering_daily_limit"] == 1,
-        "出厂额度：手气 120 竿 / 姜汤 5 次 / 洗髓丹 30 颗 / 供奉 1 次",
+        "出厂额度：手气 120 竿 / 姜汤 5 次 / 洗髓丹不限（v1.18.29 起）/ 供奉 1 次",
     )
     # --- 钓手 buff 道具：用满额度就拒绝，并且只给剩下的竿数 ---
     qp = mod._default_player("89711")

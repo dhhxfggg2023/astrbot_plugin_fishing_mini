@@ -33,7 +33,7 @@
    但「锦鲤玉佩」可以提高掷出好个体的概率——所以个体是可以养出来的。
    **神品**是例外：自然上钩永远掷不到（quality_weights 里权重 0），
    只能靠洗髓丹洗出来（概率 quality_myth_chance，默认每次重掷 0.25%）；
-   同一条鱼每天最多吃 reroll_daily_limit 颗（默认 3），吃满当天会「厌恶」。
+   同一条鱼每天最多吃 reroll_daily_limit 颗（**默认 0 = 不限**，填 N 则吃满当天会「厌恶」）。
 
 【个体三维数值】
    肉质 meat / 灵性 spirit / 光泽 sheen，0~100，钓上来时按鱼种品质随机生成。
@@ -327,8 +327,9 @@ DEFAULTS: dict[str, Any] = {
     #     玉佩/玉髓灯一点效果都没有 —— 站长报的「不用玉佩也大部分是绝品」）
     "luck_weight_step": 1.0,
     "luck_cap": 2.0,
-    # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复；0 = 不限）
-    "reroll_daily_limit": 3,
+    # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复）
+    #   **默认 0 = 不限**（v1.18.29 起）；想恢复「一条鱼一天最多 3 颗」就填 3
+    "reroll_daily_limit": 0,
     # 洗髓丹洗出「神品」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
     # 所以只能靠洗髓丹拿到，自然上钩永远不出（quality_weights 最后一位是 0）
     "quality_myth_chance": 0.0025,
@@ -376,7 +377,7 @@ DEFAULTS: dict[str, Any] = {
     # 0 = 不限（想放开就填 0）。跨天 0 点自动重置，档案里能看到今天用了多少。
     "buff_daily_cast_limit": 120,   # 手气道具每天合计最多生效多少竿
     "hot_soup_daily_limit": 5,      # 回体力类道具（姜汤）每天最多喝几次
-    "reroll_daily_total": 30,       # 洗髓丹每天最多用几颗（每鱼每天还有一层上限）
+    "reroll_daily_total": 0,        # 洗髓丹每天最多用几颗（0 = 不限；每鱼每天还有一层上限）
     "offering_daily_limit": 1,      # 香火供奉每天最多几次
     # 鱼竿：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述（解锁等级 = 能买的等级）
     # 后两段（可选）是**拉线手感**：拉线窗口加成 / 逃脱率系数（见 _calc._parse_rod_defs）
@@ -785,6 +786,13 @@ DEFAULTS_VALUE_FIXES: dict[str, tuple[tuple[Any, Any], ...]] = {
     "rarity_escape_chance": (("传说:0.30,神话:0.42", DEFAULTS["rarity_escape_chance"]),),
     "escape_difficulty_weight": ((0.5, DEFAULTS["escape_difficulty_weight"]),),
     "multi_escape_mult": ((2.5, DEFAULTS["multi_escape_mult"]),),
+    # v1.18.29：洗髓丹的两层上限默认放开成「不限」（站长要的是「别限我次数」）。
+    # 只在配置里**逐字还是旧默认**（每条鱼 3 颗 / 全缸 30 颗）时替换成 0 ——
+    # 他自己填过别的数就照他的来。走这张表而不是靠「值≠新默认就同步」，
+    # 是因为首次启用同步机制的机器会把「值≠新默认」当成「站长改过」而保住旧值，
+    # 登记在这里能让升级路径也覆盖到那批配置。
+    "reroll_daily_limit": ((3, DEFAULTS["reroll_daily_limit"]),),
+    "reroll_daily_total": ((30, DEFAULTS["reroll_daily_total"]),),
 }
 
 #: 「官方改过的内容行」：`(配置键, 旧整行, 新整行)`，只有配置里那一行**逐字等于旧行**
@@ -3139,7 +3147,12 @@ class FishingPlugin(
             _clamp(_safe_int(cfg.get("hot_soup_daily_limit"), 5, 0), 0, 10000)
         )
         cfg["reroll_daily_total"] = int(
-            _clamp(_safe_int(cfg.get("reroll_daily_total"), 30, 0), 0, 100000)
+            _clamp(_safe_int(cfg.get("reroll_daily_total"), 0, 0), 0, 100000)
+        )
+        # v1.18.29：洗髓丹的**每条鱼**额度也走归一化（以前只在 _calc 读取时兜底，
+        # 编辑器里填了脏值要等到用时才暴露）。0 = 不限，语义与 _calc._reroll_daily_cap 一致。
+        cfg["reroll_daily_limit"] = int(
+            _clamp(_safe_int(cfg.get("reroll_daily_limit"), 0, 0), 0, 100000)
         )
         cfg["offering_daily_limit"] = int(
             _clamp(_safe_int(cfg.get("offering_daily_limit"), 1, 0), 0, 1000)

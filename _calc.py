@@ -1632,8 +1632,8 @@ def _multi_escape_chance(spec: dict[str, Any], cfg: dict[str, Any]) -> float:
 
 
 def _reroll_daily_cap(cfg: dict[str, Any]) -> int:
-    """每条鱼每天最多吃几颗洗髓丹（``reroll_daily_limit``，0 = 不限）。"""
-    return max(0, _safe_int((cfg or {}).get("reroll_daily_limit"), 3, 0))
+    """每条鱼每天最多吃几颗洗髓丹（``reroll_daily_limit``，**默认 0 = 不限**）。"""
+    return max(0, _safe_int((cfg or {}).get("reroll_daily_limit"), 0, 0))
 
 
 def _reroll_used(instance: dict[str, Any], today: str) -> int:

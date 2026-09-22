@@ -263,9 +263,9 @@
   },
   "reroll_daily_limit": {
     "invisible": true,
-    "description": "洗髓丹：同一条鱼每天最多吃几颗。吃满当天它就对洗髓丹「厌恶」，拒绝再吃，第二天自动恢复（0 = 不限）。推荐 3，和「洗髓出神话的概率」一起决定神话的产出速度",
+    "description": "洗髓丹：同一条鱼每天最多吃几颗。吃满当天它就对洗髓丹「厌恶」，拒绝再吃，第二天自动恢复。**默认 0 = 不限**（v1.18.29 起；想恢复「一条鱼一天最多 3 颗」就填 3）",
     "type": "int",
-    "default": 3
+    "default": 0
   },
   "quality_myth_chance": {
     "invisible": true,
@@ -408,9 +408,9 @@
   },
   "reroll_daily_total": {
     "invisible": true,
-    "description": "洗髓丹每天最多用几颗（0 = 不限）。在「每条鱼每天最多吃 N 颗」（reroll_daily_limit）之外再加一层总额度，挡住「买一堆丹把整个缸洗一遍」。",
+    "description": "洗髓丹每天最多用几颗（**默认 0 = 不限**，v1.18.29 起）。填 N 就在「每条鱼每天最多吃 N 颗」（reroll_daily_limit）之外再加一层总额度，挡住「买一堆丹把整个缸洗一遍」。",
     "type": "int",
-    "default": 30
+    "default": 0
   },
   "offering_daily_limit": {
     "invisible": true,
