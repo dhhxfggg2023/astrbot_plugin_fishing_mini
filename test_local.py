@@ -22,6 +22,7 @@ os.environ["ASTRBOT_ROOT"] = _SANDBOX_ROOT
 _SANDBOX_BACKUP_DIR = os.path.join(_SANDBOX_ROOT, "plugin_dir", "backups")
 
 import asyncio  # noqa: E402
+import ast  # noqa: E402
 import collections  # noqa: E402
 import hashlib  # noqa: E402
 import importlib.util  # noqa: E402
@@ -6808,6 +6809,77 @@ async def main():
                 _bad.append(_w)
     check(not _bad, f"总表里 {len(_flat)} 个写法都能派到子命令（失败：{_bad or '无'}）")
 
+    # ---- 14.1b 内置写法表必须与真实分派链**逐字一致**（v1.18.30）----
+    # 这张表是「别名 / 自定义命令不许抢」的唯一依据，而分派链才是真正认字的那个。
+    # 两份一分家就会长出静默失效：校验放行、运行时却被更靠前的内置分支先接走，
+    # 站长写的别名/自定义命令等于白写（v1.18.0 那批「一步到位」短写法
+    # 喂/放/取/领/洗/交/装备… 当初就没登记进来，`/钓鱼 喂` 能被别名抢成「卖」）。
+    # 所以这里不靠人眼：直接 AST 把 fishing() 里所有 `key in (...)` 的字面量抠出来对账。
+    _src = (PLUGIN_DIR / "main.py").read_text(encoding="utf-8")
+    _tree = ast.parse(_src)
+    _fishing = next(
+        n for n in ast.walk(_tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == "fishing"
+    )
+    _dispatch: set[str] = set()
+    for _node in ast.walk(_fishing):
+        if (isinstance(_node, ast.Compare) and len(_node.ops) == 1
+                and isinstance(_node.ops[0], ast.In)
+                and isinstance(_node.left, ast.Name) and _node.left.id == "key"):
+            for _e in ast.walk(_node.comparators[0]):
+                if isinstance(_e, ast.Constant) and isinstance(_e.value, str):
+                    _dispatch.add(_e.value)
+    # 两个模块级词表也是分派链的一部分（在 elif 链之前拦下来）
+    for _name in ("PULL_WORDS", "CAST_WORDS"):
+        for _n in _tree.body:
+            if isinstance(_n, ast.Assign) and any(
+                getattr(_t, "id", None) == _name for _t in _n.targets
+            ):
+                _dispatch |= {
+                    _e.value for _e in ast.walk(_n.value)
+                    if isinstance(_e, ast.Constant) and isinstance(_e.value, str)
+                }
+    check(
+        not (_dispatch - _flat),
+        "分派链认的写法全都登记在总表里（别名/自定义命令抢不走）"
+        f" -> 漏登记：{sorted(_dispatch - _flat) or '无'}",
+    )
+    check(
+        not (_flat - _dispatch),
+        f"总表里的写法分派链真的认 -> 多余的：{sorted(_flat - _dispatch) or '无'}",
+    )
+    # 这批是 v1.18.0 的「一步到位」短写法，正是历史上漏登记的那批
+    _shorthand = (
+        "喂", "投喂", "洗", "洗髓", "放", "放入", "养", "取", "取出", "拿",
+        "领", "收租", "收益", "交", "交单", "交货", "装备", "换竿", "换鱼竿",
+    )
+    check(
+        all(_w in mod.BUILTIN_COMMAND_WORDS for _w in _shorthand),
+        f"短写法（{len(_shorthand)} 个）也算内置写法",
+    )
+    # 短写法既然进了表，别名与自定义命令就抢不走了 —— 而且报错文案要指对方向
+    _m1, _p1 = mod.CALC._build_command_aliases("卖|喂,放", kw)
+    check(
+        _m1 == {} and _p1 and "内置写法" in _p1[0],
+        f"别名抢短写法「喂」「放」-> 跳过并说明是内置写法：{_p1[:1]}",
+    )
+    _c1, _pc1 = mod.CALC._parse_custom_commands("喂|执行:帮助\n放|执行:帮助", kw)
+    check(
+        _c1 == {} and _pc1 and "内置" in _pc1[0],
+        f"自定义命令叫「喂」「放」-> 跳过（内置优先）：{_pc1[:1]}",
+    )
+    # 端到端：真配置里写了这种别名，运行时别名表必须是空的
+    _cfg_short = dict(_CFG)
+    _cfg_short["command_aliases"] = (
+        str(_CFG.get("command_aliases") or "") + "\n卖|喂,放\n订单|交"
+    )
+    make_plugin(_cfg_short)
+    check(
+        "喂" not in mod.COMMAND_ALIASES and "放" not in mod.COMMAND_ALIASES
+        and "交" not in mod.COMMAND_ALIASES,
+        f"三条抢内置短写法的别名全被跳过 -> {mod.COMMAND_ALIASES or '（空）'}",
+    )
+
     # ---- 14.2 默认值 = 现有别名，且默认配置下别名表为空（行为逐字不变）----
     _schema = json.loads(
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
@@ -6837,7 +6909,14 @@ async def main():
     check(
         len(_text.splitlines()) == len(kw)
         and all(f"{_name}|" in _text for _name in kw),
-        "默认值逐行覆盖全部 26 个子命令",
+        f"默认值逐行覆盖全部 {len(kw)} 个子命令",
+    )
+    # 描述里给站长列的那份「可用规范子命令」清单也得跟得上（历史上漏过
+    # 买/自动/称号/供奉 四项，站长会以为这几个不能用来起别名）
+    check(
+        all(_name in _schema["command_aliases"]["description"] for _name in kw),
+        "描述里的「可用规范子命令」清单不漏任何一行"
+        f" -> 漏：{[_n for _n in kw if _n not in _schema['command_aliases']['description']] or '无'}",
     )
 
     # ---- 14.3 解析容错：写坏的行只跳过，不崩 ----
