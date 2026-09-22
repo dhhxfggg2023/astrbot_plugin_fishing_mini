@@ -2552,7 +2552,7 @@ function makeSaveScopeSdk(config) {
   const sdk = {
     ready() {
       return new Promise(function (r) {
-        sdk._setContext({ pluginName: "astrbot_plugin_fishing_mini", pageName: "editor" });
+        sdk._setContext({ pluginName: "dhhxfggg/astrbot_plugin_qq_fishing", pageName: "editor" });
         r();
       });
     },

@@ -356,7 +356,8 @@ docker run -d --name astrbot \
 
 ### 🎛️ 可调数值表（改物价 / 调爆率，都在这里）
 
-下面这些原本是写死在代码里的数值，现在全是配置项（共 **113 项配置**）：
+下面这些原本是写死在代码里的数值，现在全是配置项（完整清单以 `_conf_schema.json` 的
+**130 项**为准，下表挑的是最常调的那些）：
 
 | 配置项 | 默认 | 作用 |
 | --- | --- | --- |
@@ -374,7 +375,6 @@ docker run -d --name astrbot \
 | `quality_tiers` | `普通:0.8-1.0:⚪,…` | 个体品质档位（可增删档位） |
 | `hook_rate_fallback` | 0.30 | 上钩率写坏时的兜底（不会变成 100%） |
 | `default_escape_rate` | 0.25 | 未列出品质的默认逃脱率 |
-| `hostile_keywords` | `鳄,鲨,蛇,…` | 水族馆隐藏的「不好惹」判定关键词 |
 
 **怎么改物价**：想整体涨价就改 `fish_value_mult`（比如 `1.5` = 全部 ×1.5）；
 只想动某几条就写 `fish_value_overrides`（`锦鲤:500,鲲:80000`）；
@@ -943,10 +943,13 @@ HANDLERS = {"lucky_token": _on_lucky_token}
 
 ## 📦 安装
 
-1. 把插件文件夹放到 AstrBot 插件目录：
+> 🐳 想一键跑起来（AstrBot + 本插件一个容器）看 **[README.md](README.md)**；
+> 这一节讲的是「装进已有的 AstrBot」。
+
+1. 把插件文件夹放到 AstrBot 插件目录（目录名用仓库名 `astrbot_plugin_qq_fishing`）：
 
    ```
-   <AstrBot 数据目录>/data/plugins/astrbot_plugin_fishing_mini/
+   <AstrBot 数据目录>/data/plugins/astrbot_plugin_qq_fishing/
    ```
 
    - Windows：`C:\Users\<用户名>\.astrbot\data\plugins\`
@@ -955,21 +958,27 @@ HANDLERS = {"lucky_token": _on_lucky_token}
 2. 目录内容：
 
    ```
-   astrbot_plugin_fishing_mini/
-   ├── main.py            # 插件主入口（Star 本体 + /钓鱼 分派 + 配置解析）
-   ├── metadata.yaml      # 插件元数据
-   ├── _conf_schema.json  # 插件配置（84 项，WebUI 可视化编辑）
+   astrbot_plugin_qq_fishing/
+   ├── main.py            # 插件主入口（Star 本体 + /钓鱼 分派 + 配置解析 + 内容表默认值）
+   ├── metadata.yaml      # 插件元数据（**版本号只写在这里**）
+   ├── _conf_schema.json  # 插件配置（130 项；默认只有 3 项在面板可见，其余标了 invisible）
    ├── _fish_data.py      # 271 种水族名单（内容数据，可自行增删）
    ├── _game_data.py      # 杂物/变异/天气/插曲/成就等内容表（改内容不用碰逻辑）
-   ├── _calc.py           # 数值计算与配置解析（改数值看这里）
+   ├── _calc.py           # 数值计算与配置解析（改数值看这里；回复场景键 REPLY_SCENES）
    ├── _commands.py       # 各子命令实现（背包/商店/图鉴/钓点/水族馆/订单/签到…）
    ├── _interactions.py   # 交互与推送（按钮、@提醒、随机插曲、群播报、拉线小游戏）
    ├── _engine.py         # 钓鱼主流程与结算（抛竿判定、体力、连钓、上鱼、杂物、最佳纪录）
    ├── _views.py          # 展示渲染（背包/商店/图鉴/帮助页文案）
+   ├── _effects.py        # 效果键注册表（item_defs 里 quality_reroll=3 这类写法的解释器）
+   ├── _texts.py          # 回复文案表（text_overrides：每一条回复的文案都能单独改）
+   ├── _editor_bridge.py  # 数据编辑器页面 ↔ 插件之间的 Web API 通道
    ├── _data_admin.py     # 数据管理（快照/导出/导入/恢复/自动存档）
    ├── _backup.py         # 存档仓库：信封、快照、导出导入、保留策略
+   ├── _legacy.py         # 旧作用域存档找回（作者名改过之后）
+   ├── pages/editor/      # 网页版数据编辑器（插件页面 →「数据编辑器」）
+   ├── extensions/        # 自己写扩展效果的地方（extensions/*.py，见「自己写扩展」）
    ├── requirements.txt   # 依赖（无第三方依赖）
-   ├── Dockerfile · docker-compose.yml · .env.example   # 一键部署
+   ├── Dockerfile · docker-compose.yml · .env.example   # 一键部署（用法见 README.md）
    └── backups/           # 存档目录（首次启动自动创建，含 README 说明）
    ```
 
@@ -1006,10 +1015,10 @@ HANDLERS = {"lucky_token": _on_lucky_token}
 ### 开发者自测（7 个 Python 脚本 + 1 个前端脚本，可随时删除）
 
 ```bash
-cd data/plugins/astrbot_plugin_fishing_mini
+cd data/plugins/astrbot_plugin_qq_fishing
 
 python test_effects_ext.py      # v1.13.0：按钮统一样式 / 效果注册表 / 扩展点与失败隔离
-python test_local.py            # 64 组约 1370 项断言（脚本结尾会打出实际条数，总数随随机抽样浮动几项）：持久化/配置/钓点/鱼竿/背包/杂物/订单/天气/行情/变异/排行/鱼塘/清理/图鉴/水族馆/按钮与插曲/字段守卫/投喂与平衡/称号/存档快照/数据编辑器通道/全量配置键/批量命令/后期金币回收/旧作用域数据找回/回复场景全覆盖（v1.12.0）
+python test_local.py            # 73 组约 1470 项断言（脚本结尾会打出实际条数，总数随随机抽样浮动几项）：持久化/配置/钓点/鱼竿/背包/杂物/订单/天气/行情/变异/排行/鱼塘/清理/图鉴/水族馆/按钮与插曲/字段守卫/投喂与平衡/称号/存档快照/数据编辑器通道/全量配置键/批量命令/后期金币回收/旧作用域数据找回/回复场景全覆盖（v1.12.0）
 python test_backup_index.py     # 存档清单（index.json）重建：内容没变不写盘、原子替换、坏文件自愈（v1.12.0）
 python test_docker_deploy.py    # Docker 部署自检：compose 语法、.env 注入/不覆盖/备份、密钥不入库、entrypoint 清理列表不误删 pages/ 与 .astrbot-plugin/
 python test_integration.py      # 真实 AstrMessageEvent + 真实 CommandFilter
@@ -1092,7 +1101,7 @@ HTTP 状态与服务端原因显示出来。
 ### 存档目录（在插件里，专门安放并注明）
 
 ```
-data/plugins/astrbot_plugin_fishing_mini/
+data/plugins/astrbot_plugin_qq_fishing/
 └── backups/
     ├── README.md                    ← 说明每个子目录的用途与保留规则（插件自动维护）
     ├── index.json                   ← 快照清单（配置页面的状态栏读它）
@@ -1399,7 +1408,7 @@ A：先看本文开头的平衡表；主要旋钮是 `fish_cost`、`order_reward
 `location_defs` 的价值倍率、以及各鱼竿的价格。
 
 **Q：怎么给玩家回档 / 迁移服务器？**
-A：把 `data/plugins/astrbot_plugin_fishing_mini/backups/` 整个拷过去就行；
+A：把 `data/plugins/astrbot_plugin_qq_fishing/backups/` 整个拷过去就行；
 只想给某个人回档：配置里「导出单个玩家」→ 拿到 JSON → 在目标机器上
 「上传存档文件」+「导入上传的存档」。想整体回滚到某个时间点：选「从快照恢复」。
 
@@ -1457,9 +1466,9 @@ A：这是**故意的**（方案 A：全隐藏 + 3 条救生索）。内容与�
 
 想临时把面板恢复出来（比如忘了某个键名、要排查配置）：
 
-1. 打开插件目录 `data/plugins/astrbot_plugin_fishing_mini/_conf_schema.json`；
+1. 打开插件目录 `data/plugins/astrbot_plugin_qq_fishing/_conf_schema.json`；
 2. 删掉你要显示的那一项里的 `"invisible": true` 这一行（整行删掉即可，注意别留下孤儿逗号）；
-3. 重载插件 —— 那一项就回到面板里了。想全恢复就把 93 处 `"invisible": true` 全删掉。
+3. 重载插件 —— 那一项就回到面板里了。想全恢复就把 127 处 `"invisible": true` 全删掉。
 
 > 隐藏**只是不显示**：配置项照样生成、照样读写、编辑器页面照样能改，也**不会**因为隐藏就丢值
 > （`test_local.py` 里有「改隐藏项 → 保存 → 重新载入，值还在」的实测断言）。
