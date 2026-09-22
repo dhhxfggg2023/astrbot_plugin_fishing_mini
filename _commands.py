@@ -1400,6 +1400,21 @@ class CommandsMixin:
                 if _factor >= 1.0
                 else max(0.0, 1.0 - min(1.0, self._hook_rate(_eq) * _factor))
             )
+            # 跑鱼率（v1.18.26 加上）：拉线窗口的逃脱率**不是按钓点写的**，而是按稀有度
+            # （rarity_escape_chance × 难度系数 × 天气 × 鱼竿），所以这里按这个钓点真实的
+            # 传说/神话鱼池加权算一个「良好评价」下的期望值 —— 站长问「各钓点的逃脱率」时
+            # 游戏里至少有个能看的数（以前只能靠手感）。
+            _esc: dict[str, list[float]] = {}
+            for _fid, _w in (LOCATION_WEIGHTS.get(loc_cfg["id"]) or {}).items():
+                _fish = FISH_BY_ID.get(_fid)
+                if not _fish or _w <= 0 or _fish["rarity"] not in ("传说", "神话"):
+                    continue
+                _spec = self._interaction_window(_fish, None)
+                if _spec is None:
+                    continue
+                _bucket = _esc.setdefault(_fish["rarity"], [0.0, 0.0])
+                _bucket[0] += _w * _safe_number(_spec.get("escape"), 0.0)
+                _bucket[1] += _w
             out = [
                 f"{loc_cfg['emoji']} {loc_cfg['name']}　共 {len(ids)} 种"
                 f"　价值×{loc_cfg['value_mult']:.2f}"
@@ -1407,6 +1422,16 @@ class CommandsMixin:
                 + (f"/{_fmt_gold(loc_cfg['gold_gate'])}金" if loc_cfg["gold_gate"] else "")
                 + f"　空竿{_empty:.0%}（{self._bait_label(_eq)}）"
             ]
+            _esc_parts = [
+                f"{name} {bucket[0] / bucket[1]:.0%}"
+                for name, bucket in _esc.items()
+                if bucket[1] > 0
+            ]
+            if _esc_parts:
+                out.append(
+                    "　拉线跑鱼率（评价「良好」）：" + "　".join(_esc_parts)
+                    + "　（完美 ×0.3、偏差 ×1.6、超时必跑）"
+                )
             hidden = 0
             # 结尾固定还有「…还有 N 种」+「/钓鱼 查 <鱼名>」两行，先扣掉
             body_cap = CARD_MAX_LINES - 2

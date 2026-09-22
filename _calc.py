@@ -1622,11 +1622,12 @@ def _multi_escape_chance(spec: dict[str, Any], cfg: dict[str, Any]) -> float:
     **「不拉线也几乎不会跑」** —— 单竿里玩家手慢/超时是必跑的，于是连钓变成
     「传说鱼也不会跑」的刷分捷径（站长报的就是这个）。
 
-    所以这里乘一个「没亲自拉线」的惩罚系数 ``multi_escape_mult``（默认 2.5，
-    1.0 = 恢复旧行为，0 = 连钓里这些鱼永远不跑），上限 0.95。
+    所以这里乘一个「没亲自拉线」的惩罚系数 ``multi_escape_mult``（v1.18.10 起默认 2.5，
+    **v1.18.26 降到 2.0** —— 2.5 会让深水图的神话鱼 95% 必跑，玩家体感是「连钓等于白钓」；
+    1.0 = 连钓按标称逃脱率，0 = 连钓里这些鱼永远不跑），上限 0.95。
     """
     base = _clamp(_safe_number((spec or {}).get("escape"), 0.0), 0.0, 1.0)
-    mult = _clamp(_safe_number((cfg or {}).get("multi_escape_mult"), 2.5), 0.0, 10.0)
+    mult = _clamp(_safe_number((cfg or {}).get("multi_escape_mult"), 2.0), 0.0, 10.0)
     return _clamp(base * mult, 0.0, 0.95)
 
 

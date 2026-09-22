@@ -2611,6 +2611,78 @@ async def main():
         f"{[l for l in _card.splitlines() if '空竿' in l][:1]}",
     )
 
+    # --- 拉线逃脱率（v1.18.26：站长报「降低各钓点的逃脱率，太高了」）---
+    # 逃脱率不是按钓点写的（它是 稀有度 × 难度 × 天气 × 鱼竿），所以「各钓点」的差别
+    # 来自鱼池里的稀有度构成 —— 这里把每个钓点的传说/神话加权平均算出来，钉住新数值。
+    _esc_plugin = make_plugin(dict(load_schema_config("esc_ladder"), enable_weather=False))
+    _esc_rarity = mod._parse_escape_map(str(_esc_plugin.cfg["rarity_escape_chance"]))
+    check(
+        abs(_esc_rarity.get("传说", 0) - 0.20) < 1e-9
+        and abs(_esc_rarity.get("神话", 0) - 0.28) < 1e-9,
+        f"传说 30%→20%、神话 42%→28% -> {_esc_plugin.cfg['rarity_escape_chance']}",
+    )
+    check(
+        abs(mod._safe_number(_esc_plugin.cfg["escape_difficulty_weight"], 0) - 0.4) < 1e-9
+        and abs(mod._safe_number(_esc_plugin.cfg["multi_escape_mult"], 0) - 2.0) < 1e-9,
+        f"难度权重 0.5→0.4、连钓系数 2.5→2.0 -> "
+        f"{_esc_plugin.cfg['escape_difficulty_weight']}/{_esc_plugin.cfg['multi_escape_mult']}",
+    )
+
+    def _loc_escape(loc_id: str, rarity: str) -> float:
+        """这个钓点里某一档拉线鱼的加权平均窗口逃脱率（良好评价 = ×1.0）。"""
+        total = 0.0
+        weight_sum = 0.0
+        for _fid, _w in (mod.LOCATION_WEIGHTS.get(loc_id) or {}).items():
+            _f = mod.FISH_BY_ID.get(_fid)
+            if not _f or _w <= 0 or _f["rarity"] != rarity:
+                continue
+            _sp = _esc_plugin._interaction_window(_f, None)
+            if _sp is None:
+                continue
+            total += _w * mod._safe_number(_sp.get("escape"), 0.0)
+            weight_sum += _w
+        return total / weight_sum if weight_sum else 0.0
+
+    _deep = ("abyss", "trench", "glacier", "aurora", "starfall", "void_sea", "dragon_palace")
+    _myth = [_loc_escape(loc, "神话") for loc in _deep]
+    _legend = [_loc_escape(loc, "传说") for loc in _deep]
+    check(
+        all(0.28 <= v <= 0.35 for v in _myth),
+        f"深水图神话逃脱率从 49% 降到 28~35%（良好评价）-> "
+        f"{['%.1f%%' % (v * 100) for v in _myth]}",
+    )
+    check(
+        all(0.18 <= v <= 0.22 for v in _legend),
+        f"深水图传说逃脱率从 30% 降到 18~22% -> {['%.1f%%' % (v * 100) for v in _legend]}",
+    )
+    check(
+        abs(min(0.95, max(_myth) * 2.0) - max(_myth) * 2.0) < 1e-9,
+        f"连钓里的神话鱼不再一撞就顶到 95%（现在约 {max(_myth) * 2.0:.0%}）",
+    )
+    # 迁移：老配置里那三个旧默认值要能自动换成新值（同「逐字等于旧默认才替换」）
+    _fixes = dict(mod.DEFAULTS_VALUE_FIXES)
+    check(
+        any(old == "传说:0.30,神话:0.42" for old, _new in _fixes.get("rarity_escape_chance", ()))
+        and any(abs(old - 0.5) < 1e-9 for old, _new in _fixes.get("escape_difficulty_weight", ()))
+        and any(abs(old - 2.5) < 1e-9 for old, _new in _fixes.get("multi_escape_mult", ())),
+        "三个旧默认值都登记了迁移（站长那边也拿得到新数值）",
+    )
+    _esc_look = make_plugin(dict(load_schema_config("esc_look"), enable_weather=False))
+    _ep = await _esc_look._load_player("89502")
+    _ep["baits"] = {"secret": 5}
+    _ep["equipped_bait"] = "secret"
+    await _esc_look._save_player(_ep)
+    _ecard = text_of(await cmd(_esc_look, FakeEvent("89502"), "查", "龙宫", "", ""))
+    check(
+        "拉线跑鱼率" in _ecard and "神话 32%" in _ecard,
+        f"/钓鱼 查 龙宫 写出跑鱼率（神话约 32%）-> "
+        f"{[l for l in _ecard.splitlines() if '跑鱼' in l][:1]}",
+    )
+    check(
+        "超时必跑" in _ecard and "完美 ×0.3" in _ecard,
+        "并说明评价怎么影响它（完美 ×0.3、超时必跑）",
+    )
+
     # =====================================================================
     print("\n[6f] 升级曲线：指数增长（越往后越难，卡住最高进度）")
 
@@ -3420,23 +3492,28 @@ async def main():
     ):
         check(mod._bait_consumed(**_kw) is _want, f"扣饵规则：{_why}")
 
-    # --- 3) 连钓逃脱率 = 鱼种逃脱率 × 系数（默认 2.5，封顶 95%）---
+    # --- 3) 连钓逃脱率 = 鱼种逃脱率 × 系数（v1.18.26 起默认 2.0，封顶 95%）---
     esc_cfg_probe = dict(_CFG)
+    _mult = mod._safe_number(esc_cfg_probe.get("multi_escape_mult"), 0.0)
     _e30 = mod._multi_escape_chance({"escape": 0.30}, esc_cfg_probe)
     _e42 = mod._multi_escape_chance({"escape": 0.42}, esc_cfg_probe)
     check(
-        abs(_e30 - 0.75) < 1e-9,
-        f"传说标称 30% → 连钓判定 75%（×2.5）-> {_e30:.2%}",
+        abs(_mult - 2.0) < 1e-9,
+        f"连钓系数默认 2.0（v1.18.26 从 2.5 降下来：2.5 会让神话 95% 必跑）-> {_mult}",
     )
     check(
-        abs(_e42 - 0.95) < 1e-9,
-        f"神话标称 42% × 2.5 = 105% → 封顶 95%（连钓里也不存在必跑）-> {_e42:.2%}",
+        abs(_e30 - 0.60) < 1e-9,
+        f"传说标称 30% → 连钓判定 60%（×2.0）-> {_e30:.2%}",
+    )
+    check(
+        abs(_e42 - 0.84) < 1e-9,
+        f"神话标称 42% × 2.0 = 84%（不再一撞就顶到 95%）-> {_e42:.2%}",
     )
     check(
         abs(mod._multi_escape_chance(
             {"escape": 0.30}, dict(esc_cfg_probe, multi_escape_mult=1.0)
         ) - 0.30) < 1e-9,
-        "系数填 1.0 = 旧行为（连钓按标称逃脱率，站长想还原就填这个）",
+        "系数填 1.0 = 连钓按标称逃脱率（最宽松，站长想还原就填这个）",
     )
     check(
         mod._multi_escape_chance(
@@ -3449,8 +3526,8 @@ async def main():
         "鱼种本身没写逃脱率时，连钓里不会凭空跑鱼",
     )
     check(
-        abs(mod._multi_escape_chance({"escape": 0.30}, {}) - 0.75) < 1e-9,
-        "配置里缺这一项时按默认 2.5 兜底（老配置升级后自动变狠）",
+        abs(mod._multi_escape_chance({"escape": 0.30}, {}) - 0.60) < 1e-9,
+        "配置里缺这一项时按默认 2.0 兜底",
     )
     check(
         abs(mod._multi_escape_chance(
@@ -3460,8 +3537,8 @@ async def main():
     )
 
     # --- 4) 实测：同一批 20 竿，改系数前后跑掉的条数明显不同 ---
-    # 常见鱼的 diff = 0 → 单竿口径的逃脱率 = 品质逃脱率 × 0.75 = 0.40 × 0.75 = 30%，
-    # 连钓再 × 2.5 = 75%。天气关掉，否则天气的 escape_mult 会让这个数每局都变。
+    # 常见鱼的 diff = 0 → 单竿口径的逃脱率 = 品质逃脱率 × (0.8 + 0.4×0) = 0.40 × 0.8 = 32%，
+    # 连钓再 × 2.0 = 64%。天气关掉，否则天气的 escape_mult 会让这个数每局都变。
     real_esc_cfg = dict(_CFG)
     real_esc_cfg["interactive_rarities"] = "常见"
     real_esc_cfg["rarity_escape_chance"] = "常见:0.40"
@@ -3480,13 +3557,13 @@ async def main():
     body = text_of(out)
     ran = body.count("跑了")
     check(
-        "逃脱率 75%" in body,
+        "逃脱率 64%" in body,
         f"跑掉的每一条都写出连钓实际用的逃脱率 -> "
         f"{[l for l in body.splitlines() if '跑了' in l][:1]}",
     )
     check(
-        9 <= ran <= 20,
-        f"连钓 20 竿跑掉 {ran} 条（默认 75%，期望 15；旧行为只有 6 条左右）",
+        5 <= ran <= 19,
+        f"连钓 20 竿跑掉 {ran} 条（默认 64%，期望约 13；旧 2.5 系数是 15 条）",
     )
     check(
         "跑掉" in body and "条" in body,
@@ -3508,14 +3585,21 @@ async def main():
     out = await cmd(old_esc_plugin, FakeEvent("89125"), "20", "", "")
     body_old = text_of(out)
     ran_old = body_old.count("跑了")
+    # 常见鱼 diff = 0 → 单竿逃脱率 = 0.40 × (0.8 + 0.4×0) = 32%（难度权重 0.4 之后）
+    _w = mod._safe_number(real_esc_cfg.get("escape_difficulty_weight"), 0.4)
+    _single = 0.40 * ((1.0 - 0.5 * _w) + _w * 0.0)
     check(
-        "逃脱率 30%" in body_old,
-        f"系数填 1.0 时用标称逃脱率（30%）-> "
+        abs(_single - 0.32) < 1e-9,
+        f"难度权重 0.4：diff=0 的常见鱼，单竿口径 = 0.40 × 0.8 = {_single:.0%}",
+    )
+    check(
+        f"逃脱率 {_single:.0%}" in body_old,
+        f"系数填 1.0 时用标称逃脱率（{_single:.0%}）-> "
         f"{[l for l in body_old.splitlines() if '跑了' in l][:1]}",
     )
     check(
         ran_old <= 12,
-        f"系数 1.0 = 旧行为：20 竿只跑 {ran_old} 条（期望 6，明显比默认的 {ran} 条松）",
+        f"系数 1.0 = 最宽松：20 竿只跑 {ran_old} 条（期望 6，明显比默认的 {ran} 条松）",
     )
 
     # --- 5) 空竿扣饵：单竿说「白搭了」就真扣，深水不开口就不扣 ---
