@@ -4556,19 +4556,19 @@ async def main():
     check(_page_labels((1, 1, "/钓鱼 背包")) == [], "只有一页时整排不出现")
     check(
         _page_labels((1, 3, "/钓鱼 背包"))
-        == [[plugin.PAGE_NEXT_LABEL + "=>/钓鱼 背包 2"]],
+        == [["下一页" + "=>/钓鱼 背包 2"]],
         f"第一页只有「下一页」 -> {_page_labels((1, 3, '/钓鱼 背包'))}",
     )
     check(
         _page_labels((2, 3, "/钓鱼 背包")) == [[
-            plugin.PAGE_PREV_LABEL + "=>/钓鱼 背包 1",
-            plugin.PAGE_NEXT_LABEL + "=>/钓鱼 背包 3",
+            "上一页" + "=>/钓鱼 背包 1",
+            "下一页" + "=>/钓鱼 背包 3",
         ]],
         f"中间页两个都在，而且就一排 -> {_page_labels((2, 3, '/钓鱼 背包'))}",
     )
     check(
         _page_labels((3, 3, "/钓鱼 背包"))
-        == [[plugin.PAGE_PREV_LABEL + "=>/钓鱼 背包 2"]],
+        == [["上一页" + "=>/钓鱼 背包 2"]],
         f"最后一页只有「上一页」 -> {_page_labels((3, 3, '/钓鱼 背包'))}",
     )
     check(
@@ -4595,7 +4595,7 @@ async def main():
         [b["action"]["data"] for b in _prows[-1]["buttons"]]
         == ["/钓鱼 背包 1", "/钓鱼 背包 3"]
         and [b["render_data"]["label"] for b in _prows[-1]["buttons"]]
-        == [plugin.PAGE_PREV_LABEL, plugin.PAGE_NEXT_LABEL],
+        == ["上一页", "下一页"],
         "「/钓鱼 背包 2」发出去时键盘最后一行是「上一页 / 下一页」，指令指向 1 / 3",
         str([[b["action"]["data"] for b in r["buttons"]] for r in _prows][-1:]),
     )
@@ -4658,27 +4658,43 @@ async def main():
             b["action"]["data"]
             for row in rows
             for b in row["buttons"]
-            if b["render_data"]["label"] == plugin.AGAIN_LABEL
+            if b["render_data"]["label"] == "再次使用"
         ]
 
-    check(plugin._again_rows("item.used", "") == [], "拼不出指令时不出「再次使用」那一排")
+    check(
+        plugin._again_rows("item.used", None) == []
+        and plugin._again_rows("item.used", {}) == [],
+        "没存货（没给填充值）时不出「再次使用」那一排",
+    )
+    _again_vals = {"道具": "姜汤", "参数": ""}
+    check(
+        len(plugin._again_rows("item.used", _again_vals)) == 1
+        and plugin._again_rows("item.used", _again_vals)[0][0]["render_data"]["label"]
+        == "再次使用",
+        "「再次使用」来自按钮表里的 item.again（默认就是这两个字）",
+    )
     check(
         make_plugin(dict(_CFG, button_empty_scenes="item.used"))._again_rows(
-            "item.used", "/钓鱼 用 姜汤"
+            "item.used", _again_vals
         )
+        == []
+        and make_plugin(
+            dict(_CFG, button_empty_scenes="item.again")
+        )._again_rows("item.used", _again_vals)
         == [],
-        "场景写进 button_empty_scenes 时「再次使用」也不出现（那个开关要算数）",
+        "场景写进 button_empty_scenes（回复场景 或 item.again 自己）都能去掉这一排",
     )
     _np = mod._default_player("89603")
     check(
-        plugin._use_again_command(_np, "hot_soup", "") == "",
-        "背包里没存货就不拼指令（按钮跟着消失）",
+        plugin._use_again_values(_np, "hot_soup", "") is None,
+        "背包里没存货就不给填充值（按钮跟着消失）",
     )
     _np["items"] = {"hot_soup": 1}
     check(
-        plugin._use_again_command(_np, "hot_soup", "1 2") == "/钓鱼 用 姜汤 1 2",
-        f"指令按「登记名 + 原来的参数」拼 -> "
-        f"{plugin._use_again_command(_np, 'hot_soup', '1 2')}",
+        plugin._use_again_values(_np, "hot_soup", "1 2")
+        == {"道具": "姜汤", "参数": "1 2"},
+        f"填充值用登记名 + 原来的参数 -> "
+        f"{plugin._use_again_values(_np, 'hot_soup', '1 2')}",
     )
 
     # 洗髓丹：用完之后按钮就是「再洗这条」（参数原样带走）
@@ -4762,6 +4778,122 @@ async def main():
         f"培育（育灵水）之后也带「再次使用」-> {_again_of(_fapi2.calls)}",
     )
 
+    # --- v1.18.35：这两排动态按钮也进了按钮表（站长能在「💬 回复」页里改）---
+    # 内容（文案/指令/样式）全部来自 button_defs 里的 page.prev / page.next / item.again，
+    # 代码只决定「什么时候用」；指令里的占位符由代码按当前情境填。
+    def _page_labels_of(plug, page_arg, scene="bag.list"):
+        return [
+            [b["render_data"]["label"] + "=>" + b["action"]["data"] for b in row]
+            for row in plug._page_rows(scene, page_arg)
+        ]
+
+    def _again_of_values(plug, values, scene="item.used"):
+        return [
+            b["render_data"]["label"] + "=>" + b["action"]["data"]
+            for row in plug._again_rows(scene, values)
+            for b in row
+        ]
+
+    _dyn_keys = ("page.prev", "page.next", "item.again")
+    _custom_btn = "\n".join(
+        line
+        for line in str(mod.DEFAULTS["button_defs"]).split("\n")
+        if line.split("|")[0].strip() not in _dyn_keys
+    ) + (
+        "\npage.prev|◀ 上一页|{指令} {页}|primary"
+        "\npage.next|{当前页}/{总页}|{指令} {页}|primary"
+        "\npage.next|下一页 ▶|{指令} {页}|default"
+        "\nitem.again|再洗一次|/钓鱼 用 {道具} {参数}|primary"
+    )
+    _dyn = make_plugin(dict(_CFG, button_defs=_custom_btn))
+    check(
+        _page_labels_of(_dyn, (2, 3, "/钓鱼 背包"))
+        == [[
+            "◀ 上一页=>/钓鱼 背包 1",
+            "2/3=>/钓鱼 背包 3",
+            "下一页 ▶=>/钓鱼 背包 3",
+        ]],
+        f"翻页按钮的文案/指令/样式全来自按钮表（站长改了就是改了）-> "
+        f"{_page_labels_of(_dyn, (2, 3, '/钓鱼 背包'))}",
+    )
+    _dyn_rows = _dyn._page_rows("bag.list", (2, 3, "/钓鱼 背包"))
+    check(
+        _dyn_rows[0][0]["render_data"]["style"] == 1
+        and _dyn_rows[0][2]["render_data"]["style"] == 0,
+        "样式列也跟着按钮表走（primary / default）",
+        str([b["render_data"]["style"] for b in _dyn_rows[0]]),
+    )
+    check(
+        _again_of_values(_dyn, {"道具": "洗髓丹", "参数": "2"})
+        == ["再洗一次=>/钓鱼 用 洗髓丹 2"],
+        f"「再次使用」的文案与指令同样可配、占位符照填 -> "
+        f"{_again_of_values(_dyn, {'道具': '洗髓丹', '参数': '2'})}",
+    )
+    check(
+        _again_of_values(_dyn, {"道具": "姜汤", "参数": ""})
+        == ["再洗一次=>/钓鱼 用 姜汤"],
+        f"参数为空时不留尾空格 -> {_again_of_values(_dyn, {'道具': '姜汤', '参数': ''})}",
+    )
+    # 边界规则仍然由代码说了算（站长改文案改不掉「首页不给上一页」）
+    check(
+        _page_labels_of(_dyn, (1, 3, "/钓鱼 背包"))
+        == [["1/3=>/钓鱼 背包 2", "下一页 ▶=>/钓鱼 背包 2"]],
+        f"第一页仍然不给「上一页」（只换文案，不改规则）-> "
+        f"{_page_labels_of(_dyn, (1, 3, '/钓鱼 背包'))}",
+    )
+    # 模板指令的校验：动态场景先按样例值预演再判，别的场景不认这些占位符
+    check(
+        mod._fill_button_values("{指令} {页}", mod.DYNAMIC_BUTTON_SAMPLES)
+        == "/钓鱼 背包 2",
+        "占位符预演用的是样例值（页面侧有一份同名表，两边对账）",
+    )
+    check(
+        "page.next" in mod._parse_button_defs("page.next|下一页|{指令} {页}|default")
+        and "item.again" in mod._parse_button_defs(
+            "item.again|再次使用|/钓鱼 用 {道具} {参数}|default"
+        ),
+        "解析器认得动态场景的模板指令（不会被当成死按钮丢掉）",
+    )
+    check(
+        "page.next" not in mod._parse_button_defs("page.next|下一页|这不是指令|default")
+        and "cast" not in mod._parse_button_defs("cast|看背包|{指令} {页}|default"),
+        "真写错的指令照样拦；占位符只在自己那三个场景里算数（别的场景写了就是死按钮）",
+    )
+    # scenes 接口把新场景也给出来（编辑器里能看见、能改）
+    check(
+        {"page.prev", "page.next", "item.again"} <= set(mod.SCENE_IDS)
+        and mod.SCENE_DESC.get("item.again")
+        and mod.SCENE_GROUP.get("page.prev") == "page",
+        "三个动态场景都登记进了 REPLY_SCENES（带分组与说明）",
+    )
+    _dyn_payload = await make_plugin().editor_api_scenes()
+    _dyn_ids = {
+        s.get("id")
+        for g in _dyn_payload.get("groups", [])
+        for s in g.get("scenes", [])
+    }
+    check(
+        {"page.prev", "page.next", "item.again"} <= _dyn_ids,
+        "scenes 接口把这三个场景发给编辑器（站长在「💬 回复」页能看到它们）",
+        str(sorted(_dyn_ids)[:3]),
+    )
+    # 老配置（v1.18.34 那版 button_defs，里面没有这三行）升级上来也要照常有这两排：
+    # 走的是「这个场景没配过 -> 回退出厂按钮」那条老路，不依赖内容合并
+    _old_btn = "\n".join(
+        line
+        for line in str(mod.DEFAULTS["button_defs"]).split("\n")
+        if line.split("|")[0].strip() not in _dyn_keys
+    )
+    _oldp = make_plugin(dict(_CFG, button_defs=_old_btn))
+    check(
+        _page_labels_of(_oldp, (2, 3, "/钓鱼 背包"))
+        == [["上一页=>/钓鱼 背包 1", "下一页=>/钓鱼 背包 3"]]
+        and _again_of_values(_oldp, {"道具": "姜汤", "参数": ""})
+        == ["再次使用=>/钓鱼 用 姜汤"],
+        "老配置（按钮表里没有这三行）升级后照样有这两排（回退出厂按钮）",
+        str(_page_labels_of(_oldp, (2, 3, "/钓鱼 背包"))),
+    )
+
     # --- 🔘 按钮表全部可配置（button_defs）---
     # v1.18.17 大扩充：站长要求「所有需要的地方都加按钮」，官方给每个回复场景都配了按钮，
     # 所以这里不再逐字抄一整张表（240+ 行、改一次就得跟着改一次），改成三层验证：
@@ -4824,7 +4956,16 @@ async def main():
         "按钮表里的场景键都是真场景",
     )
     check(
-        all(str(data).startswith("/钓鱼") for _s, _l, data in _all_btn),
+        # 动态按钮（page.*/item.again）的指令是模板，要先按样例值预演再判 —— 和插件
+        # 解析器（_calc._button_command_ok 的 scene 分支）同一套口径
+        all(
+            (
+                mod._fill_button_values(data, mod.DYNAMIC_BUTTON_SAMPLES)
+                if s in mod.DYNAMIC_BUTTON_SCENES
+                else str(data)
+            ).startswith("/钓鱼")
+            for s, _l, data in _all_btn
+        ),
         "每条按钮指令都是本插件的写法（不会点出个死按钮）",
     )
     check(
@@ -9818,8 +9959,9 @@ async def main():
         f"回复场景表覆盖全部出口 -> {len(_scene_ids)} 个场景",
     )
     check(
-        sorted(_scene_ids) == sorted(_text_keys),
-        "场景键 ↔ 文案键一一对应（缺："
+        # 按钮专用场景（page.*/item.again）本来就没有回复文案，对账时排除掉
+        sorted(set(_scene_ids) - set(mod.BUTTON_ONLY_SCENES)) == sorted(_text_keys),
+        "场景键 ↔ 文案键一一对应（按钮专用场景除外）（缺："
         + "、".join(sorted(set(_scene_ids) - set(_text_keys)))
         + "；多："
         + "、".join(sorted(set(_text_keys) - set(_scene_ids)))
@@ -9887,7 +10029,7 @@ async def main():
         f"{s}:{data}"
         for s, rows in mod._BUILTIN_BUTTONS.items()
         for _label, data, _style in rows
-        if not mod.CALC._button_command_ok(data)
+        if not mod.CALC._button_command_ok(data, s)
     )
     check(not _bad_btn_cmds, f"出厂按钮的指令都是本插件认识的（坏的：{_bad_btn_cmds}）")
     check(

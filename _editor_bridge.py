@@ -564,6 +564,8 @@ class EditorApiMixin:
                 [label, data, style] for label, data, style in self._scene_items(scene)
             ],
             "dynamic_text": dynamic,
+            # 按钮专用场景（v1.18.35）：没有回复文案，卡片上不显示文案编辑器
+            "button_only": scene in BUTTON_ONLY_SCENES,
             "text": {
                 "template": template,
                 "placeholders": placeholders,

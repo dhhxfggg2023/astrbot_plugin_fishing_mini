@@ -2434,6 +2434,7 @@ SCENE_GROUPS: tuple[tuple[str, str, str], ...] = (
     ("today", "🌤️ 今日", "天气与行情"),
     ("rank", "📊 排行", "群内排行榜"),
     ("help", "❓ 帮助", "帮助分页与用法提示"),
+    ("page", "📄 翻页", "分页界面的「上一页 / 下一页」（跟着页码走，见 v1.18.35）"),
     ("custom", "🧩 自定义", "站长自定义命令"),
     ("extras", "🏷 称号与供奉", "自动补给 / 称号 / 香火供奉（v1.18.17 的后期金币回收口）"),
     ("system", "⚙️ 通用", "兜底报错、群播报与共用按钮组"),
@@ -2602,6 +2603,14 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("item.reroll_bad_slot", "item", "洗髓的栏位号不对", ""),
     ("item.reroll_failed", "item", "洗髓没能用出去", ""),
     ("item.reroll_done", "item", "洗髓结果", ""),
+    # 用成功之后那排「再次使用」（v1.18.35）：和翻页按钮一样是**动态按钮场景** ——
+    # 它不挂在某一条回复上，而是由 8 条「用成功」的出口一起取用、按键位填占位符。
+    (
+        "item.again",
+        "item",
+        "用道具成功后的「再次使用」按钮（还有货才出现；{道具}/{参数} = 刚才用的道具与栏位）",
+        "",
+    ),
     # ---- 图鉴 ----
     ("collection.view", "collection", "图鉴总览", ""),
     ("collection.detail", "collection", "图鉴完整清单（分页）", ""),
@@ -2628,6 +2637,21 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("rank.view", "rank", "排行榜内容", ""),
     # ---- 帮助 / 自定义 / 通用 ----
     ("help.page", "help", "帮助分页", "cast"),
+    # ---- 翻页（v1.18.35）----
+    # 这两个场景**不挂在任何回复上**：分页界面（帮助 / 钓点 / 背包 / 图鉴详）渲染时
+    # 才去取它们的按钮，按当前页码填占位符 —— 所以文案/指令/样式照样能在「💬 回复」页里改。
+    (
+        "page.prev",
+        "page",
+        "「上一页」按钮（只在不是第一页时出现；{指令}=当前界面的翻页指令，{页}=目标页）",
+        "",
+    ),
+    (
+        "page.next",
+        "page",
+        "「下一页」按钮（只在不是最后一页时出现；{指令}=当前界面的翻页指令，{页}=目标页）",
+        "",
+    ),
     ("help.unknown", "help", "不认识的用法（兜底提示）", ""),
     ("custom.send", "custom", "自定义命令「发送:」的回复", ""),
     ("system.error", "system", "操作出错的兜底回复", ""),
@@ -2831,6 +2855,40 @@ def _fill_button_text(template: Any, label: str, n: int = 0) -> str:
     return str(template).replace("{label}", str(label)).replace("{n}", str(n))
 
 
+#: **按钮专用场景**（v1.18.35）：这些场景**没有回复文案**，只有按钮 ——
+#: 代码在合适的时机（分页界面 / 道具用成功之后）取用它们的按钮。
+#: 文案表（_texts.TEXTS）里不该有它们，编辑器那边会显示成「动态按钮」卡片。
+BUTTON_ONLY_SCENES: tuple[str, ...] = ("page.prev", "page.next", "item.again")
+
+#: **动态按钮场景**（v1.18.35）：按钮不挂在某一条回复上，而是渲染时按当前情境填占位符。
+#: 它们除了这些占位符，写法跟普通按钮完全一样 —— 照样能在「💬 回复」页里改文案/指令/样式。
+DYNAMIC_BUTTON_SCENES: tuple[str, ...] = ("page.prev", "page.next", "item.again")
+
+#: 动态按钮占位符 -> **样例值**。两个用处：
+#: 1. 校验「点击后发送」时先把模板渲染成一条**真指令**再判（否则 ``{指令} {页}`` 会被
+#:    当成死按钮、整行丢掉）；
+#: 2. 编辑器页面拿它做同样的预演（页面那份在 index.html 里，改这里要一起改）。
+DYNAMIC_BUTTON_SAMPLES: dict[str, str] = {
+    "指令": "/钓鱼 背包",
+    "页": "2",
+    "当前页": "1",
+    "总页": "3",
+    "道具": "锦鲤玉佩",
+    "参数": "1",
+}
+
+
+def _fill_button_values(template: Any, values: dict[str, str] | None) -> str:
+    """把动态按钮模板里的占位符换成真值（``values`` 里没有的键原样留着）。
+
+    和 ``_fill_button_text`` 一样**不用 str.format**：站长文案里的花括号不该炸。
+    """
+    text = str(template)
+    for key, value in (values or {}).items():
+        text = text.replace("{" + str(key) + "}", str(value))
+    return text
+
+
 def _parse_button_style(value: Any) -> int | None:
     """解析按钮样式；不认识就返回 None（调用方回退默认）。"""
     # 不能写 ``value or ""``：数字 0 是合法样式（QQ 的 0 号色），会被 or 当成「没写」
@@ -2885,9 +2943,16 @@ def _apply_button_style_policy(
 BUTTON_COMMAND_EXTRA: set[str] = set()
 
 
-def _button_command_ok(data: str) -> bool:
-    """这一行「点击后发送」是不是本插件认识的指令（防止出现点了没反应的死按钮）。"""
+def _button_command_ok(data: str, scene: Any = None) -> bool:
+    """这一行「点击后发送」是不是本插件认识的指令（防止出现点了没反应的死按钮）。
+
+    ``scene`` 是动态按钮场景（``page.next`` 这种）时，先用
+    :data:`DYNAMIC_BUTTON_SAMPLES` 把占位符渲染成一条真指令再判 ——
+    否则 ``{指令} {页}`` 这种模板会被当成死按钮、整行丢掉。
+    """
     text = str(data or "").strip()
+    if scene is not None and str(scene).lower() in DYNAMIC_BUTTON_SCENES:
+        text = _fill_button_values(text, DYNAMIC_BUTTON_SAMPLES).strip()
     if text == "/钓鱼":
         return True
     if not text.startswith("/钓鱼"):
@@ -2926,7 +2991,7 @@ def _parse_button_defs(
             first_bad = first_bad or line
             continue
         label, data = parts[1], parts[2]
-        if not _button_command_ok(data):
+        if not _button_command_ok(data, scene):
             bad += 1
             first_bad = first_bad or line
             continue

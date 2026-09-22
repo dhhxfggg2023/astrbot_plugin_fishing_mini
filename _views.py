@@ -177,39 +177,57 @@ class ViewsMixin:
     # -------------------------------------------------------------------------
     # 动态按钮行：翻页（v1.18.33）/ 再次使用（v1.18.34）
     # -------------------------------------------------------------------------
-    # 这两排**都不进按钮表**：它们跟着「现在是第几页 / 刚才用了什么道具」走，
-    # 静态的 button_defs 配不出来（同一行按钮在不同情境要发不同指令）。
-    #: 「上一页」的文案（按下 = 发那条翻页指令，和别的按钮一样走指令链路）
-    PAGE_PREV_LABEL = "上一页"
-    #: 「下一页」的文案
-    PAGE_NEXT_LABEL = "下一页"
-    #: 道具用完之后那排按钮的文案（按下 = 照着刚才那条指令再发一次）
-    AGAIN_LABEL = "再次使用"
+    # 这两排的**按钮内容**在按钮表里（page.prev / page.next / item.again 三个场景，
+    # 站长能在「💬 回复」页里改文案/指令/样式）；**什么时候用、占位符填什么**在这里决定。
+    # 占位符见 _calc.DYNAMIC_BUTTON_SAMPLES。
+
+    def _dynamic_button_items(
+        self, scene: str, values: dict[str, str] | None
+    ) -> list[tuple[str, str, int]]:
+        """取一个**动态按钮场景**的按钮，并把占位符填成真值。
+
+        动态按钮（``page.prev`` / ``page.next`` / ``item.again``）和普通场景一样，
+        文案/指令/样式都来自 ``button_defs``（站点可在「💬 回复」页里改），
+        区别只在于**什么时候用**由代码决定、占位符由代码填。
+        """
+        return [
+            (
+                _fill_button_values(label, values).strip(),
+                # 填充后要 strip：`/钓鱼 用 {道具} {参数}` 在参数为空时会留下一个尾空格
+                _fill_button_values(data, values).strip(),
+                style,
+            )
+            for label, data, style in self._scene_items(scene)
+        ]
 
     def _dynamic_rows(
-        self, scene: str | None, items: list[tuple[str, str, int]]
+        self, scene: str, values: dict[str, str] | None
     ) -> list[list[dict[str, Any]]]:
-        """把动态按钮排成**一行**（空列表 → 不出这一排）。
-
-        场景在 ``button_empty_scenes`` 里（站长明确要「这里就是没按钮」）时一律不加 ——
-        否则那个开关等于无效。翻页与「再次使用」共用这一条判断。
-        """
-        if not items or (scene and scene in BUTTON_EMPTY_SCENES):
+        """把某个动态按钮场景的按钮排成键盘行（场景「不要按钮」时为空）。"""
+        if scene in BUTTON_EMPTY_SCENES:
             return []
-        return [[self._btn(text, data, style) for text, data, style in items]]
+        items = self._dynamic_button_items(scene, values)
+        if not items:
+            return []
+        return self._layout_rows(scene, items)
 
     def _page_rows(self, scene: str | None, page: Any) -> list[list[dict[str, Any]]]:
         """需要翻页的界面：补一排「上一页 / 下一页」按钮。
 
-        ``page`` = ``(当前页, 总页数, 指令前缀)``，例如 ``(2, 3, "/钓鱼 背包")``
-        （按钮发的是 ``/钓鱼 背包 1`` / ``/钓鱼 背包 3``）。不给 ``page``、
-        只有一页、或者指令前缀是空的 → 这一排不出现。
+        ``page`` = ``(当前页, 总页数, 指令前缀)``，例如 ``(2, 3, "/钓鱼 背包")``。
+        按钮本身来自按钮表里的 ``page.prev`` / ``page.next`` 两个场景
+        （默认 ``{指令} {页}`` -> ``/钓鱼 背包 1``），站长可以在「💬 回复」页里
+        改文案、指令和样式；**什么时候出现**由这里决定：
 
+        * 不给 ``page``、只有一页、或者指令前缀是空的 → 这一排不出现；
         * 第一页不给「上一页」、最后一页不给「下一页」（**不做首尾循环**，
           这样「这个按钮还在 = 还能往那边翻」不会骗人）；
-        * 场景在 ``button_empty_scenes`` 里的话连它也不加（见 ``_dynamic_rows``）。
+        * 回复自己的场景在 ``button_empty_scenes`` 里（站长明确要「这里就是没按钮」）
+          时整排不加；``page.prev`` / ``page.next`` 各自在名单里则只去掉对应那个。
         """
         if not page:
+            return []
+        if scene and scene in BUTTON_EMPTY_SCENES:
             return []
         try:
             current, total = int(page[0]), int(page[1])
@@ -218,40 +236,51 @@ class ViewsMixin:
             return []
         if total <= 1 or not command:
             return []
+        values = {"指令": command, "当前页": str(current), "总页": str(total)}
         items: list[tuple[str, str, int]] = []
-        if current > 1:
-            items.append((self.PAGE_PREV_LABEL, f"{command} {current - 1}", 0))
-        if current < total:
-            items.append((self.PAGE_NEXT_LABEL, f"{command} {current + 1}", 0))
-        return self._dynamic_rows(scene, items)
+        if current > 1 and "page.prev" not in BUTTON_EMPTY_SCENES:
+            items += self._dynamic_button_items(
+                "page.prev", {**values, "页": str(current - 1)}
+            )
+        if current < total and "page.next" not in BUTTON_EMPTY_SCENES:
+            items += self._dynamic_button_items(
+                "page.next", {**values, "页": str(current + 1)}
+            )
+        if not items:
+            return []
+        # 两个场景的按钮排在**同一排**里（默认就是一排两个）；行宽看 button_layout
+        return self._layout_rows("page.next", items)
 
-    def _use_again_command(
+    def _use_again_values(
         self, player: dict[str, Any], item_id: str, spec: Any = ""
-    ) -> str:
-        """「再次使用」按钮要发的指令；**没存货就不给**（空串 = 不出这个按钮）。
+    ) -> dict[str, str] | None:
+        """「再次使用」按钮的填充值；**没存货就不给**（``None`` = 不出这个按钮）。
 
-        指令照着玩家刚才那条拼：``/钓鱼 用 <道具名> <原来的参数>`` —— 所以
-        「用 洗髓丹 2」按下去还是洗栏位 2，「用 姜汤」按下去就是再喝一碗。
-        （道具名用**登记名**而不是玩家打的字，写 id / 简称也能对得上。）
+        指令模板（``item.again``，默认 ``/钓鱼 用 {道具} {参数}``）照着玩家刚才那条拼
+        —— 所以「用 洗髓丹 2」按下去还是洗栏位 2，「用 姜汤」按下去就是再喝一碗。
+        道具名用**登记名**而不是玩家打的字，写 id / 简称也能对得上。
         """
         if _safe_int((player.get("items") or {}).get(item_id), 0, 0) <= 0:
-            return ""
+            return None
         name = str((self.items.get(item_id) or {}).get("name") or "").strip()
         if not name:
-            return ""
-        return f"/钓鱼 用 {name} {str(spec or '').strip()}".strip()
+            return None
+        return {"道具": name, "参数": str(spec or "").strip()}
 
     def _again_rows(
-        self, scene: str | None, command: Any
+        self, scene: str | None, values: Any
     ) -> list[list[dict[str, Any]]]:
-        """道具用完之后补一排「再次使用」按钮（v1.18.34，站长要的）。
+        """道具用完之后补一排「再次使用」按钮（v1.18.34，v1.18.35 起可配）。
 
-        ``command`` 为空（没存货 / 拼不出指令）时整排不出现。
+        ``values`` 为 ``None``（没存货 / 拼不出道具名）时整排不出现；
+        回复自己的场景在 ``button_empty_scenes`` 里（站长明确要「这里就是没按钮」）
+        时也不加，``item.again`` 自己在名单里同样去掉。
         """
-        command = str(command or "").strip()
-        if not command:
+        if not isinstance(values, dict) or not values:
             return []
-        return self._dynamic_rows(scene, [(self.AGAIN_LABEL, command, 0)])
+        if scene and scene in BUTTON_EMPTY_SCENES:
+            return []
+        return self._dynamic_rows("item.again", values)
 
     def _button_rows(
         self, scene: str, label: str = "", n: int = 0

@@ -166,6 +166,8 @@ const hookNames = [
   "buttonStyleNumericOptions", "renderReplyDatalists", "replyNewButtonDraft",
   "resetNewButtonDraft", "renderReplyButtonPicker", "replyPickSummaryHtml",
   "refreshReplyPicker", "refreshReplyPickerSummary", "addPickedButton", "renderReplyButtonRow",
+  // 动态按钮（v1.18.35）：翻页 / 再次使用的占位符预演
+  "isDynamicButtonScene", "renderButtonSample", "DYNAMIC_BUTTON_SCENES", "DYNAMIC_BUTTON_SAMPLES",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -1412,6 +1414,60 @@ async function repliesPure() {
   check(cardHtml.indexOf("只改这个场景") > 0,
     "场景卡片里写明「在这里加/改 = 只改这个场景」");
   check(cardHtml.indexOf('data-act="rp:btnAdd"') > 0, "场景卡片里有「＋ 加按钮」");
+
+  /* ---- v1.18.35：动态按钮（翻页 / 再次使用）----
+     这三个场景的按钮占位符由代码填，所以校验要先按样例值预演，否则 `{指令} {页}`
+     会被「指令要以 / 开头」标红；样例表必须和插件侧 _calc.DYNAMIC_BUTTON_SAMPLES 一致。 */
+  console.log("  ── 📄 动态按钮：占位符预演 + 场景专属校验 ──");
+  check(T.DYNAMIC_BUTTON_SCENES.join(",") === "page.prev,page.next,item.again",
+    "动态按钮场景 = page.prev / page.next / item.again", T.DYNAMIC_BUTTON_SCENES.join("/"));
+  check(T.renderButtonSample("{指令} {页}") === "/钓鱼 背包 2"
+    && T.renderButtonSample("/钓鱼 用 {道具} {参数}") === "/钓鱼 用 锦鲤玉佩 1",
+    "占位符按样例值预演（给站长看的就是这条真指令）", T.renderButtonSample("{指令} {页}"));
+  check(T.isDynamicButtonScene("page.next") && T.isDynamicButtonScene(" PAGE.PREV ")
+    && !T.isDynamicButtonScene("cast.hit"),
+    "只有这三个场景算动态按钮场景");
+  check(Object.keys(T.validateReplyButton(
+    { label: "下一页", data: "{指令} {页}", style: "default" }, "page.next")).length === 0,
+    "动态场景里 `{指令} {页}` 不算错");
+  check(!!T.validateReplyButton(
+    { label: "下一页", data: "{指令} {页}", style: "default" }, "cast.hit").data,
+    "同一个模板写在普通场景上照样标红（那边没人填占位符 = 死按钮）");
+  check(!!T.validateReplyButton(
+    { label: "x", data: "这不是指令", style: "default" }, "page.next").data,
+    "动态场景里真写错的指令也拦得住");
+  check(T.applyCommandPrefix("{指令} {页}", "/钓鱼") === "{指令} {页}",
+    "批量改指令前缀会跳过模板行（不会把 {指令} 拼成 /钓鱼 {指令}）");
+
+  const calcSrcForDyn = fs.readFileSync(path.join(__dirname, "_calc.py"), "utf8");
+  const samplesBlock = /DYNAMIC_BUTTON_SAMPLES: dict\[str, str\] = \{(.*?)\}/s.exec(calcSrcForDyn);
+  check(!!samplesBlock, "能抠到插件侧的 DYNAMIC_BUTTON_SAMPLES");
+  const pluginSamples = {};
+  String(samplesBlock ? samplesBlock[1] : "").split("\n").forEach(function (line) {
+    const m = /"([^"]+)"\s*:\s*"([^"]*)"/.exec(line);
+    if (m) pluginSamples[m[1]] = m[2];
+  });
+  check(JSON.stringify(pluginSamples) === JSON.stringify(T.DYNAMIC_BUTTON_SAMPLES),
+    "占位符样例表与插件逐字一致（改一边忘一边这里就红）", JSON.stringify(pluginSamples));
+  const scenesBlock = /DYNAMIC_BUTTON_SCENES: tuple\[str, \.\.\.\] = \((.*?)\)/s.exec(calcSrcForDyn);
+  const pluginScenes = String(scenesBlock ? scenesBlock[1] : "").match(/"([^"]+)"/g) || [];
+  check(pluginScenes.map(function (s) { return s.slice(1, -1); }).join(",")
+    === T.DYNAMIC_BUTTON_SCENES.join(","),
+    "动态场景清单也和插件一致",
+    pluginScenes.join(",") || "没抠到");
+
+  const btnOnlyScene = T.normalizeReplyScene({
+    id: "page.next", label: "「下一页」按钮", desc: "只在不是最后一页时出现",
+    button_only: true, source: "config", per_row: 4,
+    buttons: [["下一页", "{指令} {页}", 0]],
+    text: { template: "{原文}", placeholders: ["原文"], samples: { "原文": "" } }
+  });
+  check(btnOnlyScene.button_only === true, "scenes 接口的 button_only 传进了页面模型");
+  const btnOnlyHtml = T.renderReplyCard(btnOnlyScene);
+  check(btnOnlyHtml.indexOf("文案模板") < 0 && btnOnlyHtml.indexOf("没有回复文案") > 0,
+    "动态按钮场景的卡片不显示文案编辑器（那场景本来就没有回复文案）");
+  check(T.renderReplyCard(T.replySceneById("cast.hit")).indexOf("文案模板") > 0,
+    "普通场景的卡片照旧有文案编辑器");
 
   T.state.replies.query = "zzz";
   T.state.replies.collapsed = { cast: true };

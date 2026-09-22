@@ -2418,7 +2418,7 @@ class CommandsMixin:
                     event.plain_result(
                         f"🧩 {self._item_label(item_id)}（扩展效果）\n" + "\n".join(ext_lines)
                     ),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2502,7 +2502,7 @@ class CommandsMixin:
                     event,
                     "item.used",
                     event.plain_result("\n".join(lines)),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2580,7 +2580,7 @@ class CommandsMixin:
                     event,
                     "item.used",
                     event.plain_result("\n".join(lines)),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2709,7 +2709,7 @@ class CommandsMixin:
                     event,
                     "item.reroll_done",
                     event.plain_result("\n".join(head + lines[:6])),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2781,7 +2781,7 @@ class CommandsMixin:
                     event,
                     "item.deco_used",
                     event.plain_result("\n".join(lines)),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2846,7 +2846,7 @@ class CommandsMixin:
                     event,
                     "item.used",
                     event.plain_result("\n".join(lines)),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2905,7 +2905,7 @@ class CommandsMixin:
                     event,
                     "item.breed_done",
                     event.plain_result("\n".join(head + lines[:6])),
-                    again=self._use_again_command(player, item_id, a3),
+                    again_values=self._use_again_values(player, item_id, a3),
                 ):
                     yield _r
                 return
@@ -2988,7 +2988,7 @@ class CommandsMixin:
                 event,
                 "item.feed_done",
                 event.plain_result("\n".join(lines)),
-                again=self._use_again_command(player, item_id, a3),
+                again_values=self._use_again_values(player, item_id, a3),
             ):
                 yield _r
 
