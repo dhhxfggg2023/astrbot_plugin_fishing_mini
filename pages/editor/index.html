@@ -1420,6 +1420,26 @@ table.grid td.actions .btn { vertical-align: middle; }
     return kv[0] + "　" + kv[1];
   }).join("\n");
 
+  /* 彩蛋效果（easter_egg_defs 第 4 段）。和道具效果**不是同一套解析器**：那边走
+     _calc._parse_effects（键来自 _effects.EFFECTS 注册表，扩展能加），这边走
+     _calc._parse_easter_egg_defs，只认**写死的 4 个键**，扩展加不了 —— 所以这份清单
+     没法像道具那样从插件接口取，只能照抄解析器。改 _parse_easter_egg_defs 时同步这里。
+     角色分两种：数字型（gold 整数 / luck 小数）、开关型（note / heal_bait，写 1 即可）。
+     ⚠️ 数字型的值走 `_defs_num`，**允许千分位逗号**（`1,200` / `1，200`），
+     校验时必须跟着放行，否则会把本来能用的行标红。 */
+  var EGG_EFFECT_KEYS = [
+    ["gold", "金币：整数，直接加到玩家身上"],
+    ["luck", "运气：小数（0.08 = +8%），只作用于这一次出鱼"],
+    ["note", "开关：给一张漂流瓶纸条（写 1 即可）"],
+    ["heal_bait", "开关：这一竿不消耗鱼饵（写 1 即可）"]
+  ];
+  var EGG_EFFECT_KEY_NAMES = EGG_EFFECT_KEYS.map(function (kv) { return kv[0]; });
+  /** 开关型：值写成什么插件都收（_parse_easter_egg_defs 只判「是不是 1/true/yes/on/y/空」），不校验值 */
+  var EGG_EFFECT_FLAG_KEYS = ["note", "heal_bait"];
+  var EGG_EFFECT_HINT = EGG_EFFECT_KEYS.map(function (kv) {
+    return kv[0] + "　" + kv[1];
+  }).join("\n");
+
   /**
    * 用插件给的清单替换内置清单（v1.13.0）。
    *
@@ -3279,7 +3299,8 @@ table.grid td.actions .btn { vertical-align: middle; }
         { key: "id",      label: "id",   type: "text",   w: "140px" },
         { key: "weight",  label: "权重", type: "number", w: "90px", num: true, step: 1 },
         { key: "text",    label: "文案", type: "text" },
-        { key: "effects", label: "效果", type: "text",   w: "200px" }
+        { key: "effects", label: "效果", type: "text",   w: "200px", mono: true,
+          hint: "key=值", title: EGG_EFFECT_HINT }
       ],
       makeRow: function () {
         return { id: "new_egg_" + rand(100, 999), weight: 10, text: "✨ 发生了点小惊喜", effects: "gold=10" };
@@ -3716,6 +3737,36 @@ table.grid td.actions .btn { vertical-align: middle; }
         }
         if (!errs[col.key] && badKeys.length) {
           errs[col.key] = "插件不认识的效果键：" + badKeys.join(" / ") + "（可用：" + ITEM_EFFECT_KEY_NAMES.join(" / ") + "）";
+        }
+      }
+
+      /* 彩蛋：效果串只认 _parse_easter_egg_defs 的 4 个键（gold / luck / note / heal_bait），
+         写错同样是静默失效（插件那边 `key in ("gold","luck")` 之外一律不认）。
+         容错按解析器逐字对齐：
+         * 分隔符除了 `;` 还认全角 `；`，等号除了 `=` 还认全角 `：`
+         * 缺等号时 key = 整段、值 = 空 —— 这正是 `str.partition("=")` 的行为，
+           所以 `note`（不带）也算开关打开，不该标红；而 `gold`（不带）插件会取 0，该标红
+         * 数字型的值允许千分位逗号（`_defs_num` 会先剥掉） */
+      if (tab.id === "easter_eggs" && col.key === "effects") {
+        var rawEgg = String(v === undefined || v === null ? "" : v).trim();
+        var eggBad = [];
+        var eggPairs = rawEgg ? rawEgg.replace(/；/g, ";").split(";") : [];
+        for (var gi = 0; gi < eggPairs.length; gi++) {
+          var ep = eggPairs[gi].trim();
+          if (!ep) continue;
+          var norm = ep.replace(/：/g, "=");
+          var gEq = norm.indexOf("=");
+          var gKey = (gEq < 0 ? norm : norm.slice(0, gEq)).trim();
+          var gVal = (gEq < 0 ? "" : norm.slice(gEq + 1)).trim();
+          if (EGG_EFFECT_KEY_NAMES.indexOf(gKey) < 0) { eggBad.push(gKey); continue; }
+          if (EGG_EFFECT_FLAG_KEYS.indexOf(gKey) >= 0) continue;   // 开关型：值不校验
+          if (gVal === "" || !isFinite(Number(gVal.replace(/[,，]/g, "")))) {
+            errs[col.key] = gKey + " 的值需要是数字";
+            break;
+          }
+        }
+        if (!errs[col.key] && eggBad.length) {
+          errs[col.key] = "插件不认识的彩蛋效果键：" + eggBad.join(" / ") + "（可用：" + EGG_EFFECT_KEY_NAMES.join(" / ") + "）";
         }
       }
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -106,6 +107,33 @@ print("\n[2] 目录结构与必需文件")
 for fname in ("main.py", "metadata.yaml", "requirements.txt", "README.md"):
     check((PLUGIN_DIR / fname).is_file(), f"{fname} 存在")
 check((PLUGIN_DIR / "_conf_schema.json").is_file(), "_conf_schema.json 存在（插件配置）")
+
+# ---------------------------------------------------------------------------
+print("\n[2c] 文档里的版本号要跟得上 metadata.yaml（历史上掉过两版）")
+# metadata.yaml 是版本号的唯一来源；README.full.md 顶部那行「**vX.Y.Z** ｜」是给人看的。
+# 忘了同步就会出现「安装包说 v1.18.32、文档抬头还说 v1.18.29」——
+# v1.18.30 / v1.18.31 就是这么连掉两版的（没人守，才发现）。
+try:
+    _meta_text = (PLUGIN_DIR / "metadata.yaml").read_text(encoding="utf-8")
+    _meta_m = re.search(r"^version:\s*(\S+)", _meta_text, re.M)
+    _meta_version = _meta_m.group(1) if _meta_m else ""
+    check(bool(_meta_version), f"从 metadata.yaml 读到版本号 -> {_meta_version or '没读到'}")
+
+    _full_text = (PLUGIN_DIR / "README.full.md").read_text(encoding="utf-8")
+    _head_m = re.search(r"\*\*(v[0-9]+\.[0-9]+\.[0-9]+)\*\*\s*｜", _full_text)
+    check(bool(_head_m), "README.full.md 顶部有「**vX.Y.Z** ｜」版本行")
+    if _head_m:
+        check(
+            _head_m.group(1) == _meta_version,
+            f"README.full.md 抬头版本 == metadata.yaml -> "
+            f"{_head_m.group(1)} / {_meta_version}",
+        )
+    check(
+        f"### {_meta_version}（" in _full_text,
+        f"更新日志里有 {_meta_version} 的条目",
+    )
+except Exception as e:
+    check(False, f"版本号对账失败：{e}")
 
 # ---------------------------------------------------------------------------
 print("\n[2b] 插件配置 schema 能被 AstrBot 官方机制加载")

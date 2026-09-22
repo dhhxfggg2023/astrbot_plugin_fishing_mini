@@ -132,6 +132,8 @@ const hookNames = [
   // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色；v1.15.1 加旧写法映射）
   "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES", "ITEM_EFFECT_HINT", "ITEM_EFFECT_ALIASES",
   "applyEffectKeys",
+  // 彩蛋效果键白名单（v1.18.32：easter_egg_defs 第 4 段，另一套解析器，写死 4 个键）
+  "EGG_EFFECT_KEYS", "EGG_EFFECT_KEY_NAMES", "EGG_EFFECT_FLAG_KEYS", "EGG_EFFECT_HINT",
   // 💬 回复：场景卡片 / 按钮总览 / 常驻预览
   "REPLY_KEYS", "REPLY_SOURCE_LABEL", "REPLY_LAYOUT_ALL", "REPLY_ROW_MAX",
   "clampPerRow", "normalizeButtonStyle", "normalizeReplyButton", "normalizeReplyScene",
@@ -295,6 +297,76 @@ function runAssertions() {
   check(Object.keys(T.validateRow(T.TAB_BY_ID.items, castsRow)).length === 0,
     "buff_casts 是合法效果键（潮汐香 / 玉髓灯那种写法不报错）",
     JSON.stringify(T.validateRow(T.TAB_BY_ID.items, castsRow)));
+
+  /* 彩蛋效果串（easter_egg_defs 第 4 段）走的是**另一套解析器** `_calc._parse_easter_egg_defs`，
+     只认写死的 4 个键（扩展加不了）。和道具一样，写错的键插件静默忽略 ——
+     v1.18.32 之前这一列**完全没有校验**（表头 hint 写了键名，但填错不标红）。
+     下面的功能用例之外，还用「直接抠插件源码」的方式卡住两边不跑偏。 */
+  const eggTab = T.TAB_BY_ID.easter_eggs;
+  function eggRow(effects) { return { id: "eg", weight: 10, text: "✨ 惊喜", effects: effects }; }
+  check(T.EGG_EFFECT_KEY_NAMES.join(",") === "gold,luck,note,heal_bait",
+    "彩蛋效果键白名单 = gold / luck / note / heal_bait", T.EGG_EFFECT_KEY_NAMES.join("/"));
+  check(T.EGG_EFFECT_FLAG_KEYS.join(",") === "note,heal_bait",
+    "note / heal_bait 归为开关型（值不校验）", T.EGG_EFFECT_FLAG_KEYS.join("/"));
+  /* 与插件解析器对账：白名单必须逐项等于 _parse_easter_egg_defs 里那些 key in (...) 的字面量。
+     改解析器忘了改页面 → 这里当场红（页面那份清单没法从插件接口取，只能靠这条兜）。 */
+  const eggFnStart = calcSrc.indexOf("def _parse_easter_egg_defs");
+  let eggFn = eggFnStart < 0 ? "" : calcSrc.slice(eggFnStart + 1);
+  const eggFnEnd = eggFn.indexOf("\ndef ");
+  if (eggFnEnd >= 0) eggFn = eggFn.slice(0, eggFnEnd);
+  const pluginEggKeys = [];
+  const eggKeyRe = /key in \(([^)]*)\)/g;
+  let eggKeyHit;
+  while ((eggKeyHit = eggKeyRe.exec(eggFn)) !== null) {
+    eggKeyHit[1].split(",").forEach(function (k) {
+      const kk = k.trim().replace(/["']/g, "");
+      if (kk) pluginEggKeys.push(kk);
+    });
+  }
+  check(pluginEggKeys.slice().sort().join(",") === T.EGG_EFFECT_KEY_NAMES.slice().sort().join(","),
+    "页面彩蛋键白名单 == _calc._parse_easter_egg_defs 认的键",
+    "页面=" + T.EGG_EFFECT_KEY_NAMES.join("/") + " 插件=" + pluginEggKeys.join("/"));
+  check(T.EGG_EFFECT_HINT.indexOf("gold") >= 0 && T.EGG_EFFECT_HINT.indexOf("heal_bait") >= 0,
+    "彩蛋效果列的 tooltip 列出了全部键名");
+
+  check(Object.keys(T.validateRow(eggTab, eggRow(""))).length === 0, "彩蛋效果留空不算错");
+  check(Object.keys(T.validateRow(eggTab, eggRow("gold=12"))).length === 0, "gold=12 通过");
+  check(Object.keys(T.validateRow(eggTab, eggRow("luck=0.08"))).length === 0, "luck=0.08 通过");
+  check(Object.keys(T.validateRow(eggTab, eggRow("note=1"))).length === 0, "note=1 通过");
+  check(Object.keys(T.validateRow(eggTab, eggRow("heal_bait=1"))).length === 0, "heal_bait=1 通过");
+  check(Object.keys(T.validateRow(eggTab, eggRow("gold=12;luck=0.08"))).length === 0,
+    "多个效果分号分隔通过");
+  /* 出厂那几行的实际写法（含全角分隔符 / 千分位）一个都不能被标红 ——
+     `_defs_num` 会先剥掉千分位逗号，校验必须跟着放行。 */
+  const eggDefaults = T.state.data.easter_eggs || [];
+  const badEggDefaults = eggDefaults.filter(function (r) {
+    return Object.keys(T.validateRow(eggTab, r)).length;
+  });
+  check(eggDefaults.length > 0 && badEggDefaults.length === 0,
+    "出厂的 " + eggDefaults.length + " 条彩蛋全部通过校验",
+    badEggDefaults.map(function (r) { return r.id; }).join(" "));
+  check(Object.keys(T.validateRow(eggTab, eggRow("gold=1,200"))).length === 0,
+    "千分位逗号 gold=1,200 通过（插件 _defs_num 会剥掉逗号）");
+  check(Object.keys(T.validateRow(eggTab, eggRow("gold=1，200"))).length === 0,
+    "全角千分位 gold=1，200 也通过");
+  check(Object.keys(T.validateRow(eggTab, eggRow("gold：12；luck：0.08"))).length === 0,
+    "全角冒号 / 全角分号通过（解析器 replace 了 `：` 与 `；`）");
+  /* 缺等号：插件那边是 str.partition("=")，key = 整段、值 = 空 ——
+     开关型照旧算「打开」（不该标红），数字型会取 0（该校验拦住）。 */
+  check(Object.keys(T.validateRow(eggTab, eggRow("note"))).length === 0,
+    "光写 note（不带 =1）不标红 —— 插件本来就算它打开");
+  check(String(T.validateRow(eggTab, eggRow("gold")).effects).indexOf("gold") >= 0,
+    "光写 gold（不带值）会被标红");
+  check(!!T.validateRow(eggTab, eggRow("gol=12")).effects,
+    "拼错的键 gol 被标红（这正是补校验要挡的那种手滑）");
+  check(String(T.validateRow(eggTab, eggRow("gol=12")).effects).indexOf("彩蛋") >= 0,
+    "报错文案点名是「彩蛋效果键」，不和道具那张表混淆");
+  check(String(T.validateRow(eggTab, eggRow("luck=很多")).effects).indexOf("数字") >= 0,
+    "非数字的 luck 被标红");
+  check(!!T.validateRow(eggTab, eggRow("meat=2")).effects,
+    "道具表的键在彩蛋表里会被标红（两套解析器没有混用）");
+  check(!!T.validateRow(eggTab, eggRow("luck=0.5;gol=1")).effects,
+    "一行里混一个错键也会被标红");
 
   const ALLOWED_EFFECTS = T.ITEM_EFFECT_KEY_NAMES;
   const badEffects = [];
