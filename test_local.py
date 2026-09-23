@@ -10016,6 +10016,7 @@ async def main():
         and mod.DEFAULTS["offering_daily_limit"] == 1,
         "出厂额度：手气 120 竿 / 姜汤 5 次 / 洗髓丹不限（v1.18.29 起）/ 供奉 1 次",
     )
+
     # --- 钓手 buff 道具：用满额度就拒绝，并且只给剩下的竿数 ---
     qp = mod._default_player("89711")
     qp["gold"] = 10_000_000
@@ -10050,6 +10051,53 @@ async def main():
         "额度用完了" in text_of(out) and qp["items"]["lucky_jade"] == 10,
         "额度用满后拒绝使用，且一个道具都不扣",
     )
+    # --- 每件道具自己的每日上限（v1.18.46：道具表第 8 段，一件一件可配）---
+    # 站长要求「道具的每日使用上限可配置化」。写在 item_defs 第 8 段：
+    #     id|名称|emoji|价格|说明|效果|解锁等级|每日上限
+    _parsed = mod.CALC._parse_item_defs(
+        ["t_item|测试道具|🧪|10|说明|value_up=5|3|2"]
+    )
+    check(
+        _parsed["t_item"]["daily_limit"] == 2
+        and _parsed["t_item"]["unlock_level"] == 3,
+        f"道具表第 8 段 = 每日上限 -> {_parsed['t_item'].get('daily_limit')}",
+    )
+    check(
+        mod.CALC._parse_item_defs(["t2|没写上限|🧪|10|说明|value_up=5"])["t2"][
+            "daily_limit"
+        ] == 0,
+        "不写第 8 段 = 不限（0），老配置照常读",
+    )
+    _dq = make_plugin()
+    _dq.items["t_daily"] = {
+        "id": "t_daily", "name": "限额道具", "emoji": "🧪", "price": 1,
+        "desc": "测试", "unlock_level": 1, "need_rod": "",
+        "effects": {"value_up": 5}, "daily_limit": 2,
+    }
+    # 找一条能直接「用」的路径：投喂类需要水族馆栏位，这里用 value_up 走喂鱼分支
+    _dqp = mod._default_player("89777")
+    _dqp["items"] = {"t_daily": 5}
+    _dqp["aquarium"] = [mod._new_instance("carp", 1.0)]
+    await _dq._save_player(_dqp)
+    _dv = FakeEvent("89777")
+    _used = []
+    for _ in range(3):
+        await cmd(_dq, _dv, "用", "限额道具", "1")
+        _dqp = await _dq._load_player("89777")
+        _used.append(
+            (mod._safe_int(_dqp["items"].get("t_daily"), 0, 0),
+             mod._daily_used(_dqp, "item_t_daily"))
+        )
+    check(
+        _used[0] == (4, 1) and _used[1] == (3, 2) and _used[2] == (3, 2),
+        f"同一件道具每天只能用 daily_limit 次（第 3 次不扣货）-> {_used}",
+    )
+    _out3 = await cmd(_dq, _dv, "用", "限额道具", "1")
+    check(
+        "用满了" in text_of(_out3),
+        f"用满时给出明确提示 -> {text_of(_out3).splitlines()[-1][:50]}",
+    )
+
     # 跨天自动重置
     qp["daily_date"] = "2000-01-01"
     await quota._save_player(qp)

@@ -178,6 +178,7 @@ TEXTS: dict[str, str] = {
     "item.deco_disabled": "🪸 本服没开装饰位（decoration_slots = 0）",
     "item.deco_full": "{原文}",  # 动态文本
     "item.deco_none": "🪸 没有要摆的装饰道具了（先去 /钓鱼 道具 买）",
+    "item.daily_limit": "{原文}",  # 动态文本（带道具名与已用/上限）
     "item.breed_no_fish": "🐠 缸里空着，先放条鱼再谈培育",
     "item.breed_usage": "{原文}",  # 动态文本
     "item.breed_bad_slot": "🤔 没这个栏位，/钓鱼 水族馆 看看序号",

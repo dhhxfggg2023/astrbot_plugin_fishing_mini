@@ -2372,6 +2372,32 @@ class CommandsMixin:
             async for _r in self._say_msg(event, "bait.empty", event.plain_result("\n".join(lines))):
                 yield _r
 
+    def _note_item_used(
+        self,
+        player: dict[str, Any],
+        item_id: str,
+        count: int = 1,
+        bag: dict[str, Any] | None = None,
+    ) -> int:
+        """扣掉 ``count`` 个道具，并把它记进「今日用量」（v1.18.46）。
+
+        为什么单独一个口子：``/钓鱼 用`` 的消耗点散在六七个效果分支里
+        （扩展 / 手气 / 洗髓 / 姜汤 / 装饰 / 投喂……），以前每处都自己写
+        ``items[item_id] = ... - 1``。加「每件道具的每日上限」时，如果逐处补代码
+        就必然漏记某几个分支 —— 收口到这一个方法，新增分支只要照抄这一行。
+
+        Returns:
+            扣完之后**还剩几个**（可能为 0）。
+        """
+        bag = player.setdefault("items", {}) if bag is None else bag
+        left = max(0, _safe_int(bag.get(item_id), 0, 0) - max(0, int(count)))
+        bag[item_id] = left
+        used = max(0, int(count))
+        limit = _safe_int((self.items.get(item_id) or {}).get("daily_limit"), 0, 0)
+        if used and limit > 0:
+            _daily_add(player, f"item_{item_id}", used)
+        return left
+
     async def _cmd_use_item(
         self, event: AstrMessageEvent, user_id: str, a2: str, a3: str
     ):
@@ -2386,6 +2412,9 @@ class CommandsMixin:
         """
         async with self._lock_for(user_id):
             player = await self._load_player(user_id)
+            #: 入口快照库存：各「消耗分支」在扣完道具后统一走 `_note_item_used()`
+            #: 累计每日用量（每日上限就靠它；v1.18.46）。
+            _stock_before = dict(player.get("items") or {})
             item_id = self._find_item(a2)
             # 少打空格的容错：/钓鱼 用高级饲料 1、/钓鱼 用 高级饲料 1-3
             if item_id is None:
@@ -2421,6 +2450,22 @@ class CommandsMixin:
             item = self.items.get(item_id) or {}
             effects = item.get("effects") or {}
 
+            # --- 每日使用上限（v1.18.46：写在道具表第 8 段，一件一件可配）---
+            # 站长要求「道具的每日使用上限可配置化」。0 / 省略 = 不限，
+            # 于是「后期强度道具不能从早用到晚」这件事可以逐件调，不用加全局配置键。
+            daily_limit = _safe_int(item.get("daily_limit"), 0, 0)
+            if daily_limit > 0:
+                _daily_reset(player, self._today_text())
+                daily_key = f"item_{item_id}"
+                used_today = _daily_used(player, daily_key)
+                if used_today >= daily_limit:
+                    async for _r in self._say_msg(event, "item.daily_limit", event.plain_result(
+                            f"🌙 {self._item_label(item_id)}今天已经用满了"
+                            f"（{used_today}/{daily_limit} 次），明天再来"
+                        )):
+                        yield _r
+                    return
+
             # --- 扩展效果（v1.13.0：extensions/*.py 注册的键）-----------------
             # 只用扩展键的道具，插件默认不认识（下面每个分支都不会命中），
             # 所以这里帮扩展把「消耗一件 + 保存 + 提示」做完；和内置效果混在
@@ -2428,7 +2473,7 @@ class CommandsMixin:
             has_ext, has_builtin = _has_ext_effect(effects)
             if has_ext and not has_builtin:
                 ext_lines = _ext_effect_lines(self, player, item_id, effects)
-                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                self._note_item_used(player, item_id, 1, items)
                 await self._save_player(player)
                 async for _r in self._say_msg(
                     event,
@@ -2465,7 +2510,7 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
-                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                self._note_item_used(player, item_id, 1, items)
                 gain = _clamp(_safe_number(effects.get("buff_quality"), 0.0), 0.0, 2.0)
                 # 每件道具自己的持续竿数（v1.18.20）：`buff_casts=40`；
                 # 没写就用全局 buff_cast_count。以前**所有**手气道具都用全局值，
@@ -2545,7 +2590,7 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
-                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                self._note_item_used(player, item_id, 1, items)
                 floor = _clamp(
                     _safe_number(effects.get("quality_floor"), 0.0), 0.0, _quality_ceil()
                 )
@@ -2681,7 +2726,7 @@ class CommandsMixin:
                             hit_myth = True
                             break          # 出了神品就不用再掷了
                         best = max(best, _roll_quality_mult(weights))
-                    items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                    self._note_item_used(player, item_id, 1, items)
                     used += 1
                     _daily_add(player, "reroll", 1)
                     eaten = _reroll_used(instance, today) + 1
@@ -2791,7 +2836,7 @@ class CommandsMixin:
                         yield _r
                     return
                 place = max(1, min(want, owned, room))
-                items[item_id] = owned - place
+                self._note_item_used(player, item_id, place, items)
                 replaced_note = ""
                 if replace_idx is not None and replaced is not None:
                     # 顶掉最弱的那个（只顶 1 个；其余仍按空位算）
@@ -2802,7 +2847,7 @@ class CommandsMixin:
                     )
                     player["decorations"] = decos
                     place = 1
-                    items[item_id] = owned - 1
+                    self._note_item_used(player, item_id, 1, items)
                 # 逐个入列：每个装饰记自己的 ts / expire_ts，互相独立计时
                 for _ in range(place):
                     player.setdefault("decorations", []).append(
@@ -2888,7 +2933,7 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
-                items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                self._note_item_used(player, item_id, 1, items)
                 _daily_add(player, "heal", 1)
                 player["stamina"] = min(cap, before + heal)
                 saved = await self._save_player(player)
@@ -2944,7 +2989,7 @@ class CommandsMixin:
                         lines.append(f"　{idx}. 已经培育到上限（+20 次）")
                         continue
                     instance["feed_bonus"] = min(20, before + bonus)
-                    items[item_id] = _safe_int(items.get(item_id), 0, 0) - 1
+                    self._note_item_used(player, item_id, 1, items)
                     used += 1
                     lines.append(
                         f"　{idx}. {_instance_line(instance, with_value=False)}"
@@ -3008,7 +3053,9 @@ class CommandsMixin:
                 ):
                     skipped_full.append(idx)
                     continue
-                stock -= 1
+                # ⚠️ 走统一的消耗口：它同时扣库存 + 记「今日用量」
+                # （每件道具的每日上限就靠这个计数；v1.18.46）
+                stock = self._note_item_used(player, item_id, 1, items)
                 used += 1
                 _, delta = _apply_feed(instance, effects)
                 value_gain += delta
@@ -3047,7 +3094,7 @@ class CommandsMixin:
                 lines.append(
                     f"　（跳过已喂满的栏位 {len(skipped_full)} 条）"
                 )
-            # 还有货就给「再次使用」按钮（照着刚才那条指令再发一次）
+            # 还有货就给「再次使用」按钮（照着刚才那条命令再发一次）
             async for _r in self._say_msg(
                 event,
                 "item.feed_done",

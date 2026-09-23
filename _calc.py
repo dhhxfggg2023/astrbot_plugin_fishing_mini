@@ -443,7 +443,8 @@ def _parse_item_defs(raw: Any, *, warn: Any = None) -> dict[str, dict[str, Any]]
     """解析道具定义。返回 {item_id: {...}}。
 
     格式：``id|名称|emoji|单价|说明|效果``，v1.18.16 起可再加第 7 段
-    **解锁等级**（省略 = 1 级，老配置照常读）：
+    **解锁等级**（省略 = 1 级，老配置照常读）；
+    v1.18.46 起可再加第 8 段 **每日使用上限**（省略 / 0 = 不限）：
     道具的价格是**一口价**，但它的收益随鱼价水涨船高，所以后期道具必须靠等级门槛
     来卡「什么时候买才划算」，否则要么前期买亏、要么后期白菜价。
 
@@ -480,6 +481,10 @@ def _parse_item_defs(raw: Any, *, warn: Any = None) -> dict[str, dict[str, Any]]
             "desc": parts[4],
             "effects": _parse_effects(parts[5]),
             "unlock_level": max(1, _to_int(parts[6], 1)) if len(parts) > 6 else 1,
+            #: 第 8 段：这件道具**每天最多用几次**（0 / 省略 = 不限）。
+            #: 站长要求「道具的每日使用上限可配」—— 写在道具表里就能一件一件调，
+            #: 不用为每件道具加一个全局配置键（那会把配置项撑爆）。
+            "daily_limit": max(0, _to_int(parts[7], 0)) if len(parts) > 7 else 0,
         }
     if warn and (skipped or duplicate or unknown_fx):
         bits: list[str] = []
@@ -2728,6 +2733,7 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("item.deco_disabled", "item", "本服没有开放装饰位", ""),
     ("item.deco_full", "item", "装饰位满了（且没有比场上更好的可以顶掉）", ""),
     ("item.deco_none", "item", "要摆的装饰道具已经没有了", ""),
+    ("item.daily_limit", "item", "这件道具今天已经用满了（每件道具可配每日上限）", ""),
     ("item.deco_used", "item", "装饰已生效", ""),
     ("item.breed_no_fish", "item", "空缸不能培育", ""),
     ("item.breed_usage", "item", "培育用法说明", ""),
