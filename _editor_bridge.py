@@ -245,6 +245,34 @@ def _log_debug(text: str) -> None:
         pass
 
 
+#: `_conf_schema.json` 的缓存（进程内读一次就够；文件是插件自带的，不会在运行时变）
+_CONFIG_SCHEMA_CACHE: dict[str, Any] | None = None
+
+
+def _config_schema() -> dict[str, Any]:
+    """读插件自带的 ``_conf_schema.json``（配置项的说明/类型/默认值）。
+
+    用途：下发给编辑器页面，让「插件有、页面没登记」的新键**自动**长出一行
+    （见 ``_editor_config_payload``）。读不到就返回空 dict，页面退回老行为。
+    """
+    global _CONFIG_SCHEMA_CACHE
+    if _CONFIG_SCHEMA_CACHE is not None:
+        return _CONFIG_SCHEMA_CACHE
+    data: dict[str, Any] = {}
+    try:
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "_conf_schema.json"
+        )
+        with open(path, encoding="utf-8-sig") as fp:
+            parsed = json.load(fp)
+        if isinstance(parsed, dict):
+            data = {str(k): v for k, v in parsed.items() if isinstance(v, dict)}
+    except Exception as e:  # pragma: no cover - 拿不到就当没这功能
+        _log_debug(f"读取 _conf_schema.json 失败：{e}")
+    _CONFIG_SCHEMA_CACHE = data
+    return data
+
+
 def number_whitelist() -> list[str]:
     """可被 ``save_numbers`` 改写的配置键（从 DEFAULTS 里筛出来）。
 
@@ -491,6 +519,13 @@ class EditorApiMixin:
             payload["editor_status"] = getattr(self, "_editor_status_text", "") or ""
         payload["status"] = "ok"
         payload["transport"] = "plugin-api"
+        # 配置项的**元信息**（v1.18.47）：把 _conf_schema.json 的 description/type/default
+        # 一并发给页面。于是「插件新加了配置键、页面还没登记」时，页面能**自动**长出一行
+        # （用 schema 里的说明当标签），而不是把站长挡在「未登记、没有入口」的红行上。
+        # 这样新增配置项不再需要手抄进页面的 NUMBER_KEYS —— 从根上治「配置 UI 老出问题」。
+        schema = _config_schema()
+        if schema:
+            payload["config_schema"] = schema
         # 效果键清单（v1.13.0）：道具页的效果下拉/校验都读这里，不再写死清单，
         # 于是改 _effects.EFFECTS 或加一个扩展，页面会自动多出新键。
         fx = _effects_module()

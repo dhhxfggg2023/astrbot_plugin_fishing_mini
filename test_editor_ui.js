@@ -156,6 +156,8 @@ const hookNames = [
   // v1.18.16：全量配置键（每个键都要有编辑入口）+ 「🔎 全部配置键」视图 + 入口行渲染
   "DEMO_NUMBER_VALUES", "demoNumberRows", "demoConfig", "numberEntryOf", "keyEntryLabel",
   "keyEntryEditable", "KEY_DOCS", "applyKeyDocs", "numberRowFromItem", "configKeyCoverage",
+  // v1.18.47：新配置项自动登记（插件下发 config_schema，页面据此现造一行）
+  "numberRowFromSchema", "schemaDef",
   "configKeyCoverageNow", "CONFIG_PAYLOAD_EXTRA_KEYS", "keyOverviewRows", "keysFilteredRows",
   "renderKeysTable", "renderKeysSummary", "renderKeysTab", "refreshKeysMain", "gotoConfigKey",
   "copyKeyName", "numberEntryCellHtml", "shortValueText", "numberRowPlan",
@@ -1819,6 +1821,26 @@ async function configKeysCoverage() {
     "视图上真的会出红条点名（不是只在函数里算）");
   check(redHtml.indexOf("没有入口 <b>1</b>") > 0, "汇总条上的「没有入口」跟着变成 1");
   T.state.configKeys = savedKeys;
+
+  /* v1.18.47：插件把 _conf_schema.json 一起下发了 —— 页面没登记、但 schema 认得的键
+     要**自动**长出一行（走数值页），不再把站长挡在红行上。 */
+  const savedSchema = T.state.schema;
+  T.state.schema = { brand_new_plugin_key: { description: "插件新加的键（说明来自 schema）", type: "int", default: 7 } };
+  const autoCov = T.configKeyCoverage(schemaKeys.concat(["brand_new_plugin_key"]));
+  check(autoCov.missing.length === 0 && autoCov.auto.indexOf("brand_new_plugin_key") >= 0,
+    "schema 认得的新键会被自动登记（不再算「没有入口」）",
+    "missing=" + autoCov.missing.join(",") + " auto=" + autoCov.auto.join(","));
+  const autoRow = T.numberRowFromSchema("brand_new_plugin_key", 9);
+  check(autoRow.entry === "numbers" && autoRow.key === "brand_new_plugin_key" &&
+    autoRow.desc.indexOf("schema") > 0,
+    "自动生成的行有入口、说明取自 schema", autoRow.desc);
+  const autoKeys = T.state.configKeys;
+  T.state.configKeys = schemaKeys.concat(["brand_new_plugin_key"]);
+  const autoHtml = T.renderKeysTab(T.TAB_BY_ID.keys);
+  check(autoHtml.indexOf("页面还不认识的配置键") < 0,
+    "视图上不再出红条（这一行已经自动登记了）");
+  T.state.configKeys = autoKeys;
+  T.state.schema = savedSchema;
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();

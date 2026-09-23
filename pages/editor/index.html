@@ -1948,6 +1948,7 @@ table.grid td.actions .btn { vertical-align: middle; }
    */
   var CONFIG_PAYLOAD_EXTRA_KEYS = [
     "status", "transport", "effect_keys", "effect_hint", "extensions",
+    "config_schema",   // v1.18.47：配置项的元信息（不是配置项本身）
     "metadata", "i18n", "config"
   ];
 
@@ -2017,6 +2018,7 @@ table.grid td.actions .btn { vertical-align: middle; }
   function configKeyCoverage(rawKeys) {
     var entries = {};
     var badEntry = [];
+    var auto = [];
     NUMBER_KEYS.forEach(function (item) {
       var key = toText(item[0]);
       if (!key) return;
@@ -2032,6 +2034,17 @@ table.grid td.actions .btn { vertical-align: middle; }
       seen[key] = true;
       keys.push(key);
     });
+    /* v1.18.47：插件把 _conf_schema.json 一起下发了（state.schema）。
+       页面没登记的键，只要 schema 里有它，就**自动**给一个可编辑入口（走数值页）——
+       于是「插件加了新配置项、页面还没补行」不再需要手抄，站长也不会被挡在红行上。
+       注意：这里只影响「页面有没有入口」，取值范围仍由插件的 number_whitelist 把关。 */
+    keys.forEach(function (k) {
+      if (entries[k]) return;
+      if (schemaDef(k)) {
+        entries[k] = "numbers";
+        auto.push(k);
+      }
+    });
     var missing = keys.filter(function (k) { return !entries[k]; });
     var counts = { numbers: 0, tab: 0, panel: 0, total: keys.length, missing: missing.length };
     keys.forEach(function (k) {
@@ -2042,7 +2055,43 @@ table.grid td.actions .btn { vertical-align: middle; }
       else counts.tab++;
     });
     return {
-      keys: keys, entries: entries, missing: missing, badEntry: badEntry, counts: counts
+      keys: keys, entries: entries, missing: missing, badEntry: badEntry,
+      auto: auto, counts: counts
+    };
+  }
+
+  /** 插件下发的 schema 里这个键的元信息（没有就返回 null）。 */
+  function schemaDef(key) {
+    var s = state.schema;
+    if (!s || typeof s !== "object") return null;
+    var d = s[toText(key)];
+    return (d && typeof d === "object") ? d : null;
+  }
+
+  /** 从 schema 元信息现造一行（页面没登记的键走这里，v1.18.47）。 */
+  function numberRowFromSchema(key, value) {
+    var d = schemaDef(key) || {};
+    var def = d["default"];
+    var isText = (toText(d.type) === "text") ||
+      (typeof def === "string" && def.length > 40) ||
+      Array.isArray(def);
+    var noValue = value === undefined || value === null;
+    var shown = "";
+    if (!noValue) {
+      shown = isText ? toText(value) : (isFinite(toNum(value)) ? toNum(value) : toText(value));
+    }
+    return {
+      key: toText(key),
+      label: toText(key),
+      value: shown,
+      unit: toText(d.type),
+      desc: toText(d.description || d.hint) || "（插件下发了这个键，页面按 schema 自动登记）",
+      text: isText,
+      group: "自动登记（新配置项）",
+      entry: "numbers",
+      entryLabel: keyEntryLabel("numbers"),
+      hasValue: !noValue,
+      auto: true
     };
   }
 
@@ -2319,15 +2368,30 @@ table.grid td.actions .btn { vertical-align: middle; }
     state.configKeys = Object.keys(raw).filter(function (k) {
       return CONFIG_PAYLOAD_EXTRA_KEYS.indexOf(k) < 0;
     });
+    /* v1.18.47：插件把 _conf_schema.json 一起下发了 —— 页面没登记的键据此自动生成行，
+       所以「插件新加配置项」不再需要手抄进 NUMBER_KEYS。 */
+    state.schema = (raw.config_schema && typeof raw.config_schema === "object")
+      ? raw.config_schema : null;
     // 插件要是愿意下发配置项说明（key_docs），就用它的替换页面内置那份
     applyKeyDocs(raw.key_docs || (status && status.key_docs));
     var allowed = (status && status.numbers_editable) || null;
     out.numbers = [];
+    var _listed = {};
     NUMBER_KEYS.forEach(function (item) {
       var key = toText(item[0]);
+      _listed[key] = true;
       if (!(key in raw)) return;      // 插件这次没下发这个键（老版本配置）：行不显示，免得给假值
       // 白名单是最终权威（不在里面就只读；放行了就连「插件面板项」也跟着可改）
       out.numbers.push(numberRowPlan(item, raw[key], allowed));
+    });
+    /* 自动登记：配置里有、NUMBER_KEYS 没有、但 schema 认得的键 —— 现造一行 */
+    state.configKeys.forEach(function (key) {
+      if (_listed[key] || !(key in raw) || !schemaDef(key)) return;
+      var row = numberRowFromSchema(key, raw[key]);
+      var ok = !!(allowed && allowed.indexOf(key) >= 0);
+      row.readonly = !ok;
+      row.entryLabel = ok ? keyEntryLabel("numbers") : "只读";
+      out.numbers.push(row);
     });
 
     var skippedHint = Object.keys(skipped).map(function (k) {
@@ -3458,6 +3522,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     userEditedKeys: [],         // 站长自己改过的配置键（插件回写：这些不会被升级覆盖）
     /* ---- 🔎 全部配置键（v1.18.16）---- */
     configKeys: [],             // 插件下发的配置键清单（离线 = NUMBER_KEYS 全量）
+    schema: null,               // 插件下发的 _conf_schema.json（页面没登记的键据此自动生成行）
     keysQuery: "",              // 「全部配置键」页的搜索词（按键名 / 中文名 / 说明 / 分组筛）
     playersScanLimit: 2000,
     snapshotPick: "",           // 当前选中的存档名
@@ -4420,6 +4485,15 @@ table.grid td.actions .btn { vertical-align: middle; }
     configKeyCoverageNow().missing.forEach(function (key) {
       if (seen[key]) return;
       seen[key] = true;
+      /* v1.18.47：schema 认得这个键 -> 现造一行（页面没登记也能改），
+         不再一律标红「没有入口」。只有 schema 也不认识时才报「未登记」。 */
+      if (schemaDef(key)) {
+        var auto = numberRowFromSchema(key, values[key] && values[key].value);
+        auto.entryTab = "";
+        auto.known = true;
+        rows.push(auto);
+        return;
+      }
       rows.push({
         key: key, label: key, unit: "", value: "", text: false, group: "未登记",
         desc: "插件下发了这个键，但页面还没有它的编辑入口 —— 这是页面漏项，请把这一行补进 NUMBER_KEYS。",
