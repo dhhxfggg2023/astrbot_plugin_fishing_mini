@@ -7,9 +7,9 @@
 #   * pull request          -> 只构建 + 冒烟测试，不推送（fork 的 PR 没有写权限）
 #   * 手动 workflow_dispatch
 #
-# 产物：ghcr.io/<用户名>/astrbot_plugin_qq_fishing:latest
+# 产物：ghcr.io/<用户名>/astrbot_plugin_fishing_mini:latest
 #   ⚠️ 首次推送后，包默认是 private：到
-#      https://github.com/users/<用户名>/packages/container/astrbot_plugin_qq_fishing/settings
+#      https://github.com/users/<用户名>/packages/container/astrbot_plugin_fishing_mini/settings
 #      把 Visibility 改成 Public，别人才能匿名 docker pull。
 # =============================================================================
 name: Build Docker image

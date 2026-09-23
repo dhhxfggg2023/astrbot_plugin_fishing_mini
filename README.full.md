@@ -3,7 +3,7 @@
 > 📖 这是**详细版文档**：玩法机制、数值平衡、全部配置项、指令一览、更新日志与常见问题。
 > 只想**快速把它跑起来**？看 → **[README.md](README.md)**（部署 + 上手）。
 
-**v1.18.40** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
+**v1.18.41** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
 （已在 AstrBot v4.28.1 + Python 3.12 上实测）。
 
 **271 种水族 · 19 个钓点 · 10 档鱼饵 · 8 档鱼竿 · 13 种养成道具 · 5 档鱼种品质 · 6 档个体品质 ·
@@ -231,17 +231,17 @@ OneBot 的 access token 都属于 AstrBot 主程序，存在 `data/cmd_config.js
 推送到 `main`（或手动触发 workflow）后，GitHub Actions 会自动构建镜像并推到 GHCR：
 
 ```bash
-docker pull ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing:latest
+docker pull ghcr.io/dhhxfggg2023/astrbot_plugin_fishing_mini:latest
 
 docker run -d --name astrbot \
   -p 6185:6185 -p 6199:6199 \
   -v "$PWD/data:/AstrBot/data" \
   --env-file .env -e TZ=Asia/Shanghai \
-  ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing:latest
+  ghcr.io/dhhxfggg2023/astrbot_plugin_fishing_mini:latest
 ```
 
 - ⚠️ 首次使用前，到
-  [package 设置](https://github.com/users/dhhxfggg2023/packages/container/astrbot_plugin_qq_fishing/settings)
+  [package 设置](https://github.com/users/dhhxfggg2023/packages/container/astrbot_plugin_fishing_mini/settings)
   把可见性改成 **Public** —— GHCR 的包默认是 private，别人匿名 `docker pull` 会 404。
 - 每次构建都会在**真容器里跑冒烟测试**：插件文件齐全、`_conf_schema.json` 是合法 JSON、
   容器内 `py_compile` 通过、入口脚本能把插件同步进 `data/plugins/`
@@ -1615,6 +1615,25 @@ big_fat_fish|大肥鱼|稀有|120|*:0.15|深海里最肥的一条
 
 ## 📝 更新日志
 
+### v1.18.41（仓库名 / 镜像名也统一成 astrbot_plugin_fishing_mini）
+
+v1.18.40 把**插件名**统一了，但 GitHub **仓库名**和镜像名还是旧的
+`astrbot_plugin_qq_fishing` —— 这一版补齐：
+
+| 项目 | 旧 | 新 |
+| --- | --- | --- |
+| 仓库地址 | `github.com/dhhxfggg2023/astrbot_plugin_qq_fishing` | `.../astrbot_plugin_fishing_mini` |
+| 镜像 | `ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing` | `.../astrbot_plugin_fishing_mini` |
+
+改的是 `metadata.yaml` 的 `repo:`、README 里的 `git clone` / `docker pull` /
+package 设置链接、以及 CI 注释里的产物名（CI 本身用的是
+`ghcr.io/${{ github.repository }}`，会跟着仓库名自动变，不用改）。
+
+GitHub 对旧地址会做 **301 重定向**，所以老链接不会断。
+
+> ⚠️ 作者名 `dhhxfggg2023` 和「作者名从 `dhhxfggg` 改过来」这类记录**没有动** ——
+> 那是历史事实，也是「找回旧作用域存档」功能的判断依据（见 `_legacy.py`）。
+
 ### v1.18.40（插件名统一 + 连钓战报不再刷屏）
 
 **1. 插件名统一成 `astrbot_plugin_fishing_mini`**
@@ -1629,8 +1648,9 @@ big_fat_fish|大肥鱼|稀有|120|*:0.15|深海里最肥的一条
 入口脚本默认值、编辑器页面的路由回退名、以及测试里的断言全部改成
 `astrbot_plugin_fishing_mini`。
 
-> ⚠️ **GitHub 仓库名 / 镜像名没有动**（`github.com/dhhxfggg2023/astrbot_plugin_qq_fishing`）：
-> 那是真实存在的远端仓库地址，改了会断链。要一起改的话得先在 GitHub 上改仓库名。
+> **仓库名 / 镜像名也在同一版一起改了**：`astrbot_plugin_qq_fishing` →
+> `astrbot_plugin_fishing_mini`（GitHub 会把旧地址 301 重定向到新地址，老链接不会断）。
+> 镜像随之变成 `ghcr.io/dhhxfggg2023/astrbot_plugin_fishing_mini:latest`。
 
 **2. 连钓战报堆叠显示（不再一竿一行）**
 

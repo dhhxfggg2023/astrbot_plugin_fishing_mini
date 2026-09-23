@@ -17,7 +17,7 @@
 ### 方式一：Docker Compose（推荐，AstrBot + 插件一体镜像）
 
 ```bash
-git clone https://github.com/dhhxfggg2023/astrbot_plugin_qq_fishing.git
+git clone https://github.com/dhhxfggg2023/astrbot_plugin_fishing_mini.git
 cd astrbot_plugin_fishing_mini
 
 cp .env.example .env          # 填机器人凭据，见下表
@@ -51,16 +51,16 @@ docker compose logs -f astrbot
 ### 方式二：用 GitHub Actions 构建好的镜像（免本地构建）
 
 ```bash
-docker pull ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing:latest
+docker pull ghcr.io/dhhxfggg2023/astrbot_plugin_fishing_mini:latest
 
 docker run -d --name astrbot \
   -p 6185:6185 -p 6199:6199 \
   -v "$PWD/data:/AstrBot/data" \
   --env-file .env -e TZ=Asia/Shanghai \
-  ghcr.io/dhhxfggg2023/astrbot_plugin_qq_fishing:latest
+  ghcr.io/dhhxfggg2023/astrbot_plugin_fishing_mini:latest
 ```
 
-首次使用前要到 [package 设置](https://github.com/users/dhhxfggg2023/packages/container/astrbot_plugin_qq_fishing/settings)
+首次使用前要到 [package 设置](https://github.com/users/dhhxfggg2023/packages/container/astrbot_plugin_fishing_mini/settings)
 把可见性改成 **Public**，否则匿名 `docker pull` 会 404。
 
 ### 方式三：装进已有的 AstrBot（不用 Docker）
