@@ -1765,6 +1765,43 @@ async def main():
     )
     check(p["items"]["feed_basic"] == 0, "道具按条数扣完即停")
 
+    # --- v1.18.37：界面上的栏位号 = 指令里的栏位号（喂完/洗完也不会错位）---
+    # 站长报的：/钓鱼 水族馆 数出来的第 N 条，和 /钓鱼 洗 N 作用的那条不是同一条鱼。
+    # 根因：缸里只在「放鱼」时排过序，投喂/洗髓改了估值却不重排 —— 界面是现排的
+    # （所以看着是对的），指令却按存档里的旧顺序数。
+    _aq = make_plugin()
+    _aqp = mod._default_player("89511")
+    _aqp["inventory"] = [mod._new_instance("carp", 1.0) for _ in range(3)]
+    await _aq._save_player(_aqp)
+    await cmd(_aq, FakeEvent("89511"), "水族馆", "放", "全部")
+    _aqp = await _aq._load_player("89511")
+    _aqp["items"] = {"feed_divine": 3, "growth_tonic": 1}
+    await _aq._save_player(_aqp)
+    _target = _aqp["aquarium"][-1]["id"]      # 喂之前它在缸里排最后
+    await cmd(_aq, FakeEvent("89511"), "用", "仙露", "3")
+    _aqp = await _aq._load_player("89511")
+    check(
+        _aqp["aquarium"][0]["id"] == _target,
+        "喂过仙露（估值 +600）的那条现在排第 1：存档顺序 == 展示顺序（读档就重排）",
+    )
+    check(
+        [x["id"] for x in _aqp["aquarium"]]
+        == [x["id"] for x in sorted(_aqp["aquarium"], key=mod._sort_key)],
+        "缸里的顺序就是 _sort_key 的顺序（界面与指令都按它数）",
+    )
+    # 真指令走一遍：栏位 1 必须作用在展示中的第 1 条（也就是刚喂过的那条）
+    await cmd(_aq, FakeEvent("89511"), "用", "育灵水", "1")
+    _aqp = await _aq._load_player("89511")
+    check(
+        _aqp["aquarium"][0]["id"] == _target
+        and mod._safe_int(_aqp["aquarium"][0].get("feed_bonus"), 0, 0) > 0
+        and all(
+            mod._safe_int(x.get("feed_bonus"), 0, 0) == 0
+            for x in _aqp["aquarium"][1:]
+        ),
+        "「用 育灵水 1」作用在界面上第 1 条（玩家看到的那条）",
+    )
+
     # 粘连写法：用高级饲料1
     p["items"] = {"feed_premium": 1}
     await plugin2._save_player(p)
@@ -5654,6 +5691,7 @@ async def main():
         f"buff 还在身上时背包里的玉髓灯也不会被自动吃掉（{_bag_before} → "
         f"{p_auto['items'].get('jade_lantern')}）",
     )
+
     # 没指定就不替他买
     p_auto["auto_buff_item"] = ""
     p_auto["buff_casts_left"] = 0

@@ -1942,6 +1942,8 @@ class CommandsMixin:
 
             # ---- 取出（支持批量序号）----
             if sub in ("取", "取出", "拿", "take"):
+                # 先按展示顺序排好：界面上第几条 = 这里取第几条（见 _calc._sort_tank）
+                self._sort_aquarium(aquarium)
                 indices = self._parse_indices(spec_text, aquarium)
                 if not indices:
                     async for _r in self._say_msg(event, "aquarium.take_usage", event.plain_result(
@@ -1977,6 +1979,8 @@ class CommandsMixin:
 
             # ---- 卖掉馆藏（支持批量序号）----
             if sub in ("卖", "卖出", "sell"):
+                # 同上：序号以界面上的展示顺序为准
+                self._sort_aquarium(aquarium)
                 indices = self._parse_indices(spec_text, aquarium)
                 if not indices:
                     async for _r in self._say_msg(event, "aquarium.sell_usage", event.plain_result(
@@ -2602,6 +2606,9 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
+                # 序号以 /钓鱼 水族馆 的展示顺序为准（投喂/洗髓改过估值后，缸里的
+                # 顺序会变，这里排一遍才不会指错鱼 —— v1.18.37）
+                self._sort_aquarium(reroll_tank)
                 picked = self._parse_indices(a3, reroll_tank)
                 if not picked:
                     async for _r in self._say_msg(event, "item.reroll_bad_slot", event.plain_result(
@@ -2865,6 +2872,7 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
+                self._sort_aquarium(tank)
                 picked = self._parse_indices(a3, tank)
                 if not picked:
                     async for _r in self._say_msg(event, "item.breed_bad_slot", event.plain_result("🤔 栏位号不对，/钓鱼 水族馆 看看序号")):
@@ -2916,6 +2924,8 @@ class CommandsMixin:
                 async for _r in self._say_msg(event, "item.feed_no_fish", event.plain_result("🐠 水族馆是空的，先把鱼放进去养")):
                     yield _r
                 return
+            # 序号以展示顺序为准（见 _calc._sort_tank）
+            self._sort_aquarium(aquarium)
             # 不带栏位 = 喂全缸（「喂养对所有鱼生效」）
             if not (a3 or "").strip():
                 slots = list(range(1, len(aquarium) + 1))

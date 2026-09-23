@@ -1812,6 +1812,10 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
                 instance = _repair_instance(item)
                 if instance is not None:
                     aquarium.append(instance)
+            # 读档就排成展示顺序：这个顺序**就是栏位号**（见 _sort_tank）。
+            # 投喂 / 洗髓会改估值，存档里的顺序会「过期」，不在这里重排的话
+            # 玩家照着 /钓鱼 水族馆 数出来的号会指到另一条鱼（v1.18.37 修）。
+            _sort_tank(aquarium)
             player["aquarium"] = aquarium
 
         # --- 图鉴（键可能是 fish_id，也可能是 fish_id#variant 的变异条目）---
@@ -2234,6 +2238,21 @@ def _sort_key(instance: dict[str, Any]) -> tuple[int, int, int]:
         -RARITY_RANK.get(_fish_rarity(instance.get("fish_id", "")), 0),
         -_instance_value(instance),
     )
+
+
+def _sort_tank(aquarium: list[dict[str, Any]]) -> None:
+    """把缸里的鱼**就地上**排成展示顺序（``_sort_key``）。
+
+    ⚠️ 这个顺序就是玩家看到的栏位号：``/钓鱼 水族馆`` 的每一行、
+    以及 ``用 洗髓丹 2`` / ``用 高级饲料 2`` / ``水族馆 取 2`` / ``水族馆 卖 2``
+    里的那个「2」，全都必须是同一条鱼。
+    以前只有「放鱼」和「看缸」会排，投喂/洗髓改了估值却不重排 —— 于是缸里
+    的顺序悄悄「过期」：界面显示第 1 条、指令却作用在另一条上（v1.18.37 修）。
+    """
+    try:
+        aquarium.sort(key=_sort_key)
+    except Exception:
+        pass
 
 
 # -----------------------------------------------------------------------------

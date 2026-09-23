@@ -563,12 +563,10 @@ class ViewsMixin:
     def _sort_aquarium(aquarium: list[dict[str, Any]]) -> None:
         """把缸里的鱼排成固定顺序（变异 > 个体品质 > 鱼种品质 > 价值）。
 
-        展示顺序和「取出/卖出 N」的序号必须一致，否则玩家会对不上号。
+        展示顺序和「取 / 卖 / 投喂 / 洗髓 的栏位号」必须一致，否则玩家会对不上号
+        （v1.18.37 修：读档与每个按序号取鱼的入口都会走一遍，见 _calc._sort_tank）。
         """
-        try:
-            aquarium.sort(key=_sort_key)
-        except Exception:
-            pass
+        _sort_tank(aquarium)
 
     def _aquarium_view(self, player: dict[str, Any]) -> str:
         aquarium: list[dict[str, Any]] = player.get("aquarium") or []
