@@ -3593,16 +3593,44 @@ class FishingPlugin(
                 logger.debug(f"更新玩家索引失败：{e}")
 
     async def _player_ids(self) -> list[str]:
-        """已知的全部玩家 ID。"""
+        """已知的全部玩家 ID = KV 里的索引 ∪ 数据库里实际有的 ``player_*`` 行。
+
+        ⚠️ **不能只认索引**（v1.18.43 修）：``player_index`` 是插件自己攒的，
+        一旦它漏登记（改名换 scope、手工恢复存档、进程在写索引前被杀……），
+        那些玩家就只剩库里那几行 —— 数据明明在，编辑器和「导出全部」却永远列不出来，
+        站长看到的就是「我的人只剩两个了」。
+        库这一侧只按**当前作用域**查，不会串到别的插件/旧作用域去。
+        """
+        ids: list[str] = []
         try:
             index = await self.get_kv_data("player_index", None)
             if isinstance(index, str):
                 index = json.loads(index)
             if isinstance(index, list):
-                return [str(x) for x in index if str(x).strip()]
+                ids = [str(x) for x in index if str(x).strip()]
         except Exception as e:
             logger.debug(f"读取玩家索引失败：{e}")
-        return []
+        try:
+            found = await asyncio.to_thread(
+                LEGACY.discover_player_ids,
+                LEGACY.astrbot_db_path(),
+                str(self.plugin_id or ""),
+            )
+        except Exception as e:  # 发现失败就只用索引，不影响正常功能
+            logger.debug(f"按作用域发现玩家失败：{e}")
+            found = []
+        added = [uid for uid in found if uid not in ids]
+        if added:
+            ids.extend(added)
+            logger.info(
+                f"玩家索引缺 {len(added)} 名（库里查到的），已补进索引："
+                f"{'、'.join(added[:6])}{'…' if len(added) > 6 else ''}"
+            )
+            try:
+                await self.put_kv_data("player_index", _json_dumps(ids[-5000:]))
+            except Exception as e:
+                logger.debug(f"回写补全后的索引失败：{e}")
+        return ids
 
     async def _dump_all_players(self) -> dict[str, Any]:
         """把索引里的玩家逐个读出来（信封原样带上）。"""

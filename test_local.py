@@ -6693,11 +6693,14 @@ async def main():
         old_gone = _blank("L70001", 4321, 88)
         old_dup = _blank("L70002", 999, 7)
         old_mention = _blank("L70003", 777, 12)
+        # 当前 scope 里的一个「索引漏登记」的玩家（v1.18.43 的兜底要能发现他）
+        _cur_scope = plugin_d.plugin_id
         rows = [
             (old_scope, "player_L70001", _kv(old_gone)),
             (old_scope, "player_L70002", _kv(old_dup)),
             # 真库里真有一条这种键：uid 被打成了「@某人」的样子
             (old_scope, "player_<@L70003>", _kv(old_mention)),
+            (_cur_scope, "player_L70009", _kv_enveloped(_blank("L70009", 555, 9))),
             (old_scope, "leaderboard", json.dumps({"val": json.dumps({"L70001": 3})})),
             ("someoneelse/other_plugin", "player_70003", _kv(old_gone)),
             # 当前作用域的名字也塞一行：必须被「scope_id != 当前」这条规则挡掉
@@ -6834,6 +6837,29 @@ async def main():
             check(
                 (scan.get("scopes") or [{}])[0].get("missing") == 2,
                 "每个作用域也各自标了缺几名（页面按作用域显示）",
+            )
+
+            # 索引漏登记的兜底（v1.18.43）：编辑器/「导出全部」列玩家靠
+            # KV 里的 player_index，而那是插件自己攒的 —— 改名换 scope、手工恢复
+            # 存档之后，库里明明有行、索引里却没有，那些人就永远列不出来
+            #（站长看到「我的人只剩两个了」）。这里验证兜底能发现库里那一行。
+            _found = legacy_mod.discover_player_ids(fake_db, plugin_d.plugin_id)
+            check(
+                "L70009" in _found and "70004" in _found
+                and "L70001" not in _found and "L70003" not in _found,
+                f"按作用域直接查库能发现索引没登记的玩家（且不串旧 scope）-> {_found}",
+            )
+            # ⚠️ 不要在这里清索引来「模拟」，那会把索引里原有的 L70002 一起清掉，
+            #    把后面那条「原有的没被挤掉」的断言污染掉（踩过）。
+            _ids_now = await plugin_d._player_ids()
+            check(
+                "L70009" in _ids_now and "L70002" in _ids_now,
+                f"索引里已有的 + 库里发现的，合并后一个都不少 -> {_ids_now}",
+            )
+            # 旧 scope 的行**不该**被算进当前作用域（否则会把别人的数据当自己的）
+            check(
+                "L70001" not in _ids_now and "L70003" not in _ids_now,
+                f"只认当前作用域的行，不串到旧 scope -> {_ids_now}",
             )
 
             res = await plugin_d.editor_api_config_save(

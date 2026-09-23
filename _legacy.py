@@ -224,6 +224,44 @@ def normalize_uid(uid: str) -> str:
 
 
 
+def discover_player_ids(db_path: str, plugin_id: str) -> list[str]:
+    """直接查库：**当前作用域**里所有 ``player_<id>`` 的 id（同步只读）。
+
+    为什么需要它：插件平时靠 KV 里的 ``player_index`` 列玩家，但那个索引是
+    **插件自己攒的**（``_remember_player``）。一旦索引漏登记（改名换 scope、
+    手工恢复存档、进程被强杀在写索引之前……），那些玩家就**只存在于库里**，
+    编辑器/「导出全部」都会永远看不到他们 —— 数据明明在，就是列不出来。
+
+    所以这里给索引做兜底：查不出来时按库里的实际行补齐，缺谁补谁。
+    """
+    name = plugin_name_of(plugin_id)
+    if not db_path or not name or not os.path.isfile(db_path):
+        return []
+    try:
+        con = sqlite3.connect(
+            "file:{}?mode=ro".format(str(db_path).replace("\\", "/")),
+            uri=True,
+            timeout=10,
+        )
+        try:
+            rows = con.execute(
+                "select key from preferences "
+                "where scope='plugin' and scope_id = ? and key like 'player\\_%' escape '\\'",
+                (str(plugin_id),),
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        _log_warning(f"按作用域发现玩家失败（{plugin_id}）：{e}")
+        return []
+    out: list[str] = []
+    for (key,) in rows:
+        uid = normalize_uid(str(key)[len("player_"):])
+        if uid and uid != "index" and uid not in out:
+            out.append(uid)
+    return out
+
+
 def player_summary(row: dict[str, Any]) -> dict[str, Any]:
     """从一条 ``player_*`` 记录里摘出给站长看的摘要。"""
     raw_uid = str(row.get("key", "")).replace("player_", "", 1)
