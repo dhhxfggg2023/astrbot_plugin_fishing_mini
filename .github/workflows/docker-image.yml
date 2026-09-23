@@ -1,0 +1,156 @@
+# =============================================================================
+# 自动构建 Docker 镜像并推送到 GitHub Container Registry（ghcr.io）
+#
+# 触发：
+#   * push 到 main          -> 构建 + 冒烟测试 + 推送（打上 main / sha / latest 标签）
+#   * push tag v1.2.3       -> 构建 + 推送（打上 1.2.3 / sha 标签）
+#   * pull request          -> 只构建 + 冒烟测试，不推送（fork 的 PR 没有写权限）
+#   * 手动 workflow_dispatch
+#
+# 产物：ghcr.io/<用户名>/astrbot_plugin_qq_fishing:latest
+#   ⚠️ 首次推送后，包默认是 private：到
+#      https://github.com/users/<用户名>/packages/container/astrbot_plugin_qq_fishing/settings
+#      把 Visibility 改成 Public，别人才能匿名 docker pull。
+# =============================================================================
+name: Build Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    name: 构建镜像
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # PR 来自 fork 时 GITHUB_TOKEN 只读，登录会失败，所以只在非 PR 时登录
+      - name: 登录 GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # 先构建并加载到本地 docker，供下面的冒烟测试使用
+      # （官方 AstrBot 镜像只保证 amd64；要加 arm64 就把 platforms 改成
+      #   linux/amd64,linux/arm64，但那时必须去掉 load: true）
+      - name: 构建镜像
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 冒烟测试（真正跑一遍镜像）
+        run: |
+          set -euo pipefail
+
+          IMG="$(echo "${{ steps.meta.outputs.tags }}" | head -n1)"
+          echo "被测镜像：$IMG"
+
+          echo "—— 1) 插件源码是否预置进镜像"
+          docker run --rm --entrypoint bash "$IMG" -c '
+            set -e
+            test -f /opt/fishing-plugin/metadata.yaml
+            test -f /opt/fishing-plugin/main.py
+            test -f /opt/fishing-plugin/_conf_schema.json
+            echo "插件文件齐全 ✅"
+          '
+
+          echo "—— 2) 插件配置 schema 是否是合法 JSON"
+          docker run --rm --entrypoint bash "$IMG" -c '
+            set -e
+            python -c "import json; json.load(open(\"/opt/fishing-plugin/_conf_schema.json\")); print(\"schema 合法 ✅\")"
+          '
+
+          echo "—— 3) 插件能否被 Python 解析（语法级校验）"
+          docker run --rm --entrypoint bash "$IMG" -c '
+            set -e
+            cd /opt/fishing-plugin
+            # 全量编译：以后新加的 _xxx.py 自动被覆盖，不用再回来改这一行
+            python -m py_compile *.py
+            echo "插件语法校验通过 ✅（$(ls -1 *.py | wc -l) 个 .py）"
+          '
+
+          echo "—— 4) 入口脚本能否把插件同步进 data/plugins（AstrBot 实际加载的位置）"
+          docker run --rm --entrypoint bash "$IMG" -c '
+            set -e
+            mkdir -p /tmp/fake-root/data
+            # 预置一份空配置，让入口脚本的凭据注入环节立即完成（不触发后台等待）
+            printf "{\"platform\": []}" > /tmp/fake-root/data/cmd_config.json
+            ASTRBOT_HOME=/tmp/fake-root /opt/fishing-docker/entrypoint.sh true >/dev/null 2>&1 || true
+            DST=/tmp/fake-root/data/plugins/astrbot_plugin_qq_fishing
+            test -f "$DST/main.py"
+            test -f "$DST/metadata.yaml"
+            test ! -e "$DST/docker"            # 开发用文件不该进运行目录
+            test ! -e "$DST/Dockerfile"
+            # 页面与页面 i18n 是**运行时功能**，清理列表绝对不能顺手删掉
+            test -f "$DST/pages/editor/index.html"
+            test -f "$DST/.astrbot-plugin/i18n/zh-CN.json"
+            echo "入口脚本同步插件 ✅"
+          '
+
+      - name: 推送到 GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+      - name: 写入任务摘要
+        if: github.event_name != 'pull_request'
+        run: |
+          {
+            echo "## 🐳 镜像已构建并通过冒烟测试"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${{ env.IMAGE }}:latest"
+            echo '```'
+            echo ""
+            echo "本次标签："
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "> 首次使用请确认包的可见性是 Public："
+            echo "> Settings → Package settings → Change visibility"
+          } >> "$GITHUB_STEP_SUMMARY"

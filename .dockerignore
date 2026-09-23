@@ -1,0 +1,25 @@
+# 构建镜像时不需要进上下文的东西（既减小体积，也避免把密钥烤进镜像）
+
+# 密钥与运行时数据
+.env
+.env.*
+!.env.example
+backups/
+files/
+data/
+logs/
+*.log
+
+# Git 与编辑器
+.git
+.gitignore
+.gitattributes
+.github/
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
