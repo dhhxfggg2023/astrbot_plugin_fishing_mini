@@ -4298,19 +4298,19 @@ async def main():
     await asyncio.wait_for(_gtask, timeout=8)
     _gbody = text_of(_gout)
     # ⚠️ 连钓战报会把普通鱼**堆叠**（同类合并成一行），所以不能再按「含评价的行数」
-    #    数条数 —— 两条同类鱼会并成一行。改成数「记录行」（`N. ` 开头），
-    #    并确认没有任何一条是「偏差」。
+    #    数条数 —— 两条同名鱼会并成一行。这里改数三个互不依赖的证据：
+    #    汇总里的「上鱼 N 条」、背包里真的多了几条、以及没有任何一条是「偏差」。
     _grades = [
         l for l in _gbody.splitlines()
         if "偏差" in l or "良好" in l or "完美" in l
     ]
-    _records = [
-        l for l in _gbody.splitlines()
-        if len(l) > 2 and l[0].isdigit() and l[1:3] == ". "
-    ]
+    _gplayer = await _gc._load_player("89206")
+    _fished = len(_gplayer.get("inventory") or [])
     check(
-        len(_records) == 2 and not any("偏差" in l for l in _grades),
-        f"两条都在窗口中途拉，评价都不该掉到「偏差」-> 记录 {_records}／评价 {_grades}",
+        "上鱼 2 条" in _gbody and _fished == 2
+        and not any("偏差" in l for l in _grades),
+        f"两条都在窗口中途拉，评价都不该掉到「偏差」-> "
+        f"入包 {_fished} 条／评价 {_grades}",
     )
     check(
         "上鱼 2 条" in _gbody,

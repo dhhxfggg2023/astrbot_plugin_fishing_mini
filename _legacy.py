@@ -52,6 +52,103 @@ def plugin_name_of(plugin_id: str) -> str:
     return str(plugin_id or "").split("/")[-1]
 
 
+#: 这个插件**历史上用过的**作用域尾巴。改插件名会把 KV 作用域一起换掉，
+#: 老存档于是留在 ``<作者>/<旧插件名>`` 里 —— 只按当前名字去扫是**扫不到**的
+#: （v1.18.1 的找回功能就是这么被改名废掉的）。这里列全，新增改名时往里加。
+PLUGIN_NAME_ALIASES: tuple[str, ...] = (
+    "astrbot_plugin_fishing_mini",
+    "astrbot_plugin_qq_fishing",
+)
+
+
+def _alias_names(names: Any) -> list[str]:
+    """把「一个名字」或「一串名字」统一成去重后的列表（顺序保留）。"""
+    if isinstance(names, str):
+        candidates = [names]
+    else:
+        try:
+            candidates = list(names or ())
+        except TypeError:
+            candidates = [names]
+    out: list[str] = []
+    for item in candidates:
+        text = str(item or "").strip().split("/")[-1]
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def read_legacy_rows(
+    db_path: str, plugin_id: str, extra_names: Any = None
+) -> list[dict[str, Any]]:
+    """同步只读：返回**其它作用域**里属于同一个插件的 ``(scope_id, key, value)``。
+
+    Args:
+        db_path: AstrBot 主库路径。
+        plugin_id: 当前 ``作者/插件名``（用来把「当前作用域」排除掉）。
+        extra_names: 额外要认的**历史插件名**（见 ``PLUGIN_NAME_ALIASES``）。
+            改过插件名的存档都在旧名字下面，不带它就会「扫不到」。
+
+    打不开库（路径不对 / 被锁 / 权限）时返回空表并把原因记在 ``LAST_ERROR``
+    —— 调用方按「没找到」处理，同时能把「为什么没找到」告诉站长，不静默失败。
+    """
+    global LAST_ERROR
+    LAST_ERROR = ""
+    name = plugin_name_of(plugin_id)
+    names: list[str] = []
+    for candidate in (name, *_alias_names(extra_names)):
+        if candidate and candidate not in names:
+            names.append(candidate)
+    if not names:
+        LAST_ERROR = "插件 id 是空的，读不到作用域信息"
+        return []
+    if not db_path:
+        LAST_ERROR = "拿不到 AstrBot 数据库路径"
+        return []
+    if not os.path.isfile(db_path):
+        LAST_ERROR = f"数据库文件不存在：{db_path}"
+        return []
+    rows: list[tuple[str, str, str]] = []
+    try:
+        con = sqlite3.connect(
+            "file:{}?mode=ro".format(str(db_path).replace("\\", "/")),
+            uri=True,
+            timeout=10,
+        )
+        try:
+            # ⚠️ 两个坑：
+            #   1. 插件名里有下划线，而 ``_`` 在 LIKE 里是**单字符通配** —— 必须
+            #      转义并声明 ESCAPE，否则会多匹配到别的插件的作用域。
+            #   2. 每个别名要单独一条 LIKE：拼成 ``%/(a|b)`` 是不通的。
+            where = " or ".join(
+                "scope_id like ? escape '\\'" for _ in names
+            )
+            params = ["%/" + n.replace("_", "\\_") for n in names]
+            params.append(str(plugin_id))
+            rows = con.execute(
+                "select scope_id, key, value from preferences "
+                f"where scope='plugin' and ({where}) and scope_id != ?",
+                params,
+            ).fetchall()
+        finally:
+            con.close()
+    except Exception as e:
+        LAST_ERROR = f"打不开数据库（只读）：{e}"
+        _log_warning(f"找回旧数据：打不开数据库 {db_path}：{e}")
+        return []
+
+    out: list[dict[str, Any]] = []
+    for scope_id, key, value in rows:
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            continue        # 不是 JSON 的行跳过（不是我们的数据）
+        out.append(
+            {"scope_id": str(scope_id), "key": str(key), "value": unwrap_kv(parsed)}
+        )
+    return out
+
+
 def unwrap_kv(raw: Any) -> Any:
     """AstrBot 的 KV 值外面包了一层 ``{"val": ...}``；也兼容没包的情况。
 
@@ -125,54 +222,6 @@ def normalize_uid(uid: str) -> str:
     return text
 
 
-def read_legacy_rows(db_path: str, plugin_id: str) -> list[dict[str, Any]]:
-    """同步只读：返回**其它作用域**里属于同一个插件的 ``(scope_id, key, value)``。
-
-    打不开库（路径不对 / 被锁 / 权限）时返回空表并把原因记在 ``LAST_ERROR``
-    —— 调用方按「没找到」处理，同时能把「为什么没找到」告诉站长，不静默失败。
-    """
-    global LAST_ERROR
-    LAST_ERROR = ""
-    name = plugin_name_of(plugin_id)
-    if not name:
-        LAST_ERROR = "插件 id 是空的，读不到作用域信息"
-        return []
-    if not db_path:
-        LAST_ERROR = "拿不到 AstrBot 数据库路径"
-        return []
-    if not os.path.isfile(db_path):
-        LAST_ERROR = f"数据库文件不存在：{db_path}"
-        return []
-    rows: list[tuple[str, str, str]] = []
-    try:
-        con = sqlite3.connect(
-            "file:{}?mode=ro".format(str(db_path).replace("\\", "/")),
-            uri=True,
-            timeout=10,
-        )
-        try:
-            rows = con.execute(
-                "select scope_id, key, value from preferences "
-                "where scope='plugin' and scope_id like ? and scope_id != ?",
-                ("%/" + name, str(plugin_id)),
-            ).fetchall()
-        finally:
-            con.close()
-    except Exception as e:
-        LAST_ERROR = f"打不开数据库（只读）：{e}"
-        _log_warning(f"找回旧数据：打不开数据库 {db_path}：{e}")
-        return []
-
-    out: list[dict[str, Any]] = []
-    for scope_id, key, value in rows:
-        try:
-            parsed = json.loads(value)
-        except (TypeError, ValueError):
-            continue        # 不是 JSON 的行跳过（不是我们的数据）
-        out.append(
-            {"scope_id": str(scope_id), "key": str(key), "value": unwrap_kv(parsed)}
-        )
-    return out
 
 
 def player_summary(row: dict[str, Any]) -> dict[str, Any]:
@@ -226,9 +275,16 @@ class LegacyDataMixin:
     """给插件用的两个动作：``legacy_scan``（只看）/ ``legacy_import``（导入）。"""
 
     async def _legacy_rows(self) -> list[dict[str, Any]]:
-        """读老作用域（放线程里跑，别卡住事件循环）。"""
+        """读老作用域（放线程里跑，别卡住事件循环）。
+
+        ⚠️ 必须把 ``PLUGIN_NAME_ALIASES`` 一起传下去：改过插件名的存档都落在
+        **旧名字**的 scope 里，只按当前名字扫会一条都找不到（「他说没找到」就是这个）。
+        """
         return await asyncio.to_thread(
-            read_legacy_rows, astrbot_db_path(), str(self.plugin_id or "")
+            read_legacy_rows,
+            astrbot_db_path(),
+            str(self.plugin_id or ""),
+            PLUGIN_NAME_ALIASES,
         )
 
     async def _legacy_exists(self, key: str) -> bool | None:
