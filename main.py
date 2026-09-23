@@ -2670,6 +2670,9 @@ DEFAULT_ESCAPE_RATE: float = 0.25
 #: 单竿不设这道护栏（spec 里没有 min_reaction 就是 0）：它没有「上一条的余震」，
 #: 一次过早的点击是玩家自己的选择，不该被吞掉。
 MULTI_PULL_MIN_REACTION: float = 0.25
+#: 发「拉」落空后，多久之内还认为「这是刚才那个窗口晚了一步」
+#: （连钓逐条弹提示，玩家点了上一条遗留的按钮很常见；超过这个时间就别再提它了）
+PULL_MISS_WINDOW: float = 8.0
 #: 鱼基准价的全局倍率与单条覆盖
 FISH_VALUE_MULT: float = 1.0
 FISH_VALUE_OVERRIDES: dict[str, float] = {}
@@ -3063,6 +3066,9 @@ class FishingPlugin(
             weakref.WeakValueDictionary()
         )
         self._pending_pulls: dict[str, dict[str, Any]] = {}
+        #: 玩家 -> 最近一次拉线窗口的收尾情况（时间/结局）：发「拉」落空时用来分辨
+        #: 「这一下晚了」还是「附近真的没鱼」，别一律回「现在没有鱼咬钩」（v1.18.45）
+        self._recent_pulls: dict[str, dict[str, Any]] = {}
         #: 保护 player_index 的读-改-写（两个玩家同时首次落盘会互相覆盖、丢一个 id）
         self._index_lock = asyncio.Lock()
         #: 记录最近见到的平台名（只在启动日志里提示按钮可用性）
@@ -4642,6 +4648,7 @@ class FishingPlugin(
                         yield _r
                 return
             async for _r in self._say_msg(event, "pull.none", event.plain_result(
+                    self._pull_miss_hint(str(user_id)) or
                     "🤔 现在没有鱼咬钩。直接发 /钓鱼 下竿，"
                     "等提示「咬钩了」再发 /钓鱼 拉"
                 )):

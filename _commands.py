@@ -2748,23 +2748,61 @@ class CommandsMixin:
                         )):
                         yield _r
                     return
-                if len(current) >= slots:
-                    async for _r in self._say_msg(event, "item.deco_full", event.plain_result(
-                            f"🪸 装饰位满了（{len(current)}/{slots}）\n"
-                            "　等旧的失效，或 /钓鱼 水族馆 看还剩多久"
-                        )):
-                        yield _r
-                    return
                 # 数字参数 = 一次摆几个（装饰没有「全缸」语义，不写就是 1 个）。
-                # 数量取「想要 / 库存 / 空位」三者最小，并如实告诉玩家为什么没摆够。
                 want = _to_int((a3 or "").strip(), 0)
                 if want <= 0:
                     want = 1
                 owned = _safe_int(items.get(item_id), 0, 0)
-                room = max(0, slots - len(current))
+                if owned <= 0:
+                    async for _r in self._say_msg(event, "item.deco_none", event.plain_result(
+                            f"🪸 没有 {self._item_label(item_id)} 了（先去 /钓鱼 道具 买）"
+                        )):
+                        yield _r
+                    return
+                now_ts = int(time.time())
+                rate = _safe_number(effects.get("decorate"), 0.0)
+                decos = list(player.get("decorations") or [])
+                room = max(0, slots - len(decos))
+                # ⚠️ 位子满了但新装饰**更强**时，允许顶掉最弱的那个（v1.18.45 修）。
+                #    站长报的：「只能加，不能被新的更好的道具覆盖，还得等时间结束」——
+                #    以前位子一满就直接拒绝，买了更好的珊瑚也只能干等 72 小时。
+                #    现在：有空位就填；没空位且新装饰 ≥ 场上最弱的，就替换掉最弱的
+                #    （被顶掉的那个提前报废，剩余耐久不返还 —— 提示里说清楚）。
+                replace_idx: int | None = None
+                replaced: dict[str, Any] | None = None
+                if room <= 0 and decos:
+                    weakest = min(
+                        range(len(decos)),
+                        key=lambda i: _safe_number(decos[i].get("rate"), 0.0),
+                    )
+                    weakest_rate = _safe_number(decos[weakest].get("rate"), 0.0)
+                    if rate >= weakest_rate:
+                        replace_idx = weakest
+                        replaced = decos[weakest]
+                        room = 1        # 允许摆 1 个（顶掉它）
+                if room <= 0:
+                    weakest_rate = min(
+                        (_safe_number(d.get("rate"), 0.0) for d in decos), default=0.0
+                    )
+                    async for _r in self._say_msg(event, "item.deco_full", event.plain_result(
+                            f"🪸 装饰位满了（{len(decos)}/{slots}），而且这个没有比场上的更好\n"
+                            f"　场上最弱的是 +{weakest_rate:.0%}，等它失效或换个更强的来顶"
+                        )):
+                        yield _r
+                    return
                 place = max(1, min(want, owned, room))
                 items[item_id] = owned - place
-                rate = _safe_number(effects.get("decorate"), 0.0)
+                replaced_note = ""
+                if replace_idx is not None and replaced is not None:
+                    # 顶掉最弱的那个（只顶 1 个；其余仍按空位算）
+                    gone = decos.pop(replace_idx)
+                    replaced_note = (
+                        f"　♻️ 顶掉了「{self._item_label(str(gone.get('id') or ''))}」"
+                        f"（+{_safe_number(gone.get('rate'), 0.0):.0%}），它提前失效"
+                    )
+                    player["decorations"] = decos
+                    place = 1
+                    items[item_id] = owned - 1
                 # 逐个入列：每个装饰记自己的 ts / expire_ts，互相独立计时
                 for _ in range(place):
                     player.setdefault("decorations", []).append(
@@ -2778,7 +2816,9 @@ class CommandsMixin:
                 saved = await self._save_player(player)
                 head = f"🪸 摆好了 {self._item_label(item_id)}"
                 lines = [head if place == 1 else f"{head} ×{place}"]
-                if place < want:
+                if replaced_note:
+                    lines.append(replaced_note)
+                if place < want and not replaced_note:
                     lack = (
                         f"库存只有 {owned} 个" if owned < want
                         else f"装饰位只剩 {room} 个"

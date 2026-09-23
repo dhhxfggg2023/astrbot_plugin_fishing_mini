@@ -7908,6 +7908,34 @@ async def main():
         "没有鱼咬钩" in text_of(await cmd(plugin, ev, "拽线")),
         "指到「拉」的新别名照样走拉线分支",
     )
+
+    # --- 超时之后再发「拉」：不能再回「没有鱼咬钩」（v1.18.45）---
+    # 站长报的：连钓拉线超时后，看到「超时了」再发 /钓鱼 拉，被回「现在没有鱼咬钩」——
+    # 鱼刚才明明咬过钩，这句话是误导。现在会分辨成「这一下拉晚了」。
+    _pu = make_plugin()
+    _puid = "89311"
+    _pu._pending_pulls[_puid] = {
+        "future": asyncio.get_event_loop().create_future(),
+        "session": "aiocqhttp:group:123456",
+        "deadline": time.monotonic() - 1,     # 已经过期 = 刚超时
+        "quiet": True,
+    }
+    _pev = FakeEvent(_puid)
+    _pm = text_of(await cmd(_pu, _pev, "拉"))
+    check(
+        "拉晚了" in _pm and "没有鱼咬钩" not in _pm,
+        f"超时后的「拉」提示「拉晚了」而不是「没有鱼咬钩」-> {_pm.splitlines()[-1][:40]}",
+    )
+    check(_puid not in _pu._pending_pulls, "过期的等待记录被顺手清掉（不留脏数据）")
+    # 从没玩过的人发「拉」仍然是老提示（不能因为「刚才有窗口」而误报）
+    _pu2 = make_plugin()
+    _pm2 = text_of(await cmd(_pu2, FakeEvent("89312"), "拉"))
+    check(
+        "没有鱼咬钩" in _pm2 and "拉晚了" not in _pm2,
+        "从没等过鱼的人发「拉」还是老提示（不误报「拉晚了」）",
+    )
+    check(_pu2._pull_miss_hint("89312") == "", "_pull_miss_hint 对没记录的人返回空串")
+
     cfg["command_aliases"] = "乱写的配置\n背包|"
     plugin = make_plugin(cfg)
     check(
@@ -8971,10 +8999,6 @@ async def main():
         await cmd(plugin_r, ev_r, "用", "珊瑚造景", "")
     p = await plugin_r._load_player("96001")
     check(len(p["decorations"]) == 3, f"摆满 3 个 -> {len(p['decorations'])}")
-    out = text_of(await cmd(plugin_r, ev_r, "用", "珊瑚造景", ""))
-    check("满了" in out, f"超过 decoration_slots 被拒 -> {out.splitlines()[0] if out else ''}")
-    p = await plugin_r._load_player("96001")
-    check(len(p["decorations"]) == 3, "被拒后数量不变")
     check(
         abs(mod.CALC._decoration_bonus(p) - 0.60) < 1e-9,
         f"3 个装饰 → 产出 +60% -> {mod.CALC._decoration_bonus(p):.2f}",
@@ -9007,9 +9031,53 @@ async def main():
         all(d["expire_ts"] - d["ts"] == 72 * 3600 for d in p3["decorations"]),
         "每个装饰各记自己的到期时间",
     )
+
     check(
         abs(mod.CALC._decoration_bonus(p3) - 0.60) < 1e-9,
         f"一次摆 3 个 → 产出 +60% -> {mod.CALC._decoration_bonus(p3):.2f}",
+    )
+
+    # --- 位子满了之后：更好/同档的装饰可以顶掉最弱的（v1.18.45）---
+    # 站长报的：「珊瑚只能加，不能被新的更好的道具覆盖，还得等时间结束」。
+    # 规则：有空位就填；没空位且新装饰 ≥ 场上最弱的 -> 顶掉最弱那个；更弱的不许顶。
+    # ⚠️ 放在「+60%」那条断言**之后**：这一段会把 p3 的装饰换成 85%，别污染前面的断言。
+    _weak_id = "coral_weak_test"
+    plugin_r.items[_weak_id] = {
+        "id": _weak_id, "name": "小珊瑚", "emoji": "🪸", "price": 1,
+        "desc": "测试用（更弱）", "unlock_level": 1, "need_rod": "",
+        "effects": {"decorate": 0.05},
+    }
+    plugin_r.items["coral_king"] = plugin_r.items.get("coral_king") or {
+        "id": "coral_king", "name": "珊瑚王座", "emoji": "👑", "price": 1,
+        "desc": "测试用（更强）", "unlock_level": 1, "need_rod": "",
+        "effects": {"decorate": 0.45},
+    }
+    p3["items"][_weak_id] = 1
+    p3["items"]["coral_king"] = 1
+    await plugin_r._save_player(p3)
+    out = text_of(await cmd(plugin_r, ev3, "用", "小珊瑚"))
+    p3 = await plugin_r._load_player("96003")
+    check(
+        "满了" in out and len(p3["decorations"]) == 3,
+        f"更弱的装饰不许顶掉场上的（位子仍 3/3）-> {out.splitlines()[0] if out else ''}",
+    )
+    check(
+        abs(mod.CALC._decoration_bonus(p3) - 0.60) < 1e-9,
+        f"被拒后加成不变 -> {mod.CALC._decoration_bonus(p3):.2f}",
+    )
+    out = text_of(await cmd(plugin_r, ev3, "用", "珊瑚王座"))
+    p3 = await plugin_r._load_player("96003")
+    check(
+        "顶掉" in out and len(p3["decorations"]) == 3,
+        f"更强的可以顶掉最弱的（不用干等 72 小时）-> {out.splitlines()[0] if out else ''}",
+    )
+    check(
+        abs(mod.CALC._decoration_bonus(p3) - 0.85) < 1e-9,
+        f"顶掉之后加成变成 20+20+45 = 85% -> {mod.CALC._decoration_bonus(p3):.2f}",
+    )
+    check(
+        mod._safe_int(p3["items"].get("coral_king"), 0, 0) == 0,
+        "顶掉也照样消耗一个新道具",
     )
 
     # 装饰位不够：只摆能摆的，并如实提示

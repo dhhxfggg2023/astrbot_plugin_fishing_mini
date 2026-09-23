@@ -509,11 +509,40 @@ class InteractionsMixin:
 
         w_min = int(self.cfg["window_min"])
         w_max = int(self.cfg["window_max"])
-        # 难度越高 -> 越短的窗口
-        scaled_min = max(2, int(round(w_min * (1.0 - 0.35 * diff) * window_mult)))
-        scaled_max = max(
-            scaled_min + 1, int(round(w_max * (1.0 - 0.40 * diff) * window_mult))
-        )
+        if w_max < w_min:
+            w_max = w_min
+        # ⚠️ 窗口 = 「难度系数 × 天气倍率 × 站长设的基准」，**只做一次夹取**，
+        # 夹到站长设的 [window_min, window_max] 里，不做别的加工（v1.18.45）。
+        #
+        # 以前是「用 min/max 算基准、再按难度做减法、最后 max(2, …) 兜底」：
+        #   scaled_max = max(scaled_min+1, round(w_max × (1 − 0.40×diff) × weather))
+        # 站长把上下限设成 4~8，实际只得到 3~7（难度还会把它压到 3 秒），
+        # **永远到不了他设的 8** —— UI 里那个设置形同虚设。
+        #
+        # 现在：
+        #   * 基准 = w_max（上限）；难度决定「离上限有多远」，最多退到 w_min；
+        #   * 天气倍率直接乘上去（再夹回区间）；
+        #   * 站长把上下限改大改小都**立刻生效**，没有任何隐含地板。
+        # 若站长把上下限设成同一个值（窗口固定），就恒等于该值。
+        base = float(w_max)
+        if base <= 0:
+            base = float(w_min)
+        hard_min = float(w_min)
+        hard_max = float(w_max)
+        # 难度系数：diff = 0（最容易）→ 1.0（贴着上限）；diff = 1（最难）→ w_min/w_max
+        if hard_max > hard_min and hard_max > 0:
+            easiest, hardest = 1.0, float(hard_min) / float(hard_max)
+        else:
+            easiest = hardest = 1.0
+        curve = _clamp(diff, 0.0, 1.0)
+        diff_factor = easiest + (hardest - easiest) * curve
+        weather_factor = _clamp(window_mult, 0.0, 10.0)
+        center = base * diff_factor * weather_factor
+        # 这一竿的区间：以 center 为中心的 ±25% 抖动（同一档鱼也有一点随机）
+        scaled_min = _clamp(center * 0.75, hard_min, hard_max)
+        scaled_max = _clamp(center * 1.25, hard_min, hard_max)
+        if scaled_max < scaled_min:
+            scaled_max = scaled_min
         window = random.uniform(float(scaled_min), float(scaled_max))
 
         # 最佳点位：默认居中，按 drift 偏移，并留出安全边距
@@ -657,6 +686,15 @@ class InteractionsMixin:
             self._pending_pulls.pop(user_id, None)
 
         if not hit:
+            # ⚠️ 超时那一刻就把「刚才有鱼咬钩、窗口已经过」记下来（v1.18.45）。
+            #    玩家看到这条「超时了」再去发「拉」时，_pending_pulls 早就清了 ——
+            #    以前会回一句「现在没有鱼咬钩」，**误导玩家以为压根没鱼**。
+            #    记下之后，`_pull_miss_hint()` 就能说清「这一下拉晚了」。
+            self._note_pull_window(
+                user_id,
+                {"deadline": None, "quiet": quiet},
+                "timeout",
+            )
             async for _r in self._say_msg(event, "pull.timeout", event.plain_result(
                     f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
                     f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
@@ -671,6 +709,9 @@ class InteractionsMixin:
 
         escape = _clamp(spec["escape"] * factor, 0.0, 0.95)
         if random.random() < escape:
+            # 记下「这一下确实拉到了、但鱼挣脱了」：之后玩家再补一发「拉」时，
+            # 提示会说「这一下拉晚了」而不是「没有鱼咬钩」
+            self._note_pull_window(user_id, {"quiet": quiet}, "escape")
             async for _r in self._say_msg(event, "pull.escape", event.plain_result(
                     f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
                 )):
@@ -705,6 +746,8 @@ class InteractionsMixin:
             location_mult=spec.get("location_mult", 1.0),
             codex_mult=spec.get("codex_mult", 1.0),
         )
+        # 拉上来了：同样记一笔（之后多余的「拉」会得到「鱼已经收上来了」而不是「没鱼」）
+        self._note_pull_window(user_id, {"quiet": quiet}, "hit")
         yield {"catch": catch, "rating": rating, "bonus": bonus, "mark": mark}
 
     async def _iter_minigame(self, event, user_id, fish, bait_id, spec):
@@ -789,8 +832,50 @@ class InteractionsMixin:
         deadline = pending.get("deadline")
         if isinstance(deadline, (int, float)) and time.monotonic() > deadline:
             self._pending_pulls.pop(user_id, None)
+            # 记下来：这次窗口是**等玩家拉等超时**的，不是「附近根本没有鱼」
+            self._note_pull_window(user_id, pending, "timeout")
             return None
         return pending
+
+    def _note_pull_window(
+        self, user_id: str, pending: dict[str, Any], outcome: str
+    ) -> None:
+        """记下最近一次拉线窗口的收尾情况，供 `_pull_miss_hint()` 分辨提示。
+
+        为什么需要它：玩家发「拉」时窗口可能刚刚收尾（提示还在屏幕上、或者点了
+        上一条遗留的按钮）。那时候回一句「现在没有鱼咬钩」是**误导** ——
+        鱼刚才明明咬过钩，只是这一下晚了。分开说，玩家才知道下次该快一点。
+        """
+        self._recent_pulls[user_id] = {
+            "at": time.monotonic(),
+            "deadline": pending.get("deadline"),
+            "quiet": bool(pending.get("quiet")),
+            "outcome": outcome,
+        }
+
+    def _pull_miss_hint(self, user_id: str) -> str:
+        """发「拉」但没鱼时，回一句**贴合实情**的话。
+
+        * 刚刚（``PULL_MISS_WINDOW`` 秒内）确实有过一个窗口 -> 说明这一下晚了；
+        * 否则就是附近真的没鱼（玩家手滑发的）-> 老提示。
+        """
+        info = self._recent_pulls.get(user_id)
+        if not isinstance(info, dict):
+            return ""
+        gap = time.monotonic() - float(info.get("at") or 0)
+        if gap > PULL_MISS_WINDOW:
+            # 过期了就没用了：顺手清掉，别让这张表随「见过的人数」一直长
+            self._recent_pulls.pop(user_id, None)
+            return ""
+        if info.get("outcome") == "hit":
+            return "🎣 这一下拉晚了——鱼已经被收上来了（连钓会接着弹下一条）"
+        if info.get("outcome") == "escape":
+            return "🎣 这一下拉晚了——刚才那条已经挣脱跑了（连钓会接着弹下一条）"
+        return (
+            "🎣 这一下拉晚了——刚才确实有鱼咬钩，但已经过了窗口/跑了\n"
+            "　看到「咬钩了」就**马上**发 /钓鱼 拉（窗口只有几秒）"
+        )
+
 
     def _resolve_pull(self, event: AstrMessageEvent) -> bool:
         """若该玩家正在等「拉」，唤醒等待。返回是否触发。"""
@@ -807,6 +892,8 @@ class InteractionsMixin:
         future = pending.get("future")
         if future is None or future.done():
             return False
+        # 记下「这一下真的拉到了」，供 `_pull_miss_hint()` 分辨「晚了」还是「没鱼」
+        self._note_pull_window(user_id, pending, "hit")
         future.set_result(time.monotonic())
         return True
 
