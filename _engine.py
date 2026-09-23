@@ -135,103 +135,113 @@ class EngineMixin:
                     )
 
         # ---- 4. 自动补 + 自动用「钓手 buff」道具（手气 / 品质保底，要玩家先指定用哪一件）----
-        auto_item = str(player.get("auto_buff_item") or "").strip()
-        auto_effects = ((self.items.get(auto_item) or {}).get("effects") or {}) if auto_item else {}
-        _is_caster_item = (
-            _safe_number(auto_effects.get("buff_quality"), 0.0) > 0
-            or _safe_number(auto_effects.get("quality_floor"), 0.0) > 0
-        )
-        # buff 还在身上时**什么都不做**：既不买、也不从背包里再吃一个。
-        # ⚠️ v1.18.33 修的（站长报「玉髓灯的自动购买消耗异常」）：以前这个判断
-        # 只挡着下面那段「每日额度」检查，买/用那一段却在它外面 —— 于是 buff
-        # 生效期间**每一竿都会再买一个玉髓灯**（27000 金/竿，顺带把 15 竿的
-        # 保底时长一直续着），一觉醒来金币就空了。
-        # 手气 buff（buff_casts_left）与品质保底（buff_floor_casts）各算各的竿数，
-        # 但都由同一件道具续，所以**任意一种在生效**就等它用完再说。
-        _buff_active = (
+        notes.extend(self._auto_supply_buff(player))
+        return bait_id, notes
+
+    @staticmethod
+    def _buff_active(player: dict[str, Any]) -> bool:
+        """身上还有手气 buff 或品质保底吗（两种各算各的竿数，任意一种在就走 True）。"""
+        return (
             _safe_int(player.get("buff_casts_left"), 0, 0) > 0
             or _safe_int(player.get("buff_floor_casts"), 0, 0) > 0
         )
-        if auto_item and _buff_active:
-            auto_item = ""
-        if (
-            auto_item
-            and _is_caster_item
-            and _cfg_bool(cfg, "auto_supply_buff", True)
-        ):
-            # 每日额度（v1.18.18）：额度用完了就别再自动买了 —— 不然「限额」等于没有，
-            # 玩家挂机一整天会一直自动续上手气道具。
-            _daily_reset(player, self._today_text())
-            buff_left = _daily_left(player, "buff", cfg.get("buff_daily_cast_limit"))
-            if buff_left is not None and buff_left <= 0:
-                notes.append(
-                    f"🌙 今天的手气额度用完了"
-                    f"（{_daily_used(player, 'buff')}/"
-                    f"{_safe_int(cfg.get('buff_daily_cast_limit'), 0, 0)} 竿），"
-                    f"没有自动补给"
-                )
-                auto_item = ""
-        if auto_item:
-            item = self.items.get(auto_item)
-            effects = (item or {}).get("effects") or {}
-            if item and (
+
+    def _auto_supply_buff(self, player: dict[str, Any]) -> list[str]:
+        """自动补 + 自动用「钓手 buff」道具（手气 / 品质保底）。
+
+        玩家得先用 ``/钓鱼 自动 <道具名>`` 指定用哪一件（不指定就绝不替他买，
+        免得一觉醒来被自动买掉一个 1.2 万的玉髓灯）。三条规矩：
+
+        * **buff 还在身上就什么都不做** —— 既不买、也不从背包里再吃一个
+          （v1.18.33 修：以前这个判断只挡着额度检查，于是每竿都再买一个玉髓灯）；
+        * **每日额度用完了也不买**（不限额的话「挂机一整天」等于手气常驻）；
+        * 买得起才买（绝不透支），买完立刻用上。
+
+        连钓里**中途**也会调一次：整批只在开头补一次的话，「15 竿」的玉髓灯
+        在 ``/钓鱼 20`` 的最后 5 竿就断了（v1.18.37 修，见 ``_do_multi_cast``）。
+
+        返回要写进结果里的说明行（没有就空列表）。
+        """
+        cfg = self.cfg
+        auto_item = str(player.get("auto_buff_item") or "").strip()
+        item = self.items.get(auto_item) if auto_item else None
+        effects = (item or {}).get("effects") or {}
+        if not (
+            item
+            and (
                 _safe_number(effects.get("buff_quality"), 0.0) > 0
                 or _safe_number(effects.get("quality_floor"), 0.0) > 0
-            ):
-                bag = player.setdefault("items", {})
-                have = _safe_int(bag.get(auto_item), 0, 0)
-                price = _safe_int(item.get("price"), 0, 0)
-                # 每日额度（v1.18.18）：自动补给也只能补到额度用完为止
-                left = _daily_left(player, "buff", cfg.get("buff_daily_cast_limit"))
-                # 每件道具自己的持续竿数（v1.18.20，`buff_casts=40`）
-                grant = max(
-                    1,
-                    _safe_int(
-                        effects.get("buff_casts"),
-                        _safe_int(cfg.get("buff_cast_count"), 20, 1),
-                        1,
-                    ),
+            )
+            and _cfg_bool(cfg, "auto_supply_buff", True)
+            and not self._buff_active(player)
+        ):
+            return []
+
+        notes: list[str] = []
+        # 每日额度（v1.18.18）：额度用完了就别再自动买了 —— 不然「限额」等于没有，
+        # 玩家挂机一整天会一直自动续上手气道具。
+        _daily_reset(player, self._today_text())
+        left = _daily_left(player, "buff", cfg.get("buff_daily_cast_limit"))
+        if left is not None and left <= 0:
+            notes.append(
+                f"🌙 今天的手气额度用完了"
+                f"（{_daily_used(player, 'buff')}/"
+                f"{_safe_int(cfg.get('buff_daily_cast_limit'), 0, 0)} 竿），"
+                f"没有自动补给"
+            )
+            return notes
+
+        bag = player.setdefault("items", {})
+        have = _safe_int(bag.get(auto_item), 0, 0)
+        price = _safe_int(item.get("price"), 0, 0)
+        gold = _safe_int(player.get("gold"), 0, 0)
+        # 每件道具自己的持续竿数（v1.18.20，`buff_casts=40`）
+        grant = max(
+            1,
+            _safe_int(
+                effects.get("buff_casts"),
+                _safe_int(cfg.get("buff_cast_count"), 20, 1),
+                1,
+            ),
+        )
+        if left is not None:
+            grant = max(0, min(grant, left))
+        if have <= 0 and price > 0 and gold >= price and grant > 0:
+            gold -= price
+            player["gold"] = gold
+            bag[auto_item] = 1
+            have = 1
+            notes.append(
+                f"🛒 自动补货 1 个「{item['name']}」"
+                f"（-{_fmt_gold(price)} 金，余额 {_fmt_gold(gold)}）"
+            )
+        if have > 0 and grant > 0:
+            bag[auto_item] = have - 1
+            _floor = _safe_number(effects.get("quality_floor"), 0.0)
+            if _floor > 0:
+                # 品质保底类（v1.18.23）：走 buff_floor / buff_floor_casts
+                player["buff_floor_casts"] = grant
+                player["buff_floor"] = _floor
+                _what = f"品质保底「{_quality_label(_floor)[0]}」"
+            else:
+                player["buff_casts_left"] = grant
+                player["buff_quality"] = _safe_number(
+                    effects.get("buff_quality"), 0.0
                 )
-                if left is not None:
-                    grant = max(0, min(grant, left))
-                if have <= 0 and price > 0 and gold >= price and grant > 0:
-                    gold -= price
-                    player["gold"] = gold
-                    bag[auto_item] = 1
-                    have = 1
-                    notes.append(
-                        f"🛒 自动补货 1 个「{item['name']}」"
-                        f"（-{_fmt_gold(price)} 金，余额 {_fmt_gold(gold)}）"
-                    )
-                if have > 0 and grant > 0:
-                    bag[auto_item] = have - 1
-                    _floor = _safe_number(effects.get("quality_floor"), 0.0)
-                    if _floor > 0:
-                        # 品质保底类（v1.18.23）：走 buff_floor / buff_floor_casts
-                        player["buff_floor_casts"] = grant
-                        player["buff_floor"] = _floor
-                        _what = f"品质保底「{_quality_label(_floor)[0]}」"
-                    else:
-                        player["buff_casts_left"] = grant
-                        player["buff_quality"] = _safe_number(
-                            effects.get("buff_quality"), 0.0
-                        )
-                        _what = (
-                            f"手气 +"
-                            f"{_safe_number(effects.get('buff_quality'), 0.0):.0%}"
-                        )
-                    _daily_add(player, "buff", grant)
-                    notes.append(
-                        f"🎐 自动用上「{item['name']}」（{_what}，{grant} 竿）"
-                    )
-                elif grant <= 0:
-                    notes.append("🌙 今天的手气额度用完了，没有自动补给")
-                elif not notes or notes[-1].find("自动补货 1 个") < 0:
-                    notes.append(
-                        f"💸 「{item['name']}」用完了，金币不够自动补货"
-                        f"（需 {_fmt_gold(price)}）"
-                    )
-        return bait_id, notes
+                _what = (
+                    f"手气 +"
+                    f"{_safe_number(effects.get('buff_quality'), 0.0):.0%}"
+                )
+            _daily_add(player, "buff", grant)
+            notes.append(f"🎐 自动用上「{item['name']}」（{_what}，{grant} 竿）")
+        elif grant <= 0:
+            notes.append("🌙 今天的手气额度用完了，没有自动补给")
+        elif not notes or notes[-1].find("自动补货 1 个") < 0:
+            notes.append(
+                f"💸 「{item['name']}」用完了，金币不够自动补货"
+                f"（需 {_fmt_gold(price)}）"
+            )
+        return notes
 
     async def _do_cast(self, event: AstrMessageEvent, user_id: str, bait_name: str):
         """执行一次抛竿（含互动玩法）。"""
@@ -660,8 +670,21 @@ class EngineMixin:
             nobite = 0
             gained = 0
             cast_factor = self._location_hook_factor(loc.get("id"))
+            #: 「buff 刚用光」是否已经尝试补过（补不到就不再每竿刷提示，见循环开头）
+            _buff_refill_tried = False
 
             for index in range(1, planned + 1):
+                # buff 在这一批**中途**用光了：照「自动补给」再补一个（v1.18.37）。
+                # 单竿每竿都会走一遍 _auto_supply，连钓以前只在整批开头走一次 ——
+                # 于是「玉髓灯 15 竿」在 /钓鱼 20 的最后 5 竿就没保底了。
+                # 只在「刚用光」那一下试一次（`_refill_tried`），补不到就安静地
+                # 按没 buff 继续 —— 不然剩下每一竿都要刷一句提示。
+                if index > 1:
+                    if self._buff_active(player):
+                        _buff_refill_tried = False
+                    elif not _buff_refill_tried:
+                        _buff_refill_tried = True
+                        lines.extend(self._auto_supply_buff(player))
                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
                 luck = _effective_luck(player, cfg)

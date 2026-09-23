@@ -5692,6 +5692,62 @@ async def main():
         f"{p_auto['items'].get('jade_lantern')}）",
     )
 
+    # --- v1.18.37：连钓**中途**玉髓灯用光了也要自动补 ---
+    # 整批以前只在开头走一次 _auto_supply：「15 竿」的玉髓灯在 /钓鱼 18 的最后 3 竿
+    # 就断了，玩家看着批首那句「自动用上」却没能用到批尾。
+    _mult_cfg = dict(
+        _CFG,
+        auto_supply_buff=True,
+        auto_supply_bait=True,
+        auto_equip_bait=True,
+        multi_cast_max=20,
+        fish_cost=0,
+        stamina_regen_seconds=0,
+        easter_egg_chance=0.0,
+        item_drop_chance=0.0,
+    )
+    _mp = make_plugin(_mult_cfg)
+    _price = mod._safe_int(_mp.items["jade_lantern"].get("price"), 0, 0)
+
+    def _mult_lantern_player(uid: str, gold: int) -> dict:
+        pl = mod._default_player(uid)
+        pl["gold"] = gold
+        pl["baits"] = {"worm": 40}
+        pl["equipped_bait"] = "worm"
+        pl["auto_buff_item"] = "jade_lantern"
+        return pl
+
+    await _mp._save_player(_mult_lantern_player("89611", _price * 3))
+    out = await cmd(_mp, FakeEvent("89611"), "18", "", "")
+    body = text_of(out)
+    _ml = await _mp._load_player("89611")
+    check(
+        "连钓 18 次" in body and body.count("自动用上") == 2,
+        f"18 竿 > 玉髓灯的 15 竿 -> 中途再补一个（批里两次「自动用上」）-> "
+        f"{[l for l in body.splitlines() if '自动用上' in l]}",
+    )
+    check(
+        _ml["gold"] == _price,
+        f"一共买了 2 个（{_price * 3} - {_price * 2} = {_ml['gold']}）",
+    )
+    check(
+        mod._safe_int(_ml.get("buff_floor_casts"), 0, 0) == 15 - 3,
+        f"批尾那 3 竿照样在保底里（15-3={_ml.get('buff_floor_casts')} 竿没用完）",
+    )
+    # 买不起第二个：只在「刚用光」那一下提示一次，不刷屏
+    await _mp._save_player(_mult_lantern_player("89612", _price))
+    out = await cmd(_mp, FakeEvent("89612"), "18", "", "")
+    body = text_of(out)
+    _ml2 = await _mp._load_player("89612")
+    check(
+        body.count("金币不够自动补货") == 1 and _ml2["gold"] == 0,
+        f"补不起时只提示一次（不每竿刷一句）-> 提示 "
+        f"{body.count('金币不够自动补货')} 次、余额 {_ml2['gold']}",
+    )
+    check(
+        "连钓 18 次" in body and body.count("自动用上") == 1,
+        "这一批照常跑完（只是后半段没保底）",
+    )
     # 没指定就不替他买
     p_auto["auto_buff_item"] = ""
     p_auto["buff_casts_left"] = 0
