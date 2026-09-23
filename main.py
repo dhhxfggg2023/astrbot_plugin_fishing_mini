@@ -136,6 +136,15 @@ class _MissingMixin:
     """兄弟模块加载失败时的占位基类（保证插件仍能启动）。"""
 
 
+class PlayerLoadError(Exception):
+    """严格读档失败（``_load_player(strict=True)``）。
+
+    存在的唯一理由：**读档失败绝不能被当成「新玩家」然后写回去**。
+    KV 读是可能瞬时失败的，而瞬时失败 + 随后的 `_save_player` = 玩家存档被空账号覆盖。
+    会写回的路径（抛竿 / 连钓 / 拉线）一律用 strict 读，失败就中止这次操作。
+    """
+
+
 
 # =============================================================================
 # 一·零、子命令写法总表（命令别名 / 自定义命令的校验依据）
@@ -3481,11 +3490,27 @@ class FishingPlugin(
                     self._recent_platforms.pop(key, None)
         return lock
 
-    async def _load_player(self, user_id: str) -> dict[str, Any]:
-        """读取并修复玩家数据（含旧版本自动迁移、信封拆包）。"""
+    async def _load_player(
+        self, user_id: str, *, strict: bool = False
+    ) -> dict[str, Any]:
+        """读取并修复玩家数据（含旧版本自动迁移、信封拆包）。
+
+        Args:
+            strict: **会写回的路径必须传 True**。KV 读取是可能瞬时失败的
+                （数据库忙 / 磁盘故障），而失败时这个方法只能返回一个「新账号」。
+                一旦调用方拿着这个空账号 `_save_player`，真存档就被静默清空了 ——
+                所以 strict=True 时改为抛 ``PlayerLoadError``，让调用方中止这次操作
+                （见 ``_do_cast`` 开头）。默认 False 保持老行为：
+                「只是想看一眼」的调用点拿到空账号也无害。
+        """
         try:
             raw = await self.get_kv_data(self._kv_key(user_id), None)
         except Exception as e:
+            if strict:
+                logger.error(
+                    f"读取玩家 {user_id} 数据失败，已中止本次操作（不会覆盖存档）：{e}"
+                )
+                raise PlayerLoadError(str(e)) from e
             logger.error(f"读取玩家 {user_id} 数据失败，使用初始数据：{e}")
             raw = None
 

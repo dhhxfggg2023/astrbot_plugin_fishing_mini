@@ -2,7 +2,7 @@
   "metadata": {
     "display_name": "Fishing (群钓鱼)",
     "desc": "QQ group fishing mini-game (beta) with daily auto-backup and full player-data import/export.",
-    "short_desc": "QQ group fishing: 232 species, 16 spots, one /钓鱼 command."
+    "short_desc": "QQ group fishing: 271 species, 19 spots, one /钓鱼 command."
   },
   "pages": {
     "editor": {

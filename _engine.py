@@ -255,7 +255,23 @@ class EngineMixin:
             return
 
         async with lock:
-            player = await self._load_player(user_id)
+            # ⚠️ strict=True：这一竿接下来会 _save_player，绝不能拿「读失败的空账号」
+            # 去写回 —— 那会把玩家的金币/背包/图鉴整个清空（实测：一次瞬时读失败
+            # 就能把 50000 金币 + 20 条鱼变成初始值）。读失败就中止，什么都不写。
+            try:
+                player = await self._load_player(user_id, strict=True)
+            except PlayerLoadError as e:
+                logger.error(f"抛竿中止（玩家 {user_id} 存档读取失败）：{e}")
+                async for _r in self._say_msg(
+                    event,
+                    "cast.load_failed",
+                    event.plain_result(
+                        "😵 读取你的存档失败了（可能是数据库正忙）。"
+                        "这一竿没有扣任何东西，稍后再试一次就好。"
+                    ),
+                ):
+                    yield _r
+                return
             now = time.time()
 
             # 记录昵称，供排行榜展示
@@ -369,7 +385,9 @@ class EngineMixin:
                 player["last_fish_time"] = int(now)
                 await self._save_player(player)
                 if outcome == "item" and drop is not None:
-                    player = await self._load_player(user_id)
+                    # ⚠️ 这里**不要**再 _load_player 一次：上面的 _save_player 刚把
+                    # 内存里的 player 落过盘，重读只会多开一条「读失败 -> 空账号覆盖」
+                    # 的路（而且重读失败还会丢掉这次杂物）。直接用内存里这份即可。
                     drop_text = await self._apply_collectible(player, drop, user_id)
                     lines = [t for t in (drop_text, bait_note) if t]
                     if lines:
@@ -465,7 +483,8 @@ class EngineMixin:
                     else:
                         yield payload
                 result = result or {"catch": None, "rating": "失败", "bonus": 0.0}
-                player = await self._load_player(user_id)
+                # ⚠️ 同样不重读（见上面杂物分支的说明）：拉线期间内存里的 player
+                # 就是权威状态，重读只是多一条会把存档读成空账号的通道。
                 catch = result.get("catch")
                 rating = result.get("rating")
 
@@ -561,7 +580,21 @@ class EngineMixin:
             return
 
         async with lock:
-            player = await self._load_player(user_id)
+            # strict=True：连钓同样会 _save_player，读失败必须中止（同单竿的说明）
+            try:
+                player = await self._load_player(user_id, strict=True)
+            except PlayerLoadError as e:
+                logger.error(f"连钓中止（玩家 {user_id} 存档读取失败）：{e}")
+                async for _r in self._say_msg(
+                    event,
+                    "cast.load_failed",
+                    event.plain_result(
+                        "😵 读取你的存档失败了（可能是数据库正忙）。"
+                        "这一批没有扣任何东西，稍后再试一次就好。"
+                    ),
+                ):
+                    yield _r
+                return
             now = time.time()
 
             # 记录昵称与来源平台（与单竿一致，排行榜要用）
@@ -855,9 +888,25 @@ class EngineMixin:
             if consumed > 0:
                 baits = player.setdefault("baits", {})
                 baits[bait_id] = max(0, _safe_int(baits.get(bait_id), 0, 0) - consumed)
-            new_ach = self._check_achievements(player)
-            milestone = self._milestone_text(player)
-            saved = await self._save_player(player)
+            # ⚠️ 先落盘，再做成就/里程碑/排行榜这些「装饰性」的事：
+            #    以前整批只有最后那一次 _save_player，中间任何异常（成就表算错、
+            #    里程碑文案出错）都会让**整批渔获连同已扣的饵一起消失**，
+            #    而玩家看到的却是一份正常的连钓汇总。宁可先保住数据。
+            try:
+                saved = await self._save_player(player)
+            except Exception as e:  # pragma: no cover - 存档失败也不该吞掉汇总
+                saved = False
+                logger.error(f"连钓落盘失败（玩家 {user_id}）：{e}", exc_info=True)
+            try:
+                new_ach = self._check_achievements(player)
+                milestone = self._milestone_text(player)
+            except Exception as e:  # pragma: no cover
+                new_ach, milestone = [], ""
+                logger.error(f"连钓收尾计算失败（玩家 {user_id}）：{e}", exc_info=True)
+            try:
+                await self._save_player(player)
+            except Exception:  # pragma: no cover
+                pass
             await self._touch_leaderboard(player)
 
             summary = (
@@ -987,6 +1036,9 @@ class EngineMixin:
             # 里程碑：整十/整百竿的额外小奖励文案
             milestone = self._milestone_text(player)
 
+            # ⚠️ 这里**先落盘**：上面任何一步（成就表 / 里程碑 / 彩蛋）抛异常都
+            #    不该把这条鱼一起带走 —— 以前它们共用一个 try，except 只记日志，
+            #    于是玩家付了饵钱、这条鱼却永远不进背包（界面上还看不出来）。
             saved = await self._save_player(player)
             # 更新群内排行榜索引
             await self._touch_leaderboard(player)
@@ -1010,7 +1062,13 @@ class EngineMixin:
                     "　请把这条消息发给管理员核对（日志里有详情）",
                 )
         except Exception as e:
+            # 兜底：上面已经 `_record_catch` 过了，这里再存一次 ——
+            # 万一异常发生在落盘之前，至少把这条鱼（和前面的成就改动）保住。
             logger.error(f"写入渔获失败（玩家 {user_id}）：{e}", exc_info=True)
+            try:
+                await self._save_player(player)
+            except Exception:  # pragma: no cover - 保存都失败就只能记日志了
+                pass
 
     def _collect_bookkeeping(
         self, player: dict[str, Any], drop: dict[str, Any]

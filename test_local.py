@@ -161,6 +161,28 @@ def make_plugin(config: dict | None = None):
     return plugin
 
 
+def json_of(res: Any) -> dict:
+    """把 Web API handler 的返回值剥成 dict。
+
+    ⚠️ 装了 astrbot 的环境里，``editor_api_*`` 会返回 ``JSONResponse``
+    （``_editor_bridge`` 末尾 ``json_response(data)``），没装才返回裸 dict。
+    以前测试直接 ``res.get(...)``，于是在**装了 astrbot 的机器上**
+    （也就是 ``run_tests.bat`` 跑的那台）整个 test_local 会崩在这里，
+    后面几百条断言从来没被执行过。
+    """
+    if isinstance(res, dict):
+        return res
+    body = getattr(res, "body", None)
+    if isinstance(body, (bytes, bytearray)):
+        return json.loads(body.decode("utf-8"))
+    if isinstance(body, str):
+        return json.loads(body)
+    text = getattr(res, "text", None)
+    if isinstance(text, str):
+        return json.loads(text)
+    raise AssertionError(f"认不出的响应类型：{type(res)!r}")
+
+
 async def run(handler, event, *args):
     out = []
     async for r in handler(event, *args):
@@ -4942,7 +4964,7 @@ async def main():
         and mod.SCENE_GROUP.get("page.prev") == "page",
         "三个动态场景都登记进了 REPLY_SCENES（带分组与说明）",
     )
-    _dyn_payload = await make_plugin().editor_api_scenes()
+    _dyn_payload = json_of(await make_plugin().editor_api_scenes())
     _dyn_ids = {
         s.get("id")
         for g in _dyn_payload.get("groups", [])
@@ -6023,6 +6045,10 @@ async def main():
     p1d = await plugin_d._load_player("89701")
     p1d["gold"] = 7
     await plugin_d._save_player(p1d)
+    # ⚠️ 等一下：`latest` 是按文件 mtime 挑的，而导入路径现在会先自动存一份
+    #    「导入前自动存档」——同一秒内写出的几份快照 mtime 可能并列，
+    #    谁算「最新」就不确定了（这段测试历史上偶发失败）。隔开一秒即稳定。
+    await asyncio.sleep(1.05)
     msg = await plugin_d._restore_snapshot("latest")
     check("恢复" in msg, f"从最新快照恢复 -> {msg}")
     check(

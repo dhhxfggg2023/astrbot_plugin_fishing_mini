@@ -197,13 +197,47 @@ def _content_digest(value: Any) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()
 
 
+_TMP_SUFFIX = ".tmp"
+
+
+def _sweep_stale_tmp(path: Path) -> None:
+    """清掉这个文件旁边「上次崩溃留下」的临时文件。
+
+    命名规则见 `_atomic_write_text`：``<名字>.<pid>.tmp``。**只清已经死掉的
+    pid 的**（``os.kill(pid, 0)`` 探测），本进程的临时文件不动 —— 否则
+    「写临时文件 -> 清一遍 -> 改名」这段时间里会把自己的活儿删掉。
+    """
+    for stale in path.parent.glob(f"{path.name}.*{_TMP_SUFFIX}"):
+        try:
+            pid = int(stale.name[len(path.name) + 1: -len(_TMP_SUFFIX)])
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, 0)
+            continue          # 那个进程还活着，别动它的临时文件
+        except OSError:
+            pass              # 进程没了 -> 这是崩溃残留
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     """原子写文本：先写同目录临时文件，再 ``os.replace`` 顶上去。
 
     好处：进程被杀 / 写盘出错时，**已经存在的那份文件一个字节都不会动**
     （不会出现半截 JSON）；本次的临时文件在异常路径上也会删干净。
+
+    ⚠️ 临时文件名带 ``pid`` 唯一化：以前固定叫 ``xxx.json.tmp``，
+    插件重载 / 两个进程（或两个线程）同时写同一个文件时会互相踩
+    —— 一个把临时文件改名走了，另一个 ``os.replace`` 就报「文件不存在」。
+    带上 pid 之后，顺手把「已经死掉的进程」留下的残留扫掉（见 `_sweep_stale_tmp`）。
     """
-    tmp = path.with_name(path.name + ".tmp")
+    _sweep_stale_tmp(path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}{_TMP_SUFFIX}")
     try:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, path)
@@ -234,13 +268,38 @@ class BackupStore:
     def path_of(self, *parts: str) -> Path:
         return self.root.joinpath(*parts)
 
+    def _contained(self, path: Path) -> bool:
+        """这个路径是否真的落在存档根目录里（挡住 ``../`` 之类的越界写法）。
+
+        ⚠️ 必须有：`path_of` 只是拼路径，不校验。任何**外部传入的名字**
+        （编辑器页面 / 插件配置里的快照名）都可能是 ``../../cmd_config.json``，
+        没有这道检查就能读/改名/删掉存档根目录之外的任意 JSON 文件。
+        原来的 ``rewrite_snapshot`` 里已经有了这段判断，这里提出来给所有调用点共用。
+        """
+        try:
+            root = self.root.resolve()
+            target = path.resolve()
+        except OSError:
+            return False
+        return target != root and root in target.parents
+
     def ensure_layout(self) -> None:
-        """建目录 + 写说明文件（说明文件内容变了会更新，其它文件不动）。"""
-        self.root.mkdir(parents=True, exist_ok=True)
-        for kind in KIND_NAMES:
-            self.path_of(kind).mkdir(parents=True, exist_ok=True)
-        self.path_of("players").mkdir(parents=True, exist_ok=True)
-        self.path_of("exported").mkdir(parents=True, exist_ok=True)
+        """建目录 + 写说明文件（说明文件内容变了会更新，其它文件不动）。
+
+        ⚠️ 整段容忍 ``OSError``：存档根目录只读 / 盘满 / 被占用时，
+        以前这个 ``mkdir`` 会把异常抛给调用方（导出玩家、导入前的备份都没包），
+        于是「存档目录不可写」会表现成别处的莫名报错。现在只降级：
+        目录建不出来时后续写盘各自失败并被各自捕获，插件照常跑。
+        """
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            for kind in KIND_NAMES:
+                self.path_of(kind).mkdir(parents=True, exist_ok=True)
+            self.path_of("players").mkdir(parents=True, exist_ok=True)
+            self.path_of("exported").mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            _log_warning(f"存档目录不可用（{self.root}）：{e}")
+            return
         readme = self.path_of("README.md")
         try:
             if not readme.exists() or readme.read_text(encoding="utf-8") != README_TEXT:
@@ -296,9 +355,8 @@ class BackupStore:
         }
         name = self.snapshot_name(kind, ts)
         path = self.path_of(kind, name)
-        path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
-        )
+        # 原子写：快照写一半时断电/被杀，以前会留下半截 JSON（读回来直接坏档）
+        _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=1))
         # 只保留最近 N 份由调用方决定：这里只更新清单
         self.rebuild_index()
         return path, payload
@@ -348,11 +406,11 @@ class BackupStore:
                 return None
             return self.path_of(*items[0]["rel"].split("/"))
         candidate = self.path_of(*wanted.replace("\\", "/").split("/"))
-        if candidate.is_file():
+        if candidate.is_file() and self._contained(candidate):
             return candidate
         for kind in KIND_NAMES:
             path = self.path_of(kind, wanted)
-            if path.is_file():
+            if path.is_file() and self._contained(path):
                 return path
         return None
 
@@ -399,7 +457,7 @@ class BackupStore:
         text = json.dumps(envelope, ensure_ascii=False, indent=1)
         for folder in ("players", "exported"):
             try:
-                self.path_of(folder, f"{safe}.json").write_text(text, encoding="utf-8")
+                _atomic_write_text(self.path_of(folder, f"{safe}.json"), text)
             except OSError:
                 continue
         return self.path_of("players", f"{safe}.json")
@@ -465,9 +523,7 @@ class BackupStore:
                 return False
             data["note"] = str(note if note is not None else "")
             try:
-                path.write_text(
-                    json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8"
-                )
+                _atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=1))
             except OSError:
                 return False
             self.rebuild_index()
@@ -495,15 +551,9 @@ class BackupStore:
             path = self.find_snapshot(name)
             if path is None or not path.is_file():
                 return False
-            root = self.root.resolve()
-            target = path.resolve()
-            if target != root and root not in target.parents:
+            if not self._contained(path):   # 二次确认（find_snapshot 已经挡过一道）
                 return False
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
-            )
-            os.replace(tmp, path)
+            _atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=1))
             self.rebuild_index()
             return True
         except Exception:  # pragma: no cover - 兜底：坏存档不该拖垮调用方

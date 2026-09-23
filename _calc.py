@@ -44,34 +44,56 @@ def _is_number(value: Any) -> bool:
     """是否为可用作数值的 int/float（bool 不算）。"""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
+def _finite(number: float) -> float | None:
+    """有限数值才收（NaN / ±inf 一律当「不是数字」）。
+
+    ⚠️ 为什么必须挡：NaN 会顺着算术污染整条链（``_clamp`` 对 NaN 也失效），
+    而且一旦写进配置，插件自己的 ``JSONResponse``（``allow_nan=False``）之后
+    每次读配置都会抛异常 —— 编辑器页面直接打不开，只能手改配置文件。
+    """
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
 def _safe_number(value: Any, default: float) -> float:
     """把任意值安全地转成 float。
 
     注意：插件配置里从「竖线分隔字符串」解析出来的字段都是 **str**，
     所以这里必须处理字符串，不能只认 int/float。
+
+    NaN / ±inf / ``"1e400"`` 这类非有限值一律回落到默认值（见 ``_finite``）。
     """
     if isinstance(value, bool):
         return float(default)
     if isinstance(value, (int, float)):
-        return float(value)
+        finite = _finite(float(value))
+        return float(default) if finite is None else finite
     if isinstance(value, str):
         try:
-            return float(value.strip())
-        except (TypeError, ValueError):
+            number = float(value.strip())
+        except (TypeError, ValueError, OverflowError):
             return float(default)
+        finite = _finite(number)
+        return float(default) if finite is None else finite
     return float(default)
 
 def _safe_int(raw: Any, default: int = 0, minimum: int | None = None) -> int:
-    """把任意值安全地转成 int（同样要能处理配置里的字符串）。"""
+    """把任意值安全地转成 int（同样要能处理配置里的字符串）。
+
+    ⚠️ 捕获 ``OverflowError``：``int(float("1e400"))`` 会抛它，而它**不是**
+    ``ValueError`` —— 以前站长在配置里写一个 ``1e400`` 就能让任意调用点崩掉。
+    """
     if isinstance(raw, bool):
         value = default
     elif isinstance(raw, (int, float)):
-        value = int(raw)
+        number = _finite(float(raw))
+        value = default if number is None else int(number)
     elif isinstance(raw, str):
         try:
-            value = int(float(raw.strip()))
-        except (TypeError, ValueError):
-            value = default
+            number = _finite(float(raw.strip()))
+        except (TypeError, ValueError, OverflowError):
+            number = None
+        value = default if number is None else int(number)
     else:
         value = default
     if minimum is not None:
@@ -1999,6 +2021,11 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         player["market_best_bonus"] = _safe_int(raw.get("market_best_bonus"), 0, 0)
         last_name = raw.get("last_name", "")
         player["last_name"] = last_name if isinstance(last_name, str) else ""
+        # ⚠️ last_platform 以前漏在白名单外：它在 _default_player 里有、每竿都会被写
+        #    （_engine 记来源平台），但读档重建时没人回填 —— 于是**每次读档都被清成 ""**，
+        #    档案页和排查平台适配问题时永远看不到值。
+        last_platform = raw.get("last_platform", "")
+        player["last_platform"] = last_platform if isinstance(last_platform, str) else ""
 
         # --- 变异收集 ---
         raw_variants = raw.get("variants")
@@ -2023,7 +2050,12 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         player["baits"] = baits
 
         equipped = raw.get("equipped_bait")
-        player["equipped_bait"] = equipped if isinstance(equipped, str) else "none"
+        # ⚠️ 缺失/写坏时必须是 ""，**不能是 "none"**：
+        #     ""     = 从没选过 -> 允许自动挂饵（见 _engine 的 auto_equip_bait）
+        #     "none" = 玩家**主动**选了空钩 -> 永远不自动挂饵
+        # 老存档没有这个字段，写成 "none" 等于把老玩家的自动挂饵永久关掉，
+        # 而且界面上完全看不出来（只会觉得"怎么老是空竿"）。
+        player["equipped_bait"] = equipped if isinstance(equipped, str) else ""
 
         # --- 自动补给 / 称号 / 香火（v1.18.17）---
         auto_buff = raw.get("auto_buff_item")
@@ -2201,9 +2233,16 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         if player["buff_casts_left"] <= 0:
             # 没有剩余竿数 = 持续型 buff 已经结束，加成不该留着
             player["buff_quality"] = 0.0
-        elif player["buff_quality"] <= 0 < player["luck_charges"]:
-            # 老存档迁移：以前玉佩的加成写在 luck_charges 里（没有 buff_quality 这个字段），
-            # 照着「还在生效」把它当成本次 buff 的每竿加成，并把一次性储备清零（不双算）
+        elif player["buff_quality"] <= 0 < player["luck_charges"] \
+                and "buff_quality" not in raw:
+            # 老存档迁移：以前玉佩的加成写在 luck_charges 里（**根本没有
+            # buff_quality 这个字段**），照着「还在生效」把它当成本次 buff 的每竿加成，
+            # 并把一次性储备清零（不双算）。
+            #
+            # ⚠️ 判据必须是「raw 里没有 buff_quality」而不是「buff_quality <= 0」：
+            #    后者每次读档都会命中，于是玩家只要在玉佩生效期间拿到一次
+            #    「下一竿手气」（插曲 / 彩蛋 / 扩展），那点一次性手气就会被静默
+            #    改写成「剩余 N 竿每竿都加」并清零 —— 数值凭空放大，而且不可复现。
             player["buff_quality"] = player["luck_charges"]
             player["luck_charges"] = 0.0
 
@@ -2565,6 +2604,7 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("cast.milestone", "cast", "这一竿达成了累计里程碑", ""),
     ("cast.egg", "cast", "这一竿触发了彩蛋", ""),
     ("cast.save_failed", "cast", "存档失败提示（单竿）", ""),
+    ("cast.load_failed", "cast", "读档失败、这一竿中止（不扣任何东西）", ""),
     ("cast.multi_limit", "cast", "连钓次数超过上限", ""),
     ("cast.multi_busy", "cast", "还在等「拉」的时候想连钓", ""),
     ("cast.multi_bad_times", "cast", "连钓次数不是正整数", ""),

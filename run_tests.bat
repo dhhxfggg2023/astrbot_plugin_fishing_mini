@@ -1,6 +1,10 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+REM 测试里有大量 ✅/❌ 输出：不强制 UTF-8 的话，在默认 GBK 控制台上会直接
+REM UnicodeEncodeError 崩掉（test_backup_index / test_ci_workflow 都踩过）
+set PYTHONIOENCODING=utf-8
+set PYTHONUTF8=1
 set OUT=%~dp0test_results.txt
 echo ==== plugin test run %DATE% %TIME% ==== > "%OUT%"
 echo cwd=%CD% >> "%OUT%"

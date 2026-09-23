@@ -582,69 +582,78 @@ class InteractionsMixin:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[float] = loop.create_future()
         # 先注册等待、再提示玩家，避免「提示已发出但还没开始监听」的竞态
-        # ``quiet``：这一条鱼要不要回「✅ 收到，正在收线…」（连钓里逐条弹互动时
-        # 每条都回一句就是刷屏，见 ``_pull_is_quiet`` / ``_engine`` 的 quiet_ack）
-        quiet = bool(spec.get("quiet_ack"))
-        self._pending_pulls[user_id] = {
-            "future": future,
-            "session": self._session_key(event),
-            "deadline": time.monotonic() + window,
-            "quiet": quiet,
-        }
-
-        tips = ["竿尖猛地弯了下去", "浮漂一下子沉进水里", "线被拽得吱吱响",
-                "水面炸开一朵水花", "手里的竿传来一股大力"]
-        tip = random.choice(tips)
-        hook_text = (
-            f"{_fish_emoji(fish)} {fish['name']} 咬钩了！{tip}\n"
-            f"⚡ {window:.0f} 秒内发 /钓鱼 拉（或点下面的按钮）"
-        )
-        async for reply in self._say(
-            event,
-            hook_text,
-            "pull.hook",
-            values={
-                "鱼名": str(fish.get("name") or ""),
-                "秒数": f"{window:.0f}",
-                "手感": tip,
-            },
-        ):
-            yield reply
-
-        started = time.monotonic()
-        # 反应时间护栏（只有连钓会设 spec["min_reaction"]，见 main.MULTI_PULL_MIN_REACTION）：
-        # 连钓自动接续下一条，上一条的「余震」（连点 / 消息重投）会落在这条窗口刚开时，
-        # 不加护栏就会以落点 ≈0 判成「偏差」，玩家连提示都没看见。这段里的「拉」丢弃后
-        # **继续等剩下那点时间**，不是直接判超时。
-        min_reaction = _safe_number(spec.get("min_reaction"), 0.0)
-        hit = False
-        elapsed = window
+        # ⚠️ 注册与这次提示都包在 try 里：
+        #    提示要 yield 出去，生成器会**在这里挂起**；消费者在这时取消/关闭生成器
+        #    （发送异常、任务取消、插件重载）以前会让下面的 finally 轮不到执行，
+        #    于是 _pending_pulls 里永久留一条过期记录。现在注册也在 try 内，
+        #    无论从哪条路退出都会清干净（另有 _pull_pending_valid 兜底 deadline）。
         try:
-            while True:
-                remaining = window - (time.monotonic() - started)
-                if remaining <= 0:
-                    break
-                await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
-                elapsed = time.monotonic() - started
-                if elapsed >= min_reaction:
-                    hit = True
-                    break
-                # 太早了：换一个新 future 接着等（旧的那个已经 done，换掉即可）
-                future = loop.create_future()
-                self._pending_pulls[user_id] = {
-                    "future": future,
-                    "session": self._session_key(event),
-                    "deadline": time.monotonic() + remaining,
-                    "quiet": quiet,
-                }
-        except asyncio.TimeoutError:
+            # ``quiet``：这一条鱼要不要回「✅ 收到，正在收线…」（连钓里逐条弹互动时
+            # 每条都回一句就是刷屏，见 ``_pull_is_quiet`` / ``_engine`` 的 quiet_ack）
+            quiet = bool(spec.get("quiet_ack"))
+            self._pending_pulls[user_id] = {
+                "future": future,
+                "session": self._session_key(event),
+                "deadline": time.monotonic() + window,
+                "quiet": quiet,
+            }
+
+            tips = ["竿尖猛地弯了下去", "浮漂一下子沉进水里", "线被拽得吱吱响",
+                    "水面炸开一朵水花", "手里的竿传来一股大力"]
+            tip = random.choice(tips)
+            hook_text = (
+                f"{_fish_emoji(fish)} {fish['name']} 咬钩了！{tip}\n"
+                f"⚡ {window:.0f} 秒内发 /钓鱼 拉（或点下面的按钮）"
+            )
+            async for reply in self._say(
+                event,
+                hook_text,
+                "pull.hook",
+                values={
+                    "鱼名": str(fish.get("name") or ""),
+                    "秒数": f"{window:.0f}",
+                    "手感": tip,
+                },
+            ):
+                yield reply
+
+            started = time.monotonic()
+            # 反应时间护栏（只有连钓会设 spec["min_reaction"]，见 main.MULTI_PULL_MIN_REACTION）：
+            # 连钓自动接续下一条，上一条的「余震」（连点 / 消息重投）会落在这条窗口刚开时，
+            # 不加护栏就会以落点 ≈0 判成「偏差」，玩家连提示都没看见。这段里的「拉」丢弃后
+            # **继续等剩下那点时间**，不是直接判超时。
+            min_reaction = _safe_number(spec.get("min_reaction"), 0.0)
             hit = False
             elapsed = window
-        except asyncio.CancelledError:
-            if not future.done():
-                future.cancel()
-            raise
+            try:
+                while True:
+                    remaining = window - (time.monotonic() - started)
+                    if remaining <= 0:
+                        break
+                    await asyncio.wait_for(asyncio.shield(future), timeout=remaining)
+                    elapsed = time.monotonic() - started
+                    if elapsed >= min_reaction:
+                        hit = True
+                        break
+                    # 太早了：换一个新 future 接着等（旧的那个已经 done，换掉即可）
+                    future = loop.create_future()
+                    self._pending_pulls[user_id] = {
+                        "future": future,
+                        "session": self._session_key(event),
+                        "deadline": time.monotonic() + remaining,
+                        "quiet": quiet,
+                    }
+            except asyncio.TimeoutError:
+                hit = False
+                elapsed = window
+            except asyncio.CancelledError:
+                if not future.done():
+                    future.cancel()
+                raise
+            finally:
+                self._pending_pulls.pop(user_id, None)
         finally:
+            # 正常收尾与「生成器被关闭/取消」都走这里：记录一定被清掉（外层 try 见上）
             self._pending_pulls.pop(user_id, None)
 
         if not hit:
@@ -765,13 +774,31 @@ class InteractionsMixin:
         pending = self._pending_pulls.get(user_id)
         return bool(isinstance(pending, dict) and pending.get("quiet"))
 
+    def _pull_pending_valid(self, user_id: str) -> dict[str, Any] | None:
+        """取出该玩家「有效的」拉线等待记录，同时清掉过期的。
+
+        ⚠️ ``deadline`` 以前是**只写不读**的死字段：消费者如果在 ``yield`` 处
+        取消/关闭了生成器（发送异常、任务取消、插件重载），注册进去的
+        ``_pending_pulls[user_id]`` 就没人清 —— 之后一次 ``/钓鱼 拉`` 会往那个
+        早就过期的 future 里 ``set_result``，回一句「✅ 收到，正在收线…」，
+        其实根本没有鱼。这里做兜底：过期的直接丢掉。
+        """
+        pending = self._pending_pulls.get(user_id)
+        if not isinstance(pending, dict):
+            return None
+        deadline = pending.get("deadline")
+        if isinstance(deadline, (int, float)) and time.monotonic() > deadline:
+            self._pending_pulls.pop(user_id, None)
+            return None
+        return pending
+
     def _resolve_pull(self, event: AstrMessageEvent) -> bool:
         """若该玩家正在等「拉」，唤醒等待。返回是否触发。"""
         try:
             user_id = str(event.get_sender_id())
         except Exception:
             return False
-        pending = self._pending_pulls.get(user_id)
+        pending = self._pull_pending_valid(user_id)
         if not pending:
             return False
         session = pending.get("session")

@@ -278,6 +278,10 @@ class DataAdminMixin:
             return f"上传的 {newest_name} 内容格式不对"
 
         store.copy_into(newest, "manual", f"imported_{newest_name}")
+        # ⚠️ 覆盖实时玩家数据之前先存一份（和「清除」「从快照恢复」一致）：
+        #    导入是**整体覆盖**，上传错文件 / 上传成别人的存档就再也回不来了。
+        #    前置快照让站长还能用「从快照恢复」倒回去。
+        await self._snapshot("manual", note="导入前自动存档")
         # 形态一：整份快照
         if isinstance(payload.get("players"), dict):
             count = 0
@@ -335,7 +339,14 @@ class DataAdminMixin:
             return
         target = str(self.cfg.get("data_target") or "").strip()
         confirm = bool(self.cfg.get("data_confirm"))
-        dangerous = action in ("清除单个玩家", "清除全部玩家数据", "从快照恢复")
+        # ⚠️「导入上传的存档」也在危险名单里：它会 put_kv_data **直接覆盖**实时玩家
+        #    （整份快照形态 = 覆盖一大批人），以前既不要确认、也不做前置快照。
+        dangerous = action in (
+            "清除单个玩家",
+            "清除全部玩家数据",
+            "从快照恢复",
+            "导入上传的存档",
+        )
         try:
             if dangerous and not confirm:
                 result = f"「{action}」需要先勾选「我已确认」再保存配置"

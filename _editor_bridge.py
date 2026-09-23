@@ -379,10 +379,13 @@ def _coerce_number(key: str, value: Any, default: Any) -> tuple[Any, str]:
         if want_number:
             numbers: list[float] = []
             for piece in pieces:
-                try:
-                    numbers.append(float(str(piece).strip()))
-                except (TypeError, ValueError):
+                # ⚠️ 必须走 _as_number：裸 float() 会收下 "nan" / "inf"，
+                # 而 NaN 一旦写进配置，JSONResponse(allow_nan=False) 之后每次
+                # GET config / 打开编辑器页面都会 500，只能手改配置文件才能救回来。
+                number = _as_number(piece)
+                if number is None:
                     return None, f"「{key}」每一项都要是数字（收到「{piece}」）"
+                numbers.append(number)
             if all(float(n).is_integer() for n in numbers):
                 return [int(n) for n in numbers], ""
             return numbers, ""

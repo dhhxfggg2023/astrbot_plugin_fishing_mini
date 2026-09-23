@@ -471,8 +471,10 @@ def test_atomic_write(backups: str) -> None:
     store.rebuild_index()
     check(tmp_leftovers(backups) == [], "正常写盘后没有 *.tmp", tmp_leftovers(backups))
 
-    # 先塞一个「上次崩溃留下的」同名临时文件：下次真写盘时应该被处理掉
-    stale = Path(backups, "index.json.tmp")
+    # 先塞一个「上次崩溃留下的」同名临时文件：下次真写盘时应该被处理掉。
+    # ⚠️ 名字必须带上一个**已经死掉**的 pid（见 `_backup._atomic_write_text` 的
+    #    唯一化命名）：用一个几乎不可能存在的 pid 冒充崩溃残留。
+    stale = Path(backups, "index.json.999999.tmp")
     stale.write_text("{ 半截垃圾", encoding="utf-8")
     store.write_snapshot("manual", {"3001": {"gold": 1}}, note="顺手清垃圾", now=1_800_000_000.0)
     check(not stale.exists(), "残留的 index.json.tmp 被写盘流程处理掉")
