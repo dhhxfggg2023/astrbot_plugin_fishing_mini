@@ -513,6 +513,19 @@ class ViewsMixin:
             line = f"{line}　{floor_text}" if line else floor_text
         return line
 
+    def _level_line(self, player: dict[str, Any]) -> str:
+        """等级一行：``🎚 等级 7（+12/88）``。
+
+        ⚠️ 等级以前**只**在 ``/钓鱼 钓点`` 里出现过，档案里反而没有 ——
+        站长要求「等级显示统一放到档案」，所以这一行是唯一口径：
+        按真实曲线（``_level_progress``）写「当前级 + 本级进度/升级所需」，
+        满级时只写等级（没有下一级可升）。
+        """
+        level, into, need = _level_progress(player)
+        if need <= 0:
+            return f"🎚 等级 {level}（已满级）"
+        return f"🎚 等级 {level}　升级进度 {into}/{need}"
+
     def _format_result(
         self,
         player: dict[str, Any],
@@ -919,6 +932,71 @@ class ViewsMixin:
         """今天这个玩家的天气名（没开天气/没生成就返回空串）。"""
         cfg = WEATHER_BY_ID.get(str(player.get("weather") or ""))
         return str(cfg.get("name") or "") if cfg else ""
+
+    # -------------------------------------------------------------------------
+    # 列表的堆叠显示（连钓战报与背包共用同一套规则）
+    # -------------------------------------------------------------------------
+    def _stack_show_separate(self, fish: dict[str, Any], variant: Any) -> bool:
+        """这一条要不要单独占一行。
+
+        规则（站长定的，连钓战报与背包**共用**）：
+          * **传说 / 神话**（要拉线的高档鱼），或
+          * **任意稀有度的异色个体**（带 variant）
+        逐条列出；其余（常见/少见/稀有的普通个体）按「鱼种 + 异色」堆叠成一行。
+        """
+        if variant:
+            return True
+        return str(fish.get("rarity") or "") in ("传说", "神话")
+
+    def _stack_rows(self, entries: list[dict[str, Any]]) -> list[str]:
+        """把一批 ``{index, instance, alias, locked}`` 按上面的规则渲染成行。
+
+        单独列出的沿用 ``alias``（连钓是「emoji+名字」，背包是整条 ``_instance_line``）；
+        堆叠的合并成一行，**沿用这一批里第一条的序号** —— 这样背包的行号是连续可读的
+        （``4. 🐡锦鲤 ×1``），不会出现跳号。
+        """
+        rows: list[str] = []
+        stacked: dict[tuple[str, str], dict[str, Any]] = {}
+        order: list[tuple[str, str]] = []
+        for entry in entries:
+            instance = entry.get("instance") or {}
+            key = (
+                str(instance.get("fish_id") or ""),
+                str(instance.get("variant") or ""),
+            )
+            fish = FISH_BY_ID.get(key[0]) or {}
+            if entry.get("locked") or self._stack_show_separate(fish, key[1]):
+                rows.append(entry["alias"])
+                continue
+            item = stacked.get(key)
+            if item is None:
+                var_id = key[1]
+                var_emoji = ""
+                if var_id:
+                    var_emoji = str((VARIANT_BY_ID.get(var_id) or {}).get("emoji") or "")
+                item = {
+                    "emoji": f"{_fish_emoji(fish)}{var_emoji}",
+                    "name": str(fish.get("name") or "未知"),
+                    "count": 0,
+                    "value": 0,
+                    "marked": bool(entry.get("mark")),
+                    "index": entry.get("index"),
+                }
+                stacked[key] = item
+                order.append(key)
+            item["count"] += 1
+            item["value"] += _instance_value(instance)
+            if entry.get("mark"):
+                item["marked"] = True
+        for key in order:
+            item = stacked[key]
+            mark = "🔒" if item["marked"] else ""
+            prefix = f"{item['index']:>2}." if isinstance(item.get("index"), int) else ""
+            rows.append(
+                f"{prefix}{mark}{item['emoji']}{item['name']} ×{item['count']}"
+                f"　{_fmt_gold(item['value'])}金"
+            )
+        return rows
 
     def _help_pages(self) -> list[tuple[str, list[str]]]:
         """帮助分页内容：(标题, 行列表)。每页都尽量短，避免刷屏。"""

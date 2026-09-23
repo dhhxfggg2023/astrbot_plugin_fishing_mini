@@ -728,7 +728,15 @@ class EngineMixin:
                         _buff_refill_tried = False
                     elif not _buff_refill_tried:
                         _buff_refill_tried = True
-                        lines.extend(self._auto_supply_buff(player))
+                        # ⚠️ **只**去重「手气额度用完了」那一句：额度用光后每竿都会
+                        #    试着补一次，以前会把同一句「用完了」重复贴进战报
+                        #    （站长要求：第一次用完显示一次就够）。
+                        #    其它提示（``🎐 自动用上「玉髓灯」``）**必须每次都留** ——
+                        #    15 竿的灯在 20 连钓里确实会补上两次，那是实情，不能吞。
+                        for _refill_note in self._auto_supply_buff(player):
+                            if "额度用完" in _refill_note and _refill_note in lines:
+                                continue
+                            lines.append(_refill_note)
                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
                 luck = _effective_luck(player, cfg)
@@ -940,6 +948,9 @@ class EngineMixin:
                 summary += f"｜跑掉 {stats['escaped']} 条"
             # 普通鱼堆叠在汇总之前补上（见 `_multi_stack_lines`）：先列出来的
             # 是「值得一条一条看」的（传说/神话/异色），剩下的同类合并成一行。
+            # ⚠️ 先把已列出的重新编号成 1..N，堆叠行再往下接 —— 否则堆叠行会带着
+            #    错的序号（比如「4. 传说 / 5. 锁定 / 1. 🐠鲤鱼 ×3」）。
+            lines = self._renumber_records(lines)
             lines.extend(self._multi_stack_lines(stacked, display))
             lines.append(summary)
             if bait_id != "none" and consumed != planned:
@@ -1046,6 +1057,10 @@ class EngineMixin:
         """把堆叠表渲染成若干行（接在已经列出的记录后面，行号往下续）。
 
         格式：``{序号}. {emoji}{鱼名} ×{条数}　{合计}金``。
+
+        ⚠️ 行号是「第几条被列出来的记录」，不是「第几竿」（一竿一条时两者一致）。
+        所以调用方**必须**在渲染前把已列出的那些记录重新编号成 1..N，
+        否则堆叠行（排在最后）会接着一个错的序号往下写，玩家看到的序号就是乱的。
         """
         rows: list[str] = []
         index = int(start_index)
@@ -1056,6 +1071,26 @@ class EngineMixin:
             )
             index += 1
         return rows
+
+    @staticmethod
+    def _renumber_records(lines: list[str]) -> list[str]:
+        """把「``N. 内容``」这类记录行按当前顺序重编号成 1..N（缩进行不动）。
+
+        连钓战报的行号 = 第几条记录。堆叠行是最后统一渲染的，所以先把已列出的
+        重新编号，堆叠行再接着往下排 —— 否则序号会跳（``4. 传说 / 5. 锁定 / 1. 鲤鱼 ×3``）。
+
+        ⚠️ 故意不用正则：`re` 没有注入到兄弟模块（本模块也不 import 它），
+        用 `re` 会在运行时 NameError。纯字符串判断同样稳。
+        """
+        out: list[str] = []
+        number = 0
+        for line in lines:
+            head, dot, rest = line.partition(".")
+            if dot and head.isdigit() and rest.startswith(" "):
+                number += 1
+                line = f"{number}.{rest}"
+            out.append(line)
+        return out
 
     def _record_catch(self, player: dict[str, Any], catch: dict[str, Any]) -> None:
         """渔获入账（不含成就/存档）：背包、累计、图鉴、变异计数、最佳纪录。

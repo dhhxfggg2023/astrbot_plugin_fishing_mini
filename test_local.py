@@ -3710,6 +3710,81 @@ async def main():
         f"行号往下续，且异色带自己的图标（一眼看出混了异色）-> {_rows[1]}",
     )
 
+    # --- 3c) 背包沿用同一套堆叠规则（v1.18.44）---
+    # 站长要求：背包里的鱼也按连钓的堆叠规则显示。共用一个 `_stack_rows`。
+    _bag_plugin = make_plugin()
+    _bag_entries = [
+        {
+            "index": i,
+            "instance": mod._new_instance(_common["id"], 1.0),
+            "alias": f"{i:>2}. {mod._instance_line(mod._new_instance(_common['id'], 1.0))}",
+            "locked": False,
+        }
+        for i in range(1, 4)
+    ]
+    _bag_entries.append({
+        "index": 4,
+        "instance": mod._new_instance(_legend["id"], 1.0),
+        "alias": " 4. 传说那条（单列）",
+        "locked": False,
+    })
+    _locked_inst = mod._new_instance(_common["id"], 1.0)
+    _locked_inst["locked"] = True
+    _bag_entries.append({
+        "index": 5,
+        "instance": _locked_inst,
+        "alias": " 5. 锁定的那条（单列）",
+        "locked": True,
+        "mark": True,
+    })
+    _bag_rows = _bag_plugin._stack_rows(_bag_entries)
+    check(
+        len(_bag_rows) == 3,
+        f"背包：3 条同类合并 1 行 + 传说 1 行 + 锁定 1 行 = 3 行 -> {_bag_rows}",
+    )
+    # 堆叠行排在单列行之后（顺序本身不影响可读性），沿用这一批第一条的序号
+    _stacked_row = next(r for r in _bag_rows if "×3" in r)
+    check(
+        _stacked_row.startswith(" 1."),
+        f"背包堆叠行沿用第一条的序号（不跳号）-> {_stacked_row}",
+    )
+    # 连钓那边的序号必须连续：先把已列出的重编号，堆叠行再往下接
+    _mixed = _stack_plugin._renumber_records(
+        ["1. 甲", "2. 乙", "　　缩进行不动", "3. 丙"]
+    )
+    check(
+        _mixed == ["1. 甲", "2. 乙", "　　缩进行不动", "3. 丙"],
+        f"重编号保持原顺序与缩进行 -> {_mixed}",
+    )
+    _mixed2 = _stack_plugin._renumber_records(["9. 甲", "12. 乙"])
+    check(
+        _mixed2 == ["1. 甲", "2. 乙"],
+        f"乱序号会被压成 1..N（堆叠行接在它后面才不跳号）-> {_mixed2}",
+    )
+    check(
+        any("传说那条" in r for r in _bag_rows)
+        and any("锁定的那条" in r for r in _bag_rows),
+        "背包：传说/神话/异色与锁定的一律单列 -> "
+        f"{[r for r in _bag_rows if '那条' in r]}",
+    )
+
+    # --- 3d) 档案里的等级行（v1.18.44：等级统一放档案）---
+    _lv_plugin = make_plugin()
+    _lv_p = mod._default_player("89199")
+    _lv_p["total_caught"] = mod._level_threshold(9) + 2
+    _lv_line = _lv_plugin._level_line(_lv_p)
+    _lv, _into, _need = mod._level_progress(_lv_p)
+    check(
+        _lv == 9 and f"等级 9" in _lv_line and f"{_into}/{_need}" in _lv_line,
+        f"档案等级行带「当前级 + 升级进度」-> {_lv_line}",
+    )
+    _lv_max = mod._default_player("89198")
+    _lv_max["total_caught"] = mod._level_threshold(mod.MAX_LEVEL) + 10 ** 9
+    check(
+        "已满级" in _lv_plugin._level_line(_lv_max),
+        f"满级时不写进度（没有下一级）-> {_lv_plugin._level_line(_lv_max)}",
+    )
+
     # --- 3) 连钓逃脱率 = 鱼种逃脱率 × 系数（v1.18.26 起默认 2.0，封顶 95%）---
     esc_cfg_probe = dict(_CFG)
     _mult = mod._safe_number(esc_cfg_probe.get("multi_escape_mult"), 0.0)
@@ -4732,9 +4807,14 @@ async def main():
     )
 
     # 真指令走一遍：背包 45 条 = 3 页，第 2 页键盘最后一行就是那排翻页按钮
+    # ⚠️ 必须用**互不相同**的鱼：背包现在按连钓的规则堆叠，45 条同种鱼会并成一行、
+    #    只剩 1 页（本节要验的是翻页按钮，不是堆叠）。
     _pb = make_plugin()
     _pbp = mod._default_player("89501")
-    _pbp["inventory"] = [mod._new_instance("carp", 1.0) for _ in range(45)]
+    _pbp["inventory"] = [
+        mod._new_instance(mod.FISH_POOL[i % len(mod.FISH_POOL)]["id"], 1.0)
+        for i in range(45)
+    ]
     await _pb._save_player(_pbp)
     _papi = FakeApi()
     await cmd(_pb, PlatEvent("89501", api=_papi), "背包", "2", "")
@@ -5997,6 +6077,54 @@ async def main():
 
     def d_ev(uid="89701"):
         return FakeEvent(uid)
+
+    # --- 存档保护：玩家数骤降时自动留档 + 告警（v1.18.44）---
+    # 2026-09-23 的事故就是「插件改名换作用域，索引 16 人变 2 人」而没人当场发现。
+    _guard = make_plugin()
+    _guard.backup_store = mod.BACKUP_MODULE.BackupStore(
+        os.path.join(data_root, "guard_backups"), mod.DATA_VERSION
+    )
+    _guard.backup_store.ensure_layout()
+    _guard._player_count_seen = 10
+    STORE[("plugin", _guard.plugin_id, "player_index")] = json.dumps(
+        ["G1", "G2"]        # 掉到 2 人（< 10 × 0.5）
+    )
+    _snap_before = len(_guard.backup_store.list_snapshots())
+    await _guard._guard_player_count_drop()
+    _snap_after = _guard.backup_store.list_snapshots()
+    check(
+        len(_snap_after) == _snap_before + 1
+        and any("骤降" in str(s.get("note") or "") for s in _snap_after),
+        f"玩家数掉一半以上会自动留一份存档 -> "
+        f"{[s.get('note') for s in _snap_after]}",
+    )
+    # 人数没掉一半（或本来就没几个人）时不该乱存档
+    _guard2 = make_plugin()
+    _guard2.backup_store = mod.BACKUP_MODULE.BackupStore(
+        os.path.join(data_root, "guard2_backups"), mod.DATA_VERSION
+    )
+    _guard2.backup_store.ensure_layout()
+    _guard2._player_count_seen = 10
+    STORE[("plugin", _guard2.plugin_id, "player_index")] = json.dumps(
+        ["G1", "G2", "G3", "G4", "G5", "G6"]   # 6 > 10×0.5，不算异常
+    )
+    await _guard2._guard_player_count_drop()
+    check(
+        _guard2.backup_store.list_snapshots() == [],
+        "人数只掉一点时不乱存（避免噪音）",
+    )
+    _guard3 = make_plugin()
+    _guard3.backup_store = mod.BACKUP_MODULE.BackupStore(
+        os.path.join(data_root, "guard3_backups"), mod.DATA_VERSION
+    )
+    _guard3.backup_store.ensure_layout()
+    _guard3._player_count_seen = 2        # 小服不做比较
+    STORE[("plugin", _guard3.plugin_id, "player_index")] = json.dumps(["G1"])
+    await _guard3._guard_player_count_drop()
+    check(
+        _guard3.backup_store.list_snapshots() == [],
+        "本来就没几个人（< PLAYER_DROP_MIN）时不比较",
+    )
 
     # --- 存档封成了信封（自带版本/身份/时间），老格式仍能读 ---
     p1 = mod._default_player("89701")

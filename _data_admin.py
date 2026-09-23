@@ -467,18 +467,24 @@ class DataAdminMixin:
                             and item["name"].startswith(today)
                             for item in items
                         )
-                        now_hour = int(time.strftime("%H"))
-                        if not has_daily and now_hour >= int(
-                            self.cfg.get("backup_daily_hour", 4)
-                        ):
+                        # ⚠️ 每日存档以前要求 `now_hour >= backup_daily_hour`（默认/常见的
+                        #    设置是 23 点），而插件经常在 23 点前就被重载 —— 于是**一份
+                        #    daily 都攒不下来**（2026-09-23 的存档事故里，backups/daily
+                        #    是 0 份，能救回来的只有 2 份 auto 快照）。
+                        #    现在改成「当天没存过就补一份」，不再挑小时：只要插件跑起来
+                        #    过一次，当天就一定有存档。hour 配置仍然管「跨天后第一次补档
+                        #    大概什么时候」，不再作为硬门槛。
+                        if not has_daily:
                             await self._snapshot("daily", note="每日自动存档")
                         # 按时存档
                         interval = int(self.cfg.get("backup_interval_hours", 6))
-                        if interval > 0:
-                            auto_items = [x for x in items if x["kind"] == "auto"]
-                            last_ts = auto_items[0]["mtime"] if auto_items else 0
-                            if time.time() - last_ts >= interval * 3600:
-                                await self._snapshot("auto", note=f"每 {interval} 小时自动存档")
+                        auto_items = [x for x in items if x["kind"] == "auto"]
+                        last_ts = auto_items[0]["mtime"] if auto_items else 0
+                        if interval > 0 and time.time() - last_ts >= interval * 3600:
+                            await self._snapshot("auto", note=f"每 {interval} 小时自动存档")
+                        # 玩家数突然掉一大截 = 出事了（改插件名换作用域 / 存储被清 /
+                        # 索引丢），自动留一份档并大声告警 —— 这是「存档保护」的最后一道网。
+                        await self._guard_player_count_drop()
                     await self._refresh_data_status()
                     await self._run_data_action()
                 except Exception as e:
@@ -488,6 +494,40 @@ class DataAdminMixin:
             raise
         except Exception as e:  # pragma: no cover
             logger.error(f"自动存档循环退出：{e}")
+
+    #: 玩家数掉到这个比例以下就认为「出事了」（并自动留档 + 告警）
+    PLAYER_DROP_RATIO = 0.5
+    #: 少于这个人数就不做比较（新服 / 小服人数本来就少）
+    PLAYER_DROP_MIN = 4
+
+    async def _guard_player_count_drop(self) -> None:
+        """玩家数比上次看到时掉了一半以上 -> 立刻存一份手动档并告警。
+
+        2026-09-23 的存档事故里，插件改名换了 KV 作用域，索引从 16 人变成 2 人 ——
+        数据其实还在库里，但**插件和站长都后知后觉**。这道网就是让这种事当场留痕：
+        自动写一份 ``manual/玩家数骤降_<时间>.json``，日志里也写清楚前后人数。
+        """
+        try:
+            ids = await self._player_ids()
+        except Exception:
+            return
+        count = len(ids)
+        previous = getattr(self, "_player_count_seen", None)
+        self._player_count_seen = count
+        if previous is None or previous < self.PLAYER_DROP_MIN:
+            return
+        if count > previous * self.PLAYER_DROP_RATIO:
+            return
+        logger.error(
+            f"⚠️ 玩家数从 {previous} 掉到 {count}（超过一半）——"
+            "多半是插件名/作者名被改过导致存档作用域变了。"
+            "已自动留一份存档，请到「数据编辑器 → 存档」核对，"
+            "必要时用「🔍 找回旧数据」把旧作用域的存档找回来。"
+        )
+        try:
+            await self._snapshot("manual", note=f"玩家数骤降 {previous}->{count} 自动留档")
+        except Exception as e:  # pragma: no cover - 留档失败也不能让循环挂掉
+            logger.warning(f"玩家数骤降时自动留档失败：{e}")
 
     #: 会被「自动合并」的内容型配置项（按每行第一个 | 前的 id 去重）
     CONTENT_LIST_KEYS: tuple[str, ...] = (

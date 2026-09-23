@@ -1187,28 +1187,42 @@ class CommandsMixin:
                 yield _r
             return
 
+        ordered = sorted(inventory, key=_sort_key)
+        value = _inventory_value(inventory)
+        # 列表按连钓战报的堆叠规则渲染（站长要求）：传说/神话/异色的逐条列出，
+        # 其余同种鱼合并成一行 —— 背包里几十条小鱼不再刷屏。
+        # ⚠️ 序号只对**单独列出**的那些有效（显示规则与卖鱼的序号一致）；
+        #    堆叠行写的是「这种鱼有几条、值多少」，要按序号卖就翻页找单独那条，
+        #    或者直接用 `/钓鱼 卖 <鱼名>`（推荐，一次清掉同一批）。
+        row_entries = [
+            {
+                "index": position,
+                "instance": instance,
+                "alias": f"{position:>2}.{mark}{_instance_line(instance)}"
+                         f"　{_attrs_line(instance)}",
+                "locked": bool(instance.get("locked")),
+                "mark": bool(instance.get("locked")),
+            }
+            for position, (mark, instance) in enumerate(
+                (("🔒" if item.get("locked") else "　", item) for item in ordered),
+                start=1,
+            )
+        ]
+        rendered = self._stack_rows(row_entries)
         per_page = 20
         page = max(1, _to_int(a2, 1))
-        total_pages = max(1, (len(inventory) + per_page - 1) // per_page)
+        total_pages = max(1, (len(rendered) + per_page - 1) // per_page)
         page = min(page, total_pages)
         start = (page - 1) * per_page
 
-        ordered = sorted(inventory, key=_sort_key)
-        value = _inventory_value(inventory)
         lines = [
             f"🎒 背包 {len(inventory)}/{cap} 条 · 总估值 {_fmt_gold(value)} 金币"
             + (f" · 第 {page}/{total_pages} 页" if total_pages > 1 else "")
         ]
-        for idx, instance in enumerate(
-            ordered[start : start + per_page], start=start + 1
-        ):
-            mark = "🔒" if instance.get("locked") else "　"
-            lines.append(
-                f"{idx:>2}.{mark}{_instance_line(instance)}　{_attrs_line(instance)}"
-            )
+        lines.extend(rendered[start : start + per_page])
         lines.append("【用法】")
         lines.append("　/钓鱼 卖 1 2 3　按序号卖（可给多个）")
-        lines.append("　/钓鱼 卖 鲤鱼　　按鱼名卖光这种鱼")
+        lines.append("　/钓鱼 卖 鲤鱼　　按鱼名卖光这种鱼（堆叠的批次这样卖最快）")
         lines.append("　/钓鱼 卖光光　　一次清空背包")
         lines.append("　/钓鱼 锁定 1　　 锁定后不会被卖出")
         lines.append("　/钓鱼 水族馆 放 1 2　放进水族馆")
@@ -3305,6 +3319,9 @@ class CommandsMixin:
         lines = [
             "📇 档案"
             + (f"　🏷 {self._title_label(player)}" if self._title_label(player) else ""),
+            # 等级统一放在档案里（站长要求）：以前只有 /钓鱼 钓点 里写过「等级 N」，
+            # 档案反而没有 —— 玩家升级了却看不出来。这里按真实曲线写清「当前级 + 进度」。
+            self._level_line(player),
             f"💰 {_fmt_gold(player.get('gold', 0))}　🎣 {self._rod_label(player)}"
             f"　📍 {self._location_label(player)}",
         ]
