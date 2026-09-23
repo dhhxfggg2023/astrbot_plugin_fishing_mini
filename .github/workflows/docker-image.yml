@@ -113,7 +113,7 @@ jobs:
             # 预置一份空配置，让入口脚本的凭据注入环节立即完成（不触发后台等待）
             printf "{\"platform\": []}" > /tmp/fake-root/data/cmd_config.json
             ASTRBOT_HOME=/tmp/fake-root /opt/fishing-docker/entrypoint.sh true >/dev/null 2>&1 || true
-            DST=/tmp/fake-root/data/plugins/astrbot_plugin_qq_fishing
+            DST=/tmp/fake-root/data/plugins/astrbot_plugin_fishing_mini
             test -f "$DST/main.py"
             test -f "$DST/metadata.yaml"
             test ! -e "$DST/docker"            # 开发用文件不该进运行目录

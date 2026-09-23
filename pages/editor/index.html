@@ -1041,7 +1041,7 @@ table.grid td.actions .btn { vertical-align: middle; }
         <div class="brand-mark">🎣</div>
         <div class="brand-text">
           <h1 class="brand-title">群钓鱼 · 数据编辑器</h1>
-          <p class="brand-sub" id="pluginName">astrbot_plugin_qq_fishing</p>
+          <p class="brand-sub" id="pluginName">astrbot_plugin_fishing_mini</p>
         </div>
       </div>
 
@@ -1160,13 +1160,13 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   var ENV = {
     online: !!sdk,
-    pluginName: ctx.pluginName || ctx.plugin_name || "astrbot_plugin_qq_fishing",
+    pluginName: ctx.pluginName || ctx.plugin_name || "astrbot_plugin_fishing_mini",
     displayName: ctx.displayName || "群钓鱼",
     pageTitle: ctx.pageTitle || "数据编辑器",
     isDark: resolveInitialDark(),
     locale: ctx.locale || "zh-CN",
     //: 桥接可用的插件标识（"name" 或 "author/name"，探测成功后替换）
-    pluginBase: String(ctx.pluginName || ctx.plugin_name || "astrbot_plugin_qq_fishing")
+    pluginBase: String(ctx.pluginName || ctx.plugin_name || "astrbot_plugin_fishing_mini")
       .replace(/^\/+|\/+$/g, "")
   };
 

@@ -2081,7 +2081,7 @@ function makeFakeSdk() {
     ready() {
       return new Promise(function (resolve) {
         sdk._setContext({
-          pluginName: "dhhxfggg/astrbot_plugin_qq_fishing",   // author/name 形态
+          pluginName: "dhhxfggg/astrbot_plugin_fishing_mini",   // author/name 形态
           displayName: "群钓鱼", pageName: "editor", pageTitle: "数据编辑器",
           locale: "zh-CN", isDark: true,
           i18n: { "zh-CN": { pages: { editor: { title: "数据编辑器" } } } }
@@ -2147,7 +2147,7 @@ function makeFakeSdk() {
           legacy: legacy, last_action: payload.action,
           last_result: imported
             ? "导入 1 名玩家、跳过 1 名（当前数据优先）；导入前已存档：manual/2026-09-20_1010.json"
-            : "扫描到旧数据 —— dhhxfggg2023/astrbot_plugin_qq_fishing：2 名玩家 / 3 行（点「导入」把缺的补进来）"
+            : "扫描到旧数据 —— dhhxfggg2023/astrbot_plugin_fishing_mini：2 名玩家 / 3 行（点「导入」把缺的补进来）"
         });
         return Promise.resolve({
           status: "ok", ok: true, message: st.last_result,
@@ -2208,7 +2208,7 @@ const FAKE_PLAYERS = [
 
 /** 「找回旧数据」的扫描结果（v1.18.1）：导入前后就差在 present / missing。 */
 function FAKE_LEGACY(imported) {
-  const scope = "dhhxfggg2023/astrbot_plugin_qq_fishing";
+  const scope = "dhhxfggg2023/astrbot_plugin_fishing_mini";
   const players = [
     { key: "player_70001", user_id: "70001", gold: 4321, caught: 88, locations: 1,
       inventory: 0, aquarium: 0, scope_id: scope, present: !!imported },
@@ -2220,7 +2220,7 @@ function FAKE_LEGACY(imported) {
   ];
   return {
     db_path: "C:/Users/x/.astrbot/data/data_v4.db",
-    current_scope: "dhhxfggg/astrbot_plugin_qq_fishing",
+    current_scope: "dhhxfggg/astrbot_plugin_fishing_mini",
     scopes: [{ scope_id: scope, rows: 3, players: players, other_keys: ["leaderboard"],
                missing: imported ? 0 : 1 }],
     players: players,
@@ -2269,18 +2269,18 @@ async function channelRoundTrip() {
   const fresh = loadPageFromSource(makeFakeSdk());
   const F = fresh.T;
   // 在线启动要真发几次请求（探测 pluginName + 读配置 + 读状态），等它跑完
-  for (let i = 0; i < 40 && (F.state.loading || F.ENV.pluginBase === "astrbot_plugin_qq_fishing"); i++) {
+  for (let i = 0; i < 40 && (F.state.loading || F.ENV.pluginBase === "astrbot_plugin_fishing_mini"); i++) {
     await new Promise(function (r) { setTimeout(r, 25); });
   }
 
   check(F.ENV.online === true, "检测到桥接 SDK -> 在线模式");
-  check(F.ENV.pluginBase === "dhhxfggg/astrbot_plugin_qq_fishing",
+  check(F.ENV.pluginBase === "dhhxfggg/astrbot_plugin_fishing_mini",
     "pluginName 取的是上下文里给的那个", F.ENV.pluginBase);
 
   // endpoint 是相对路径，插件名不再参与请求；resolvePluginBase 只做规范化，不发请求
   captured.calls = [];
-  const resolved = await F.resolvePluginBase("astrbot_plugin_qq_fishing");
-  check(resolved === "astrbot_plugin_qq_fishing",
+  const resolved = await F.resolvePluginBase("astrbot_plugin_fishing_mini");
+  check(resolved === "astrbot_plugin_fishing_mini",
     "resolvePluginBase 只返回插件名、不再探测（endpoint 已经不带插件名）", resolved);
   check(captured.calls.length === 0, "resolvePluginBase 不发任何请求", captured.calls.length);
   check(captured.calls.concat(captured.calls).every(function (c) { return c.endpoint !== undefined; })
@@ -2711,7 +2711,7 @@ function makeSaveScopeSdk(config) {
   const sdk = {
     ready() {
       return new Promise(function (r) {
-        sdk._setContext({ pluginName: "dhhxfggg/astrbot_plugin_qq_fishing", pageName: "editor" });
+        sdk._setContext({ pluginName: "dhhxfggg/astrbot_plugin_fishing_mini", pageName: "editor" });
         r();
       });
     },
@@ -2751,7 +2751,7 @@ function newToasts(F, from) {
 async function legacyRecovery() {
   console.log("\n[16b] 找回旧数据：扫描只读 / 导入要确认 / 结果写进面板");
   const F = loadPageFromSource(makeFakeSdk()).T;
-  for (let i = 0; i < 40 && (F.state.loading || F.ENV.pluginBase === "astrbot_plugin_qq_fishing"); i++) {
+  for (let i = 0; i < 40 && (F.state.loading || F.ENV.pluginBase === "astrbot_plugin_fishing_mini"); i++) {
     await new Promise(function (r) { setTimeout(r, 25); });
   }
   check(F.ENV.online === true, "假 SDK 下进入在线模式");
@@ -2782,7 +2782,7 @@ async function legacyRecovery() {
 
   // 3) 面板：作用域、库路径、缺谁、点导入要不要确认
   html = F.renderPlayersTab(F.TAB_BY_ID.players);
-  check(html.indexOf("dhhxfggg2023/astrbot_plugin_qq_fishing") > 0 &&
+  check(html.indexOf("dhhxfggg2023/astrbot_plugin_fishing_mini") > 0 &&
     html.indexOf("data_v4.db") > 0,
     "面板写出旧作用域与库文件路径（站长知道在动哪儿）");
   check(html.indexOf("缺 1 名") > 0 && html.indexOf("已在当前库") > 0,

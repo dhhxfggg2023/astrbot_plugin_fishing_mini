@@ -30,7 +30,7 @@ from pathlib import Path  # noqa: E402
 PLUGIN_DIR = Path(__file__).parent
 
 spec = importlib.util.spec_from_file_location(
-    "astrbot_plugin_qq_fishing_itest", PLUGIN_DIR / "main.py"
+    "astrbot_plugin_fishing_mini_itest", PLUGIN_DIR / "main.py"
 )
 mod = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = mod
@@ -220,9 +220,9 @@ def text_of(replies):
 async def main():
     cfg = load_config()
     plugin = mod.FishingPlugin(context=FakeContext(), config=cfg)
-    plugin.name = "astrbot_plugin_qq_fishing"
+    plugin.name = "astrbot_plugin_fishing_mini"
     plugin.author = "dhhxfggg"
-    plugin.plugin_id = "dhhxfggg/astrbot_plugin_qq_fishing"
+    plugin.plugin_id = "dhhxfggg/astrbot_plugin_fishing_mini"
 
     failures = []
 

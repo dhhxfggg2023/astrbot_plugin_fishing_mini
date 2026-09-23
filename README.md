@@ -1,4 +1,4 @@
-# 群钓鱼 · astrbot_plugin_qq_fishing
+# 群钓鱼 · astrbot_plugin_fishing_mini
 
 **QQ 群**里的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范（实测 AstrBot v4.28.1 + Python 3.12）。
 
@@ -18,7 +18,7 @@
 
 ```bash
 git clone https://github.com/dhhxfggg2023/astrbot_plugin_qq_fishing.git
-cd astrbot_plugin_qq_fishing
+cd astrbot_plugin_fishing_mini
 
 cp .env.example .env          # 填机器人凭据，见下表
 docker compose up -d --build  # 首次构建
@@ -68,7 +68,7 @@ docker run -d --name astrbot \
 把整个仓库目录放进 AstrBot 的插件目录，然后到 **WebUI → 插件** 点「重载插件」：
 
 ```
-<AstrBot 数据目录>/data/plugins/astrbot_plugin_qq_fishing/
+<AstrBot 数据目录>/data/plugins/astrbot_plugin_fishing_mini/
 ```
 
 - Windows：`C:\Users\<用户名>\.astrbot\data\plugins\`

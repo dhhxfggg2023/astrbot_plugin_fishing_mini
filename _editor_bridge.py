@@ -432,7 +432,7 @@ class EditorApiMixin:
         push(getattr(self, "name", ""))          # star_manager 注入的 name
         push(_meta_name())                       # metadata.yaml 的 name
         push(pathlib.Path(__file__).parent.name)  # 插件目录名
-        return names or ["astrbot_plugin_qq_fishing"]
+        return names or ["astrbot_plugin_fishing_mini"]
 
     def _editor_route_specs(self) -> list[tuple[str, Any, list[str], str]]:
         """(路由模板, handler, 方法, 描述)。"""

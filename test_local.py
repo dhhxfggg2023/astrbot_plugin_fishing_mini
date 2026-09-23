@@ -35,7 +35,7 @@ from pathlib import Path  # noqa: E402
 PLUGIN_DIR = Path(__file__).parent
 
 spec = importlib.util.spec_from_file_location(
-    "astrbot_plugin_qq_fishing_test", PLUGIN_DIR / "main.py"
+    "astrbot_plugin_fishing_mini_test", PLUGIN_DIR / "main.py"
 )
 mod = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = mod
@@ -155,9 +155,9 @@ def make_plugin(config: dict | None = None):
     if not str(cfg.get("backup_dir") or "").strip():
         cfg["backup_dir"] = _SANDBOX_BACKUP_DIR
     plugin = mod.FishingPlugin(context=FakeContext(), config=cfg)
-    plugin.name = "astrbot_plugin_qq_fishing"
+    plugin.name = "astrbot_plugin_fishing_mini"
     plugin.author = "dhhxfggg"
-    plugin.plugin_id = "dhhxfggg/astrbot_plugin_qq_fishing"
+    plugin.plugin_id = "dhhxfggg/astrbot_plugin_fishing_mini"
     return plugin
 
 
@@ -1610,10 +1610,14 @@ async def main():
     ev = FakeEvent("89001")
 
     def fill(n):
+        # ⚠️ 每条的价值给**不同的**值：以前 6 条全用 value_override=10，
+        #    而水族馆的排序键（_sort_key）在价值上也并列 —— 并列时的顺序由「先放进去的」
+        #    决定，于是同一批鱼在「存盘 -> 读回」之间顺序可以任意排（本条用例偶发失败
+        #    就是这个原因）。真实的鱼价值几乎不会完全相同，夹具按真实情况造。
         return [
-            mod._new_instance("carp", 1.0, value_override=10,
+            mod._new_instance("carp", 1.0, value_override=10 + i,
                               attrs={"meat": 60, "spirit": 60, "sheen": 60})
-            for _ in range(n)
+            for i in range(n)
         ]
 
     # --- 批量卖（不再限 2 条）---
@@ -3667,6 +3671,45 @@ async def main():
     ):
         check(mod._bait_consumed(**_kw) is _want, f"扣饵规则：{_why}")
 
+    # --- 3b) 连钓战报的堆叠规则（传说/神话/异色逐条列出，其余合并成一行）---
+    # 目标：连钓 20 次不再刷 20 行；普通鱼按「鱼种 + 异色」堆叠，稀有的那条一条一行。
+    _stack_plugin = make_plugin()
+    _common = next(f for f in mod.FISH_POOL if f["rarity"] == "常见")
+    _legend = next(f for f in mod.FISH_POOL if f["rarity"] == "传说")
+    _myth = next(f for f in mod.FISH_POOL if f["rarity"] == "神话")
+    _plain = {"fish_id": _common["id"]}
+    _variant = {"fish_id": _common["id"], "variant": "golden"}
+    check(
+        not _stack_plugin._multi_show_separate(_common, _plain),
+        "常见 + 无异色 -> 堆叠（不单列）",
+    )
+    check(
+        _stack_plugin._multi_show_separate(_common, _variant),
+        "常见 + 异色 -> 单列（任意稀有度的异色都要单独看）",
+    )
+    check(
+        _stack_plugin._multi_show_separate(_legend, {"fish_id": _legend["id"]})
+        and _stack_plugin._multi_show_separate(_myth, {"fish_id": _myth["id"]}),
+        "传说 / 神话 -> 单列",
+    )
+    _stack: dict = {}
+    for _ in range(3):
+        _stack_plugin._multi_stack(_stack, _common, _plain, 7)
+    _stack_plugin._multi_stack(_stack, _common, _variant, 11)
+    _rows = _stack_plugin._multi_stack_lines(_stack, 4)
+    check(
+        len(_rows) == 2,
+        f"3 条同类 + 1 条异色 = 2 行（同类合并、异色另算）-> {_rows}",
+    )
+    check(
+        _rows[0] == f"4. {mod._fish_emoji(_common)}{_common['name']} ×3　21金",
+        f"堆叠行带 ×N 与合计 -> {_rows[0] if _rows else '（空）'}",
+    )
+    check(
+        _rows[1].startswith("5. ") and "🌟" in _rows[1],
+        f"行号往下续，且异色带自己的图标（一眼看出混了异色）-> {_rows[1]}",
+    )
+
     # --- 3) 连钓逃脱率 = 鱼种逃脱率 × 系数（v1.18.26 起默认 2.0，封顶 95%）---
     esc_cfg_probe = dict(_CFG)
     _mult = mod._safe_number(esc_cfg_probe.get("multi_escape_mult"), 0.0)
@@ -4254,13 +4297,20 @@ async def main():
         _gc._resolve_pull(FakeEvent("89206"))
     await asyncio.wait_for(_gtask, timeout=8)
     _gbody = text_of(_gout)
+    # ⚠️ 连钓战报会把普通鱼**堆叠**（同类合并成一行），所以不能再按「含评价的行数」
+    #    数条数 —— 两条同类鱼会并成一行。改成数「记录行」（`N. ` 开头），
+    #    并确认没有任何一条是「偏差」。
     _grades = [
         l for l in _gbody.splitlines()
         if "偏差" in l or "良好" in l or "完美" in l
     ]
+    _records = [
+        l for l in _gbody.splitlines()
+        if len(l) > 2 and l[0].isdigit() and l[1:3] == ". "
+    ]
     check(
-        len(_grades) == 2 and not any("偏差" in l for l in _grades),
-        f"两条都在窗口中途拉，评价都不该掉到「偏差」-> {_grades}",
+        len(_records) == 2 and not any("偏差" in l for l in _grades),
+        f"两条都在窗口中途拉，评价都不该掉到「偏差」-> 记录 {_records}／评价 {_grades}",
     )
     check(
         "上鱼 2 条" in _gbody,
@@ -5952,7 +6002,7 @@ async def main():
     p1 = mod._default_player("89701")
     p1["gold"] = 1234
     await plugin_d._save_player(p1)
-    raw = STORE[("plugin", "dhhxfggg/astrbot_plugin_qq_fishing", "player_89701")]
+    raw = STORE[("plugin", "dhhxfggg/astrbot_plugin_fishing_mini", "player_89701")]
     envelope = json.loads(raw)
     check(
         envelope.get("__fishing_player__") == mod.PLAYER_ENVELOPE_VERSION,
@@ -5969,7 +6019,7 @@ async def main():
     check(p1b["gold"] == 1234, f"信封能正常读回 -> gold={p1b['gold']}")
 
     # 老格式（裸 dict）照常读
-    STORE[("plugin", "dhhxfggg/astrbot_plugin_qq_fishing", "player_89702")] = (
+    STORE[("plugin", "dhhxfggg/astrbot_plugin_fishing_mini", "player_89702")] = (
         mod._json_dumps(mod._default_player("89702"))
     )
     legacy = await plugin_d._load_player("89702")
@@ -6040,17 +6090,24 @@ async def main():
     msg = await plugin_d._import_uploaded()
     check("已导入玩家 89701" in msg, f"从上传的存档导入 -> {msg}")
     check((await plugin_d._load_player("89701"))["gold"] == 1234, "导入后数据回来了")
+    # 导入时 `copy_into` 会把上传的那份另存成 `manual/imported_<文件名>`
+    # （前缀 `imported_` 就是它）。下面拿它来验「这份快照能恢复出导入的数据」。
+    _import_snap = next(
+        s["rel"]
+        for s in plugin_d.backup_store.list_snapshots()
+        if s["rel"].startswith("manual/imported_")
+    )
 
     # --- 从快照整份恢复 ---
     p1d = await plugin_d._load_player("89701")
     p1d["gold"] = 7
     await plugin_d._save_player(p1d)
-    # ⚠️ 等一下：`latest` 是按文件 mtime 挑的，而导入路径现在会先自动存一份
-    #    「导入前自动存档」——同一秒内写出的几份快照 mtime 可能并列，
-    #    谁算「最新」就不确定了（这段测试历史上偶发失败）。隔开一秒即稳定。
-    await asyncio.sleep(1.05)
-    msg = await plugin_d._restore_snapshot("latest")
-    check("恢复" in msg, f"从最新快照恢复 -> {msg}")
+    # ⚠️ 这里**不能**用 `restore_snapshot("latest")`：导入路径现在会先自动存一份
+    #    「导入前自动存档」，它比上面导出的那份更新 —— 所以 `latest` 本来就**不该**
+    #    是导入的那份数据（这正是前置快照在保护的东西，见 `_import_uploaded`）。
+    #    测试要验的是「这份快照能恢复出导入的数据」，所以点名恢复导入那一份。
+    msg = await plugin_d._restore_snapshot(_import_snap)
+    check("恢复" in msg, f"从导入快照恢复 -> {msg}")
     check(
         (await plugin_d._load_player("89701"))["gold"] == 1234,
         "恢复成快照里的状态（导出那份快照里是 1234）",
@@ -6187,7 +6244,9 @@ async def main():
     plugin_d.start_editor_bridge()
     routes = {(item[0], item[1]) for item in registered}
     names = plugin_d._editor_plugin_names()
-    check(len(names) >= 2, f"候选插件名（路由前缀要跟它一致）：{names}")
+    # 插件名统一之后，三个来源（star.name / metadata.yaml / 目录名）本来就是同一个，
+    # 去重后只会剩一个候选 —— 这正是我们要的（以前三者不一致，路由前缀会对不上）。
+    check(bool(names), f"候选插件名（路由前缀要跟它一致）：{names}")
     check(
         (f"/{names[0]}/config", ("GET",)) in routes
         and (f"/{names[0]}/config", ("POST",)) in routes
@@ -6601,7 +6660,7 @@ async def main():
             "create table preferences (created_at text, updated_at text, id integer,"
             " scope text, scope_id text, key text, value text)"
         )
-        old_scope = "dhhxfggg2023/astrbot_plugin_qq_fishing"   # 作者名改过 -> 老 scope
+        old_scope = "dhhxfggg2023/astrbot_plugin_fishing_mini"   # 作者名改过 -> 老 scope
 
         def _kv(player: dict) -> str:
             # **照抄真库的样子**：{"val": "<JSON 字符串>"}，字符串里是裸玩家 dict
@@ -6642,7 +6701,7 @@ async def main():
             (old_scope, "leaderboard", json.dumps({"val": json.dumps({"L70001": 3})})),
             ("someoneelse/other_plugin", "player_70003", _kv(old_gone)),
             # 当前作用域的名字也塞一行：必须被「scope_id != 当前」这条规则挡掉
-            ("dhhxfggg/astrbot_plugin_qq_fishing", "player_70004", _kv(old_gone)),
+            ("dhhxfggg/astrbot_plugin_fishing_mini", "player_70004", _kv(old_gone)),
         ]
         con.executemany(
             "insert into preferences (scope, scope_id, key, value) values ('plugin', ?, ?, ?)",
@@ -6666,7 +6725,7 @@ async def main():
             f"只读到「同名插件、别的 scope」的行（别的插件/当前 scope 都不算）-> {keys}",
         )
         check(
-            legacy_mod.plugin_name_of(plugin_d.plugin_id) == "astrbot_plugin_qq_fishing"
+            legacy_mod.plugin_name_of(plugin_d.plugin_id) == "astrbot_plugin_fishing_mini"
             and legacy_mod.unwrap_kv({"val": 5}) == 5
             and legacy_mod.unwrap_kv(5) == 5,
             "插件名与 KV 解包：带 {val:...} 信封的拆开，裸值原样返回",

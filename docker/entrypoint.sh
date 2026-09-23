@@ -12,7 +12,7 @@ set -euo pipefail
 
 ASTRBOT_HOME="${ASTRBOT_HOME:-/AstrBot}"
 DATA_DIR="${ASTRBOT_HOME}/data"
-PLUGIN_NAME="${FISHING_PLUGIN_NAME:-astrbot_plugin_qq_fishing}"
+PLUGIN_NAME="${FISHING_PLUGIN_NAME:-astrbot_plugin_fishing_mini}"
 SRC_DIR="${FISHING_PLUGIN_SRC:-/opt/fishing-plugin}"
 DST_DIR="${DATA_DIR}/plugins/${PLUGIN_NAME}"
 CONFIG_FILE="${DATA_DIR}/cmd_config.json"

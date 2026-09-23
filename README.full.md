@@ -1,9 +1,9 @@
-# 群钓鱼 · astrbot_plugin_qq_fishing
+# 群钓鱼 · astrbot_plugin_fishing_mini
 
 > 📖 这是**详细版文档**：玩法机制、数值平衡、全部配置项、指令一览、更新日志与常见问题。
 > 只想**快速把它跑起来**？看 → **[README.md](README.md)**（部署 + 上手）。
 
-**v1.18.39** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
+**v1.18.40** ｜ 适用于 **QQ 群**的钓鱼养成小游戏，基于 **AstrBot v4.x** 插件规范开发
 （已在 AstrBot v4.28.1 + Python 3.12 上实测）。
 
 **271 种水族 · 19 个钓点 · 10 档鱼饵 · 8 档鱼竿 · 13 种养成道具 · 5 档鱼种品质 · 6 档个体品质 ·
@@ -983,10 +983,10 @@ HANDLERS = {"lucky_token": _on_lucky_token}
 > 🐳 想一键跑起来（AstrBot + 本插件一个容器）看 **[README.md](README.md)**；
 > 这一节讲的是「装进已有的 AstrBot」。
 
-1. 把插件文件夹放到 AstrBot 插件目录（目录名用仓库名 `astrbot_plugin_qq_fishing`）：
+1. 把插件文件夹放到 AstrBot 插件目录（目录名用仓库名 `astrbot_plugin_fishing_mini`）：
 
    ```
-   <AstrBot 数据目录>/data/plugins/astrbot_plugin_qq_fishing/
+   <AstrBot 数据目录>/data/plugins/astrbot_plugin_fishing_mini/
    ```
 
    - Windows：`C:\Users\<用户名>\.astrbot\data\plugins\`
@@ -995,7 +995,7 @@ HANDLERS = {"lucky_token": _on_lucky_token}
 2. 目录内容：
 
    ```
-   astrbot_plugin_qq_fishing/
+   astrbot_plugin_fishing_mini/
    ├── main.py            # 插件主入口（Star 本体 + /钓鱼 分派 + 配置解析 + 内容表默认值）
    ├── metadata.yaml      # 插件元数据（**版本号只写在这里**）
    ├── _conf_schema.json  # 插件配置（131 项；默认只有 3 项在面板可见，其余标了 invisible）
@@ -1052,7 +1052,7 @@ HANDLERS = {"lucky_token": _on_lucky_token}
 ### 开发者自测（7 个 Python 脚本 + 1 个前端脚本，可随时删除）
 
 ```bash
-cd data/plugins/astrbot_plugin_qq_fishing
+cd data/plugins/astrbot_plugin_fishing_mini
 
 python test_effects_ext.py      # v1.13.0：按钮统一样式 / 效果注册表 / 扩展点与失败隔离
 python test_local.py            # 73 组约 1470 项断言（脚本结尾会打出实际条数，总数随随机抽样浮动几项）：持久化/配置/钓点/鱼竿/背包/杂物/订单/天气/行情/变异/排行/鱼塘/清理/图鉴/水族馆/按钮与插曲/字段守卫/投喂与平衡/称号/存档快照/数据编辑器通道/全量配置键/批量命令/后期金币回收/旧作用域数据找回/回复场景全覆盖（v1.12.0）
@@ -1138,7 +1138,7 @@ HTTP 状态与服务端原因显示出来。
 ### 存档目录（在插件里，专门安放并注明）
 
 ```
-data/plugins/astrbot_plugin_qq_fishing/
+data/plugins/astrbot_plugin_fishing_mini/
 └── backups/
     ├── README.md                    ← 说明每个子目录的用途与保留规则（插件自动维护）
     ├── index.json                   ← 快照清单（配置页面的状态栏读它）
@@ -1445,13 +1445,13 @@ A：先看本文开头的平衡表；主要旋钮是 `fish_cost`、`order_reward
 `location_defs` 的价值倍率、以及各鱼竿的价格。
 
 **Q：怎么给玩家回档 / 迁移服务器？**
-A：把 `data/plugins/astrbot_plugin_qq_fishing/backups/` 整个拷过去就行；
+A：把 `data/plugins/astrbot_plugin_fishing_mini/backups/` 整个拷过去就行；
 只想给某个人回档：配置里「导出单个玩家」→ 拿到 JSON → 在目标机器上
 「上传存档文件」+「导入上传的存档」。想整体回滚到某个时间点：选「从快照恢复」。
 
 **Q：数据存在哪？**
 A：`data/data_v4.db` 的 preferences 表，scope=`plugin`、
-scope_id=`dhhxfggg2023/astrbot_plugin_qq_fishing`、key=`player_<用户ID>`。
+scope_id=`dhhxfggg2023/astrbot_plugin_fishing_mini`、key=`player_<用户ID>`。
 
 **Q：发指令机器人完全不回复，日志里写着 `is not in the session allowlist`？**
 A：这是 **AstrBot 的白名单拦截**，跟插件无关——事件在流水线的
@@ -1503,7 +1503,7 @@ A：这是**故意的**（方案 A：全隐藏 + 3 条救生索）。内容与�
 
 想临时把面板恢复出来（比如忘了某个键名、要排查配置）：
 
-1. 打开插件目录 `data/plugins/astrbot_plugin_qq_fishing/_conf_schema.json`；
+1. 打开插件目录 `data/plugins/astrbot_plugin_fishing_mini/_conf_schema.json`；
 2. 删掉你要显示的那一项里的 `"invisible": true` 这一行（整行删掉即可，注意别留下孤儿逗号）；
 3. 重载插件 —— 那一项就回到面板里了。想全恢复就把 127 处 `"invisible": true` 全删掉。
 
@@ -1614,6 +1614,59 @@ big_fat_fish|大肥鱼|稀有|120|*:0.15|深海里最肥的一条
 - 成就与随机插曲仍在 `_game_data.py`（含达成条件逻辑，改文件即可，顶部有逐字段说明）
 
 ## 📝 更新日志
+
+### v1.18.40（插件名统一 + 连钓战报不再刷屏）
+
+**1. 插件名统一成 `astrbot_plugin_fishing_mini`**
+
+以前 `metadata.yaml` 里的 `name` 是 `astrbot_plugin_qq_fishing`，而插件目录叫
+`astrbot_plugin_fishing_mini` —— 两个名字不一致。插件自己会给三种来源
+（`star.name` / `metadata.yaml` / 目录名）都注册一遍 Web API 路由，所以一直没炸，
+但始终是个隐患（Dashboard 只要认了其中一个、而我们没注册，页面就会报
+「未找到该路由」）。
+
+现在三者完全一致：`metadata.yaml`、Dockerfile 的 `FISHING_PLUGIN_NAME`、
+入口脚本默认值、编辑器页面的路由回退名、以及测试里的断言全部改成
+`astrbot_plugin_fishing_mini`。
+
+> ⚠️ **GitHub 仓库名 / 镜像名没有动**（`github.com/dhhxfggg2023/astrbot_plugin_qq_fishing`）：
+> 那是真实存在的远端仓库地址，改了会断链。要一起改的话得先在 GitHub 上改仓库名。
+
+**2. 连钓战报堆叠显示（不再一竿一行）**
+
+`/钓鱼 20` 以前会推 20 行「1. 🐟白条 常见 8金 / 2. 🐟白条 常见 9金 / …」，一屏全是重复。
+
+现在只有这几种**逐条列出**：
+
+* **传说 / 神话**（要拉线的高档鱼）
+* **任意稀有度的异色个体**（变异）—— 堆叠行也会带上它的变异图标（如 `🐟🌟白条`），
+  所以不会「混在一起看不出来」
+
+其余（常见 / 少见 / 稀有的普通个体）按「鱼种 + 异色」**堆叠成一行**：
+
+```
+1. 🐡黑鱼 ✨变异 稀有 543金
+2. ✨金龟 传说 1,817金
+3. 🌈深海鮟鱇 神话 5,223金
+4. 🐡黑鱼 ✨变异 稀有 494金
+5. 🐟白条 ×11　310金
+6. 🐟小鲫鱼 ×3　59金
+7. 🐠鲤鱼 ×2　138金
+——————
+✅ 上鱼 20 条｜空竿 0 次｜杂物 0 个
+```
+
+20 竿从 20 行压到 7 行。行号含义也跟着变了：它现在是「第几条被列出来的记录」，
+而不是「第几竿」（一竿一条时两者完全一致，所以老玩家看不出区别）。
+
+**3. 顺带修的两个真问题**
+
+* **「最新快照」以前是随机结果**：`list_snapshots` 按**秒级** mtime 排序，
+  同一秒内写出的多份快照顺序不确定 —— 站长的「从快照恢复」可能挑错一份。
+  现在改成三级判据（纳秒 mtime → 手动 > 按时 > 每日 → 文件名），结果确定。
+* `test_local.py` 的几处夹具/断言跟着新显示改动一起收紧了（同类同价的鱼会让
+  排序键并列、缸内顺序在存盘读回之间不稳定 —— 夹具改成互不相同的价值，
+  更贴近真实的鱼）
 
 ### v1.18.39（数据安全专项：读档失败不再清空账号 + 修一批静默缺陷）
 

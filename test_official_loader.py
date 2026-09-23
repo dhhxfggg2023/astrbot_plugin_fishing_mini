@@ -74,7 +74,7 @@ try:
     print(f"    astrbot_version = {md.astrbot_version}")
     print(f"    support_platforms = {md.support_platforms}")
     print(f"    plugin_id    = {md.plugin_id}")
-    check(md.name == "astrbot_plugin_qq_fishing", "name 正确")
+    check(md.name == "astrbot_plugin_fishing_mini", "name 正确")
     check(md.display_name == "群钓鱼", "display_name 正确")
     check(
         md.version.startswith("v") and md.version.count(".") == 2,
@@ -201,9 +201,9 @@ check(len(star_classes) == 1, f"恰好一个 Star 子类 -> {[c.__name__ for c i
 check(mod.FishingPlugin.__name__ == "FishingPlugin", "主类名为 FishingPlugin")
 
 # 模拟 star_manager 注入（这里用测试占位值：插件真实署名由 metadata.yaml 决定）
-mod.FishingPlugin.name = "astrbot_plugin_qq_fishing"
+mod.FishingPlugin.name = "astrbot_plugin_fishing_mini"
 mod.FishingPlugin.author = "test_author"
-mod.FishingPlugin.plugin_id = "test_author/astrbot_plugin_qq_fishing"
+mod.FishingPlugin.plugin_id = "test_author/astrbot_plugin_fishing_mini"
 check(
     hasattr(mod.FishingPlugin, "plugin_id"),
     "plugin_id 已注入（KV 存储依赖它）",

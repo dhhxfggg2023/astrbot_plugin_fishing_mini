@@ -382,6 +382,9 @@ class BackupStore:
                     "size": stat.st_size,
                     "mtime": int(stat.st_mtime),
                     "mtime_text": _text(stat.st_mtime),
+                    #: 排序用（见 list_snapshots 末尾）：秒级 mtime 在同一秒内会并列，
+                    #: 那会让「最新快照」变成随机结果（站长的「从快照恢复」就可能挑错一份）
+                    "_mtime_ns": int(stat.st_mtime_ns),
                     "count": 0,
                     "note": "",
                 }
@@ -394,7 +397,21 @@ class BackupStore:
                 except (OSError, ValueError):
                     pass
                 result.append(info)
-        result.sort(key=lambda item: item["mtime"], reverse=True)
+        # 新到旧。三级判据，**保证确定性**（同一秒写出的多份快照以前顺序随机）：
+        #   1. 纳秒级 mtime（同一次操作内也能分出先后）
+        #   2. 同纳秒时按类型优先：手动 > 按时 > 每日（手动是站长主动存的，最该先恢复）
+        #   3. 再同就按文件名倒序（``_01`` 后缀排在 ``_00`` 之前 = 更晚）
+        pref = {KIND_MANUAL: 0, KIND_AUTO: 1, KIND_DAILY: 2}
+        result.sort(
+            key=lambda item: (
+                item.get("_mtime_ns", item["mtime"] * 1_000_000_000),
+                -pref.get(item["kind"], 9),
+                item["name"],
+            ),
+            reverse=True,
+        )
+        for item in result:
+            item.pop("_mtime_ns", None)
         return result
 
     def find_snapshot(self, name: str) -> Path | None:

@@ -704,6 +704,12 @@ class EngineMixin:
                     f"（体力与鱼饵也只扣 {planned} 份）"
                 )
             stats = {"fish": 0, "item": 0, "nothing": 0, "escaped": 0}
+            # 连钓结果的行号：**不再等于第几竿**，而是「第几条被列出来的记录」。
+            # 一竿一条时会跟 loop 的 index 完全一致，所以老玩家看不出区别。
+            display = 1
+            #: 连钓的堆叠渔获 ``key -> {...}``（见 `_multi_stack_line`）：
+            #: 普通鱼不再一竿一行，攒起来一行表示。
+            stacked: dict[tuple[str, str, str], dict[str, Any]] = {}
             # 空竿里「没咬钩」的那几种（饵还在）；被鱼咬掉的照扣，和单竿同一套规则
             nobite = 0
             gained = 0
@@ -735,7 +741,8 @@ class EngineMixin:
                 )
                 if outcome == "item" and drop is not None:
                     stats["item"] += 1
-                    lines.append(f"{index}. {drop['emoji']} {drop['name']}（杂物）")
+                    lines.append(f"{display}. {drop['emoji']} {drop['name']}（杂物）")
+                    display += 1
                     for extra in self._collect_bookkeeping(player, drop):
                         lines.append(f"　　{extra}")
                     continue
@@ -748,7 +755,8 @@ class EngineMixin:
                     )
                     if not miss_eaten:
                         nobite += 1
-                    lines.append(f"{index}. {miss_tip}")
+                    lines.append(f"{display}. {miss_tip}")
+                    display += 1
                     continue
 
                 fish = self._roll_species(bait_id, loc["id"], weather)
@@ -770,10 +778,11 @@ class EngineMixin:
                     if random.random() < escape:
                         stats["escaped"] += 1
                         lines.append(
-                            f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
+                            f"{display}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
                             f"（{self._rarity_name(fish['rarity'])}，"
                             f"连钓不拉线，逃脱率 {escape:.0%}）"
                         )
+                        display += 1
                         continue
 
                 elif spec is not None:
@@ -818,9 +827,10 @@ class EngineMixin:
                     if catch is None:
                         stats["escaped"] += 1
                         lines.append(
-                            f"{index}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
+                            f"{display}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
                             f"（{self._rarity_name(fish['rarity'])}，{rating}）"
                         )
+                        display += 1
                         continue
                     # 拉线技巧计数（成就「神之一手 / 惊险一刻」等）与单竿同一套。
                     # ⚠️ 必须写在「鱼跑了」的 continue **之后**：脱钩的那条不算拉上来
@@ -838,12 +848,19 @@ class EngineMixin:
                     stats["fish"] += 1
                     value = _instance_value(catch)
                     gained += value
-                    lines.append(
-                        f"{index}. {_fish_emoji(fish)}{fish['name']}"
-                        + (" ✨变异" if catch.get("variant") else "")
-                        + f" {self._rarity_name(fish['rarity'])} {_fmt_gold(value)}金"
-                        + f"　{rating}"
-                    )
+                    if self._multi_show_separate(fish, catch):
+                        lines.append(
+                            f"{display}. {_fish_emoji(fish)}{fish['name']}"
+                            + (" ✨变异" if catch.get("variant") else "")
+                            + f" {self._rarity_name(fish['rarity'])} {_fmt_gold(value)}金"
+                            + f"　{rating}"
+                        )
+                        display += 1
+                    else:
+                        self._multi_stack(
+                            stacked, fish, catch, value,
+                            suffix=f"　{rating}" if rating else "",
+                        )
                     continue
 
                 quality_mult = _roll_quality_mult(
@@ -863,18 +880,23 @@ class EngineMixin:
                 )
                 if catch is None:
                     stats["nothing"] += 1
-                    lines.append(f"{index}. 💨 空竿")
+                    lines.append(f"{display}. 💨 空竿")
+                    display += 1
                     continue
 
                 self._record_catch(player, catch)
                 stats["fish"] += 1
                 value = _instance_value(catch)
                 gained += value
-                lines.append(
-                    f"{index}. {_fish_emoji(fish)}{fish['name']}"
-                    + (" ✨变异" if variant else "")
-                    + f" {self._rarity_name(fish['rarity'])} {_fmt_gold(value)}金"
-                )
+                if self._multi_show_separate(fish, catch):
+                    lines.append(
+                        f"{display}. {_fish_emoji(fish)}{fish['name']}"
+                        + (" ✨变异" if variant else "")
+                        + f" {self._rarity_name(fish['rarity'])} {_fmt_gold(value)}金"
+                    )
+                    display += 1
+                else:
+                    self._multi_stack(stacked, fish, catch, value)
 
             # --- 统一结算：成就 / 里程碑 / 存档 / 排行榜 ---
             # 扣饵：中鱼 / 杂物 / 被鱼咬掉的空竿都扣；只有「没咬钩」的空竿不扣
@@ -916,6 +938,9 @@ class EngineMixin:
             )
             if stats["escaped"]:
                 summary += f"｜跑掉 {stats['escaped']} 条"
+            # 普通鱼堆叠在汇总之前补上（见 `_multi_stack_lines`）：先列出来的
+            # 是「值得一条一条看」的（传说/神话/异色），剩下的同类合并成一行。
+            lines.extend(self._multi_stack_lines(stacked, display))
             lines.append(summary)
             if bait_id != "none" and consumed != planned:
                 lines.append(
@@ -963,6 +988,74 @@ class EngineMixin:
                         "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）"
                     )):
                     yield _r
+
+    #: 连钓里**逐条列出**的鱼种稀有度（其余稀有度堆叠显示）
+    MULTI_SEPARATE_RARITIES: tuple[str, ...] = ("传说", "神话")
+
+    def _multi_show_separate(self, fish: dict[str, Any], catch: dict[str, Any]) -> bool:
+        """连钓里这条鱼要不要单独占一行。
+
+        规则（站长定的）：只有
+          * **传说 / 神话**（需要拉线的高档鱼），或
+          * **任意稀有度的异色个体**（变异）
+        逐条列出；其余（常见/少见/稀有的普通个体）按「鱼种 + 异色」堆叠成一行。
+        """
+        if catch.get("variant"):
+            return True
+        return str(fish.get("rarity") or "") in self.MULTI_SEPARATE_RARITIES
+
+    def _multi_stack(
+        self,
+        stacked: dict[tuple[str, str, str], dict[str, Any]],
+        fish: dict[str, Any],
+        catch: dict[str, Any],
+        value: int,
+        suffix: str = "",
+    ) -> None:
+        """把一条「不值得单列」的渔获记进堆叠表。"""
+        key = (
+            str(fish.get("id") or ""),
+            str(fish.get("rarity") or ""),
+            str(catch.get("variant") or ""),
+        )
+        entry = stacked.get(key)
+        if entry is None:
+            # 异色要能一眼看见：同类异色走**单独的 key**（所以不会被合并进普通那行），
+            # emoji 也带上它的变异图标 —— 不然堆叠行只剩「🐟白条 ×3」，
+            # 玩家看不出里面混了异色。
+            var_id = str(catch.get("variant") or "")
+            var_emoji = ""
+            if var_id:
+                var_emoji = str((VARIANT_BY_ID.get(var_id) or {}).get("emoji") or "")
+            entry = {
+                "emoji": f"{_fish_emoji(fish)}{var_emoji}",
+                "name": str(fish.get("name") or ""),
+                "count": 0,
+                "value": 0,
+                "suffix": str(suffix or ""),
+            }
+            stacked[key] = entry
+        entry["count"] += 1
+        entry["value"] += int(value)
+
+    def _multi_stack_lines(
+        self,
+        stacked: dict[tuple[str, str, str], dict[str, Any]],
+        start_index: int,
+    ) -> list[str]:
+        """把堆叠表渲染成若干行（接在已经列出的记录后面，行号往下续）。
+
+        格式：``{序号}. {emoji}{鱼名} ×{条数}　{合计}金``。
+        """
+        rows: list[str] = []
+        index = int(start_index)
+        for entry in stacked.values():
+            rows.append(
+                f"{index}. {entry['emoji']}{entry['name']} ×{entry['count']}"
+                f"　{_fmt_gold(entry['value'])}金{entry['suffix']}"
+            )
+            index += 1
+        return rows
 
     def _record_catch(self, player: dict[str, Any], catch: dict[str, Any]) -> None:
         """渔获入账（不含成就/存档）：背包、累计、图鉴、变异计数、最佳纪录。

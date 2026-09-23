@@ -79,7 +79,7 @@ try:
     dockerfile = (HERE / "Dockerfile").read_text(encoding="utf-8")
     check("FROM soulter/astrbot:latest" in dockerfile, "Dockerfile 基于官方镜像")
     check(
-        "entrypoint.sh" in dockerfile and "FISHING_PLUGIN_NAME=astrbot_plugin_qq_fishing" in dockerfile,
+        "entrypoint.sh" in dockerfile and "FISHING_PLUGIN_NAME=astrbot_plugin_fishing_mini" in dockerfile,
         "Dockerfile 挂好 entrypoint 与插件目录名",
     )
 

@@ -68,7 +68,7 @@ body = str(smoke.get("run", "")) if smoke else ""
 for needle, label in (
     ("/opt/fishing-plugin/metadata.yaml", "冒烟：检查预置插件文件"),
     ("py_compile", "冒烟：容器内做语法校验"),
-    ("data/plugins/astrbot_plugin_qq_fishing", "冒烟：验证入口脚本同步插件"),
+    ("data/plugins/astrbot_plugin_fishing_mini", "冒烟：验证入口脚本同步插件"),
     ("test ! -e \"$DST/docker\"", "冒烟：确认开发文件没进运行目录"),
     ("test -f \"$DST/pages/editor/index.html\"", "冒烟：页面目录没被入口脚本的清理列表误删"),
     (

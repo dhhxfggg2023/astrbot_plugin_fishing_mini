@@ -15,7 +15,7 @@
 FROM soulter/astrbot:latest
 
 LABEL org.opencontainers.image.title="AstrBot + 群钓鱼插件" \
-      org.opencontainers.image.description="AstrBot 官方镜像预装 astrbot_plugin_qq_fishing（QQ 群钓鱼小游戏）" \
+      org.opencontainers.image.description="AstrBot 官方镜像预装 astrbot_plugin_fishing_mini（QQ 群钓鱼小游戏）" \
       org.opencontainers.image.licenses="MIT"
 
 # 插件源码：整个仓库就是插件本体，暂存到 /opt（不直接写 data，
@@ -27,7 +27,7 @@ COPY docker/ /opt/fishing-docker/
 RUN chmod +x /opt/fishing-docker/entrypoint.sh
 
 ENV FISHING_PLUGIN_SRC=/opt/fishing-plugin \
-    FISHING_PLUGIN_NAME=astrbot_plugin_qq_fishing
+    FISHING_PLUGIN_NAME=astrbot_plugin_fishing_mini
 
 # 官方 CMD ["python", "main.py"] 会作为参数传给本脚本
 ENTRYPOINT ["/bin/bash", "/opt/fishing-docker/entrypoint.sh"]
