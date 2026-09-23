@@ -2863,7 +2863,7 @@ BUTTON_BASE_BY_GROUP: dict[str, str] = {
     "today": "today.view",
     "rank": "rank.view",
     "help": "help.page",
-    "custom": "",
+    "custom": "cast",            # 自定义命令的回复：也兜底到 cast 的按钮
     "extras": "title.list",
     "system": "cast",            # 报错 / 群播报：给「再来一竿 / 看背包」最实用
 }

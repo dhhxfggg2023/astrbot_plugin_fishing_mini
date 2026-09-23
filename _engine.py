@@ -986,14 +986,23 @@ class EngineMixin:
                     )
                 )
 
+            # 成就 / 里程碑并进**同一条**战报（v1.18.48）。
+            #
+            # ⚠️ 以前它们是各自 `_say_msg(...)` 发出去的两条**带按钮**的消息，而
+            #    `msg_seq` 只是随机数、`msg_id` 又是同一个（同一条入站消息）——
+            #    QQ 只保留一条内联键盘，于是**后发的成就推送把战报的键盘盖掉了**，
+            #    玩家看到的就是「连钓战报没按钮了」。新功能让成就更容易触发，
+            #    这个覆盖就变得很容易撞上（站长报的正是这个）。
+            #
+            # 现在：一次连钓**只发一条带按钮的消息**（战报），成就/里程碑并进正文；
+            # 存档失败之类的纯文字提示仍然单独发（它们不带按钮，不会盖键盘）。
+            if new_ach:
+                lines.append("🎉 " + "；".join(new_ach))
+            if milestone:
+                lines.append(milestone)
+
             async for _r in self._say_msg(event, "cast.multi_summary", event.plain_result("\n".join(lines))):
                 yield _r
-            if new_ach:
-                async for _r in self._say_msg(event, "cast.multi_achievement", event.plain_result("🎉 " + "；".join(new_ach))):
-                    yield _r
-            if milestone:
-                async for _r in self._say_msg(event, "cast.multi_milestone", event.plain_result(milestone)):
-                    yield _r
             if not saved:
                 async for _r in self._say_msg(event, "cast.multi_save_failed", event.plain_result(
                         "⚠️ 数据保存失败，这批渔获可能不会保留（请把这条消息发给管理员核对）"

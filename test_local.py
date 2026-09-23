@@ -3785,6 +3785,34 @@ async def main():
         f"满级时不写进度（没有下一级）-> {_lv_plugin._level_line(_lv_max)}",
     )
 
+    # --- 3e) 按钮：每个场景都要有（v1.18.48）---
+    # 站长要求「不能有没有按钮的场景」。逐个场景过一遍 `_scene_rows`，
+    # 空的就是漏项（custom.send 曾经是唯一漏的：BUTTON_BASE_BY_GROUP["custom"] 是空串）。
+    _btn_plugin = make_plugin()
+    _no_btn = [s for s in mod.SCENE_IDS if not _btn_plugin._scene_rows(s)]
+    check(
+        not _no_btn,
+        f"{len(mod.SCENE_IDS)} 个场景全都有按钮（一个都不能没有）-> 缺 {_no_btn}",
+    )
+    check(
+        bool(_btn_plugin._scene_rows("cast.multi_summary")),
+        "连钓战报场景有按钮（卖光光 / 看背包）",
+    )
+    check(
+        bool(_btn_plugin._scene_rows("custom.send")),
+        "自定义命令的回复也兜底到按钮（以前这里是唯一空档）",
+    )
+    # 一次连钓只发**一条**带按钮的消息：成就/里程碑并进正文。
+    # 以前它们是各自一条带按钮的消息，共用同一个 msg_id -> QQ 只留一条键盘，
+    # 后发的成就推送把战报的键盘盖掉了（站长报的「连钓战报没按钮了」）。
+    _src_engine = (PLUGIN_DIR / "_engine.py").read_text(encoding="utf-8")
+    check(
+        '"cast.multi_summary"' in _src_engine
+        and '"cast.multi_achievement"' not in _src_engine
+        and '"cast.multi_milestone"' not in _src_engine,
+        "连钓只发一条带按钮的消息（成就/里程碑已并进正文，不再各发一条盖键盘）",
+    )
+
     # --- 3) 连钓逃脱率 = 鱼种逃脱率 × 系数（v1.18.26 起默认 2.0，封顶 95%）---
     esc_cfg_probe = dict(_CFG)
     _mult = mod._safe_number(esc_cfg_probe.get("multi_escape_mult"), 0.0)
@@ -10687,8 +10715,8 @@ async def main():
             f"{_scene} 有按钮（来源 {_p0._scene_source(_scene)}，兜底 {_base}）",
         )
     check(
-        _p0._scene_rows("custom.send") == [],
-        "自定义命令的回复保持没有按钮（内容完全由站长决定）",
+        bool(_p0._scene_rows("custom.send")),
+        "自定义命令的回复也有按钮（站长没配也要有兜底，v1.18.48 起不再允许无按钮场景）",
     )
     for _scene in ("item.used", "stamina.view"):
         check(
@@ -10854,8 +10882,10 @@ async def main():
         f"/{_flat['aquarium.income_start']['parent']}）",
     )
     check(
-        _flat["custom.send"]["source"] == "none" and _flat["custom.send"]["buttons"] == [],
-        "自定义命令的回复仍然是「没有按钮」",
+        _flat["custom.send"]["source"] in ("config", "default", "group")
+        and bool(_flat["custom.send"]["buttons"]),
+        f"自定义命令的回复也有按钮（{_flat['custom.send']['source']}"
+        f"/{[b[0] for b in _flat['custom.send']['buttons']]}）",
     )
     check(
         _flat["cast.hit"]["default_buttons"] and _flat["cast.hit"]["buttons"],
