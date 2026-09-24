@@ -4999,25 +4999,36 @@ table.grid td.actions .btn { vertical-align: middle; }
    * 页面只负责渲染 —— 插件以后加字段，页面自动多一行，不用改两次。
    */
   async function openPlayerData(userId) {
+    // ⚠️ 整段都要兜住：这个请求一旦被拒（老后端没 player_get、路由只允许 GET、
+    //    网络错），await 会直接抛出去，函数当场中断 —— 面板就静静地卡在「正在读」，
+    //    站长看到的就是「点了没反应」。所以任何失败都要写进面板。
+    function fail(msg) {
+      if (!state.dataEdit || state.dataEdit.user_id !== userId) return;
+      state.dataEdit.loaded = true;
+      state.dataEdit.error = msg || "读取失败";
+      render();
+    }
     if (!ENV.online) {
-      if (state.dataEdit) {
-        state.dataEdit.loaded = true;
-        state.dataEdit.error = "离线预览：读不到玩家数据（在插件里打开页面才有）";
-        render();
-      }
+      fail("离线预览：读不到玩家数据（在插件里打开页面才有）");
       return;
     }
-    var res = await playersCommand({ action: "player_get", user_id: text(userId) });
+    var res;
+    try {
+      res = await playersCommand({ action: "player_get", user_id: text(userId) });
+    } catch (e) {
+      fail("读取玩家数据失败：" + describeError(e, "players"));
+      return;
+    }
     if (!state.dataEdit || state.dataEdit.user_id !== userId) return;   // 期间换了人
-    if (res && res.accepted && res.detail) {
-      var body = res.detail;
+    var body = (res && res.detail) || null;
+    if (res && res.accepted && body && body.sections) {
       state.dataEdit.loaded = true;
       state.dataEdit.error = "";
-      state.dataEdit.sections = body.sections || [];
+      state.dataEdit.sections = body.sections;
       state.dataEdit.name = body.name || state.dataEdit.name;
     } else {
-      state.dataEdit.loaded = true;
-      state.dataEdit.error = (res && res.message) || "读取失败";
+      fail((res && res.message) || "读取失败");
+      return;
     }
     render();
   }
@@ -5032,7 +5043,14 @@ table.grid td.actions .btn { vertical-align: middle; }
           mode: d.mode, edits: edits, confirm: true }
       : { action: "player_set", user_id: text(d.user_id), mode: d.mode,
           edits: edits, confirm: true };
-    var res = await playersCommand(body);
+    var res;
+    try {
+      res = await playersCommand(body);
+    } catch (e) {
+      var why = "提交失败：" + describeError(e, "players");
+      toast("err", "修改没成功", why);
+      return { ok: false, message: why };
+    }
     if (res && res.accepted) {
       toast("ok", "已修改", (res.message || "").slice(0, 200));
       await openPlayerData(d.user_id);                     // 重新读一遍，页面立刻显示新值
@@ -5257,7 +5275,15 @@ table.grid td.actions .btn { vertical-align: middle; }
       "</span>";
     html += "</div>";
     html += "</section>";
-    html += renderPlayerDataPanel();
+    // 面板自己出问题也绝不能把整个玩家页带崩（渲染异常以前会让「点了没反应」）
+    try {
+      html += renderPlayerDataPanel();
+    } catch (e) {
+      html += '<section class="card"><div class="notice"><span class="notice-icon">⛔</span><div>' +
+        "改数据面板渲染失败：" + esc(String((e && e.message) || e)) +
+        '<div class="hint faint">按右上角「↻ 刷新」重试；一直失败请把这句话发给开发者。</div>' +
+        "</div></div></section>";
+    }
     return html;
   }
 
@@ -5306,7 +5332,16 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     if (d.error) {
       html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(d.error) +
-        '<div class="hint faint">读不到就改不了；多数是玩家 ID 不在当前作用域，或数据库正忙。</div></div></div>';
+        '<div class="hint faint">读不到就改不了。常见原因：插件还是旧版（重启 AstrBot 让新代码生效）、' +
+        '玩家 ID 不在当前作用域、或数据库正忙。<b>先按右上角「↻ 刷新」再试一次</b>。</div></div></div>';
+      html += "</section>";
+      return html;
+    }
+    if (!(d.sections || []).length) {
+      html += '<div class="notice"><span class="notice-icon">🤔</span><div>' +
+        "插件没下发任何可改字段（可能插件版本比页面旧）。<br />" +
+        '<span class="hint faint">重启 AstrBot 让插件与页面版本一致；' +
+        "还不行就把这条消息发给开发者。</span></div></div>";
       html += "</section>";
       return html;
     }

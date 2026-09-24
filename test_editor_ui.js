@@ -172,7 +172,7 @@ const hookNames = [
   "isDynamicButtonScene", "renderButtonSample", "DYNAMIC_BUTTON_SCENES", "DYNAMIC_BUTTON_SAMPLES",
   // v1.18.53：改玩家实时数据的面板（字段名单由插件下发，页面只渲染）
   "renderPlayerDataPanel", "playerDataEditsFromPage", "openPlayerData", "submitPlayerData",
-  "renderPlayerRow",
+  "renderPlayerRow", "playersCommand",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -1963,6 +1963,64 @@ async function configKeysCoverage() {
     "玩家列表每行都有「✏️ 改金币」和「🧰 改数据」两个按钮");
   T.state.dataEdit = null;
 
+  /* 请求失败时**必须把原因写在面板上**（v1.18.53）：以前 openPlayerData 没兜住
+     「请求本身被拒」——老后端没这个动作时 await 直接抛出去，函数当场中断，
+     面板就卡着不动，站长看到的是「点了没反应」。
+     ⚠️ 用**真实的桩 SDK** 造失败（页面的 playersCommand 是函数声明，外部赋值
+        进不去闭包），这样走的才是真链路。 */
+  {
+    const L = loadPageFromSource(makeFakeSdk()).T;
+    const savedPost = L.ENV.sdk ? null : null;
+    const openCase = function () {
+      L.state.dataEdit = {
+        user_id: "10001", name: "", mode2: "live", snapshot: "",
+        mode: "add", loaded: false, error: "", sections: [], clearArm: null,
+      };
+      return L.openPlayerData("10001");
+    };
+    // ① 后端不认这个动作（旧版插件）：错误信封 -> 面板上写清楚
+    captured.playersFail = function () {
+      return Promise.reject({
+        response: { status: 400, data: { status: "error",
+          message: "不认识的玩家动作「player_get」（可用：list、set_gold）" } },
+        message: "Request failed with status code 400",
+      });
+    };
+    let threw = null;
+    try { await openCase(); } catch (e) { threw = e; }
+    check(threw === null, "请求被拒不会把异常抛出去（抛出去 = 点了没反应）",
+      threw ? String(threw.message) : "无抛出");
+    check(L.state.dataEdit.loaded === true && L.state.dataEdit.error.indexOf("player_get") >= 0,
+      "后端不认这个动作时，原因写在面板上（不是静默卡住）",
+      "error=" + JSON.stringify(L.state.dataEdit.error) +
+      " loaded=" + L.state.dataEdit.loaded);
+    const errPanel = L.renderPlayerDataPanel();
+    check(errPanel.indexOf("读不到就改不了") > 0 && errPanel.indexOf("↻ 刷新") > 0,
+      "面板上还给了「怎么办」（重启插件 / 刷新重试）");
+    // ② 恢复真桩：成功路径要把字段渲染成输入框（端到端）
+    captured.playersFail = null;
+    await openCase();
+    const okPanel = L.renderPlayerDataPanel();
+    check(L.state.dataEdit.error === "" && okPanel.indexOf('data-pd="f:gold"') > 0,
+      "恢复正常后：拿到插件下发的字段并渲染出输入框（端到端）",
+      "error=" + JSON.stringify(L.state.dataEdit.error) + " len=" + okPanel.length);
+    // ③ 提交失败要有提示（不能静默）
+    L.state.dataEdit.mode = "add";
+    captured.playersFail = function () {
+      return Promise.reject({ response: { status: 500, data: { message: "数据库正忙" } },
+        message: "Request failed with status code 500" });
+    };
+    let subThrew = null;
+    let sub = null;
+    try { sub = await L.submitPlayerData([{ field: "gold", value: 100 }]); }
+    catch (e) { subThrew = e; }
+    check(subThrew === null && sub && sub.ok === false && String(sub.message).length > 0,
+      "提交失败也不抛异常，而是返回失败 + 给站长一句能看懂的原因",
+      subThrew ? String(subThrew.message) : JSON.stringify(sub && sub.message));
+    captured.playersFail = null;
+    L.state.dataEdit = null;
+  }
+
   /* 配置面板里「只读」的键仍然只有那 7 个：不能因为加了新功能就多出来
      （站长要求「不要在配置页面放只读，全部改成可配置」—— 那 7 个是文件字段 /
      数据操作 / 页面自己的状态，本来就不是「配置值」）。 */
@@ -2248,6 +2306,26 @@ const captured = {
   calls: [], context: null, failPost: false, statusReads: 0, phase: "before"
 };
 
+/** v1.18.53：插件下发的「可编辑玩家字段」长什么样（真后端由 PLAYER_FIELDS 生成）。 */
+const FAKE_PLAYER_SECTIONS = [
+  { title: "数值与状态", kind: "fields", items: [
+    { key: "gold", label: "金币", desc: "主货币", value: 12800 },
+    { key: "total_caught", label: "累计钓获", desc: "等级按它算", value: 214 },
+    { key: "stamina", label: "体力", desc: "当前体力", value: -1 },
+    { key: "current_location", label: "当前钓点", desc: "钓点 id", value: "novice" },
+  ] },
+  { title: "计数表", kind: "maps", items: [
+    { key: "items", label: "道具数量", desc: "道具表 id", entries: [
+      { name: "feed_basic", count: 3 },
+    ] },
+    { key: "baits", label: "鱼饵数量", desc: "鱼饵表 id", entries: [] },
+  ] },
+  { title: "鱼", kind: "fish", items: [
+    { key: "inventory", label: "背包", count: 7 },
+    { key: "aquarium", label: "水族馆", count: 2 },
+  ] },
+];
+
 function makeFakeSdk() {
   const sdk = {
     ready() {
@@ -2292,6 +2370,8 @@ function makeFakeSdk() {
       const fresh = JSON.parse(FAKE_CONFIG_AFTER().editor_status);
       // 玩家接口（v1.10.0）：list / snapshot_list 回列表，set_gold / snapshot_gold 回结果
       if (String(endpoint) === "players") {
+        // v1.18.53：测试可以临时注入一个「失败响应」来验错误路径
+        if (captured.playersFail) return captured.playersFail();
         const action = String(payload.action || "list");
         const base = {
           status: "ok", ok: true, transport: "plugin-api",
@@ -2303,6 +2383,20 @@ function makeFakeSdk() {
             players: rows, count: rows.length, total: 12, limit: 500,
             scan_limit: 2000, gold_max: 1000000000,
             query: String(payload.query || "")
+          }));
+        }
+        // v1.18.53：读玩家可编辑数据（字段名单由插件下发）
+        if (action === "player_get") {
+          return Promise.resolve(Object.assign({}, base, {
+            user_id: String(payload.user_id || ""), name: "钓鱼佬", level: 6,
+            sections: FAKE_PLAYER_SECTIONS
+          }));
+        }
+        // v1.18.53：改玩家数据（增 / 减 / 改）
+        if (action === "player_set" || action === "snapshot_player_set") {
+          const n = ((payload.edits || []).length);
+          return Promise.resolve(Object.assign({}, base, {
+            message: "已改玩家 " + payload.user_id + "：" + n + " 项"
           }));
         }
         return Promise.resolve(Object.assign({}, base, {
