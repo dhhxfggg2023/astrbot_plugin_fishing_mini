@@ -696,8 +696,12 @@ class EngineMixin:
             floor_before = _safe_int(player.get("buff_floor_casts"), 0, 0)
 
             lines = [f"🎣 连钓 {planned} 次"]
-            # 自动补给说明（自动挂饵 / 自动补货 / 自动用手气道具，见 _auto_supply）
-            lines.extend(_supply_notes)
+            # ⚠️ 自动补给的说明**不写在这儿**（v1.18.50）：以前「🛒 自动补货 20 个深渊饵」
+            #    和「🎐 自动用上玉髓灯」会插在渔获列表中间（补货发生在第 N 竿，
+            #    第 N 竿的说明就顺手贴在那儿），把「1. 2. 3. …」的清单劈成两段。
+            #    现在整批的补给说明攒进 `_supply_all`，等渔获清单 + 汇总都列完，
+            #    统一贴到最末尾（见下面 `_supply_all` 那段）。
+            _supply_all = list(_supply_notes)
             if truncated:
                 lines.append(
                     f"⚠️ 背包只剩 {free} 个位置，本次只钓 {planned} 次"
@@ -733,10 +737,12 @@ class EngineMixin:
                         #    （站长要求：第一次用完显示一次就够）。
                         #    其它提示（``🎐 自动用上「玉髓灯」``）**必须每次都留** ——
                         #    15 竿的灯在 20 连钓里确实会补上两次，那是实情，不能吞。
+                        # v1.18.50：一律攒进 `_supply_all`，跟批首那几条一起贴到末尾，
+                        #    不再插在渔获清单中间。
                         for _refill_note in self._auto_supply_buff(player):
-                            if "额度用完" in _refill_note and _refill_note in lines:
+                            if "额度用完" in _refill_note and _refill_note in _supply_all:
                                 continue
-                            lines.append(_refill_note)
+                            _supply_all.append(_refill_note)
                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
                 luck = _effective_luck(player, cfg)
@@ -986,16 +992,36 @@ class EngineMixin:
                     )
                 )
 
+            # --- 自动补给说明：整批结束后**一次性**贴在末尾（v1.18.50）---
+            # 站长的两条要求：位置别插在渔获中间、同一种补货只提示一次。
+            # 所以这里对「完全相同的句子」去重后再贴（不同竿补了两次玉髓灯 →
+            # 两句话一模一样，合成一条 + ×2 更省字；鱼饵和道具都走这一套）。
+            if _supply_all:
+                merged: list[str] = []
+                counts: dict[str, int] = {}
+                for note in _supply_all:
+                    if note in counts:
+                        counts[note] += 1
+                        continue
+                    counts[note] = 1
+                    merged.append(note)
+                for note in merged:
+                    times_note = counts.get(note, 1)
+                    lines.append(
+                        f"{note}　×{times_note}" if times_note > 1 else note
+                    )
+
             # 成就 / 里程碑并进**同一条**战报（v1.18.48）。
             #
-            # ⚠️ 以前它们是各自 `_say_msg(...)` 发出去的两条**带按钮**的消息，而
+            # ⚠️ 以前它们是各自 `_say_msg(...)` 发出去的两条带按钮的消息，而
             #    `msg_seq` 只是随机数、`msg_id` 又是同一个（同一条入站消息）——
-            #    QQ 只保留一条内联键盘，于是**后发的成就推送把战报的键盘盖掉了**，
-            #    玩家看到的就是「连钓战报没按钮了」。新功能让成就更容易触发，
-            #    这个覆盖就变得很容易撞上（站长报的正是这个）。
+            #    QQ 对一条入站消息**只允许第一条回复挂键盘**，于是后发的成就推送
+            #    把战报的键盘挤掉（战报这时已经挂不上了）。
             #
-            # 现在：一次连钓**只发一条带按钮的消息**（战报），成就/里程碑并进正文；
-            # 存档失败之类的纯文字提示仍然单独发（它们不带按钮，不会盖键盘）。
+            # v1.18.49 起键盘归属交给 `_interactions._keyboard_slot_free` 统一分配：
+            #    这条入站消息的键盘名额，已经在前面给了「⚡ N 秒内拉」那条咬钩提示
+            #    （连钓里唯一要玩家当场动手的回复），所以战报这里自动退化成纯文本。
+            #    战报的按钮在配置页/编辑器里照样配（场景仍然有按钮），只是不发出去。
             if new_ach:
                 lines.append("🎉 " + "；".join(new_ach))
             if milestone:

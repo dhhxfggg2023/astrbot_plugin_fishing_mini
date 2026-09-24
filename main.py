@@ -4594,6 +4594,12 @@ class FishingPlugin(
         形参仍然保留，纯粹是给「直接调用 handler」的单测当兜底。
         """
         user_id = str(event.get_sender_id())
+        # ---- 键盘名额：每条新指令开始时腾出这条入站消息的名额 ----
+        # QQ 官方一条入站消息只有**第一条**回复能挂键盘（被动回复上限 5 次 + 主动发送
+        # 不支持 keyboard，见 `_interactions._keyboard_slot_free`）。名额按 msg_id
+        # 记账，而同一个 message_id 可能被重复处理（重投 / 单测直接反复调 handler），
+        # 所以在指令入口清一次 —— 之后这一轮里只有第一处需要按钮的回复能拿到键盘。
+        self._reset_keyboard_slot(event)
         # ---- v1.18.17：参数直接读原始消息，**不再受形参个数限制** ----
         # AstrBot 的 CommandFilter 按形参个数逐个塞参数，多出来的 token 会被直接丢掉：
         # `/钓鱼 水族馆 放 1 2 3 4 5` 永远只能放 4 条（站长报的「一次最多四条」就是它）。

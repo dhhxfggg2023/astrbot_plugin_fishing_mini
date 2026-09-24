@@ -90,6 +90,60 @@ class InteractionsMixin:
             return None
         return {"content": {"rows": [{"buttons": r} for r in rows]}}
 
+    async def _keyboard_slot_free(self, msg_id: str) -> bool:
+        """这条入站消息还**有没有键盘名额**（v1.18.49）。
+
+        QQ 官方机器人对**一条入站消息**有两道硬限制（官方文档「发送群聊消息」）：
+        1. **每个 msg_id 最多被动回复 5 次**，且被动回复要带 msg_id；超了就是
+           ``40034128 被动回复时间或者次数超过限制``；
+        2. **主动消息不能带键盘**（``post_group_message`` 不带 msg_id 时不支持 keyboard）。
+
+        两者合起来就是一句话：**一条入站消息只有第一条回复能挂键盘**。
+        20 连钓要发 20+ 条，第 6 条起全部 40034128 —— 插件这里失败退回纯文本，
+        AstrBot 那条兜底改用主动发送才把消息送出去，**但主动发送没有键盘**。
+        站长看到「咬钩提示有文字、没有按钮」就是这个：键盘压根没发出去，
+        不是被后一条消息顶掉的。
+
+        所以键盘名额按 msg_id **只发一次**：第一处需要按钮的回复拿走它，后面的
+        一律走纯文本（照旧能发出去，只是不挂键盘）。名额按 msg_id 记账、上限 512 条，
+        过期的惰性清掉。
+        """
+        if not msg_id:
+            # 拿不到 msg_id 就没法记账（也无法被动回复），照样尝试，交给平台判
+            return True
+        used = self.__dict__.setdefault("_kb_used_msgs", {})
+        now = time.time()
+        if msg_id in used:
+            return False
+        used[msg_id] = now
+        if len(used) > 512:
+            for old in [k for k, ts in used.items() if now - ts >= 1800]:
+                used.pop(old, None)
+            if len(used) > 1024:
+                for old in list(used)[:512]:
+                    used.pop(old, None)
+        return True
+
+    def _reset_keyboard_slot(self, event: AstrMessageEvent) -> None:
+        """**每条新指令开始时**腾出这条入站消息的键盘名额（v1.18.49）。
+
+        ``_keyboard_slot_free`` 按 msg_id 记账「键盘已经挂过没有」，这是为了不撞
+        QQ 的「一条入站消息只有第一条回复能挂键盘」。但同一条消息可能是**多次处理**
+        的（测试里直接反复调 handler；线上一个 message_id 也可能被重投/重放），
+        所以每条指令在入口处把这条 msg_id 的记录清掉 —— 这一轮重新有一个名额。
+
+        ⚠️ 只在**指令入口**调用：连钓跑到一半时后面那几十条回复绝不能重新腾名额，
+        否则又会去撞 40034128。
+        """
+        try:
+            msg_id = str(
+                getattr(getattr(event, "message_obj", None), "message_id", "") or ""
+            )
+        except Exception:
+            return
+        if msg_id:
+            self.__dict__.setdefault("_kb_used_msgs", {}).pop(msg_id, None)
+
     async def _send_with_buttons(
         self, event: AstrMessageEvent, text: str, rows: list[list[dict[str, Any]]]
     ) -> bool:
@@ -121,6 +175,14 @@ class InteractionsMixin:
         raw = getattr(msg_obj, "raw_message", None)
         msg_id = str(getattr(msg_obj, "message_id", "") or "")
         body = (text or "").strip()
+
+        # ⚠️ 一条入站消息只有**第一条**回复能挂键盘（原因见 `_keyboard_slot_free`）。
+        #    名额已经被别的回复用掉时，直接返回 False —— 调用方退回纯文本，
+        #    走 AstrBot 正常的发送链路（被动回复用完时它还有主动发送兜底）。
+        #    这里**不能**硬发带 keyboard 的请求：那会撞 40034128，
+        #    既发不出键盘、又要多烧一条被动回复次数。
+        if not await self._keyboard_slot_free(msg_id):
+            return False
 
         shapes: list[dict[str, Any]] = []
         if mode in ("自动", "auto", "markdown", "md"):
@@ -166,7 +228,9 @@ class InteractionsMixin:
                 f"　已尝试的形态：{[s['msg_type'] for s in shapes]}；"
                 f"可在插件配置里把 button_mode 设为 markdown 或 text 单独试，"
                 f"或设为「关闭」不再尝试。常见原因：适配器不支持 keyboard、"
-                f"机器人没有内联键盘/markdown 权限。"
+                f"机器人没有内联键盘/markdown 权限，"
+                f"或**这条入站消息的被动回复次数已经用完**"
+                f"（40034128：QQ 对一条消息最多允许回复 5 次，只有第一次能挂键盘）。"
             )
         elif last_error is not None:
             logger.debug(f"带按钮的消息发送失败，改用纯文本：{last_error}")
@@ -241,6 +305,8 @@ class InteractionsMixin:
         values: dict[str, Any] | None = None,
         page: tuple[int, int, str] | None = None,
         again_values: dict[str, str] | None = None,
+        *,
+        buttons: bool = True,
     ):
         """**统一输出出口**：先按场景叠加文案覆盖，再能发按钮就发按钮，否则退回纯文本。
 
@@ -260,6 +326,10 @@ class InteractionsMixin:
         两排动态按钮的内容都在按钮表里（``page.prev`` / ``page.next`` / ``item.again``），
         站长能像别的按钮一样在「💬 回复」页里改文案、指令和样式。
 
+        ``buttons=False``：**这条回复强制不要按钮**（强制走纯文本，连名额都不占）。
+        一般不用它 —— 键盘归属由 `_keyboard_slot_free` 自动分配（QQ 官方一条入站消息
+        只有第一条回复能挂键盘，见那里的说明）。它留给「明知挂了也白挂」的场合。
+
         用法：``async for r in self._say(event, text, "bag.list"): yield r``
         """
         text = self._scene_text(scene, text, values)
@@ -270,9 +340,11 @@ class InteractionsMixin:
             prefix = self._mention_prefix(event)
             if prefix:
                 text = prefix + text
-        rows = self._scene_rows(scene) if scene else []
-        # 动态按钮排在最后：先「上一页 / 下一页」，再「再次使用」
-        rows = rows + self._page_rows(scene, page) + self._again_rows(scene, again_values)
+        rows: list[list[dict[str, Any]]] = []
+        if buttons:
+            rows = self._scene_rows(scene) if scene else []
+            # 动态按钮排在最后：先「上一页 / 下一页」，再「再次使用」
+            rows = rows + self._page_rows(scene, page) + self._again_rows(scene, again_values)
         if rows and await self._send_with_buttons(event, text, rows):
             return
         yield event.plain_result(text)
@@ -285,18 +357,23 @@ class InteractionsMixin:
         values: dict[str, Any] | None = None,
         page: tuple[int, int, str] | None = None,
         again_values: dict[str, str] | None = None,
+        *,
+        buttons: bool = True,
     ):
         """``_say`` 的「消息对象版」：``message`` 一般来自 ``event.plain_result(文字)``。
 
         存在的意义：让几百处已经在用的 ``yield event.plain_result(...)`` 只需要
         在外面套一层就能带上场景按钮与文案覆盖，不用把里面的文案重写一遍。
-        取不到文本时原样交出对象（功能不受影响）。``page`` / ``again_values`` 同 ``_say``。
+        取不到文本时原样交出对象（功能不受影响）。``page`` / ``again_values`` 同 ``_say``，
+        ``buttons=False`` 同 ``_say``（这条不挂键盘，免得顶掉更早那条的键盘）。
         """
         text = _message_text(message)
         if not text:
             yield message
             return
-        async for reply in self._say(event, text, scene, values, page, again_values):
+        async for reply in self._say(
+            event, text, scene, values, page, again_values, buttons=buttons
+        ):
             yield reply
 
     async def _push(

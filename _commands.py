@@ -1220,12 +1220,9 @@ class CommandsMixin:
             + (f" · 第 {page}/{total_pages} 页" if total_pages > 1 else "")
         ]
         lines.extend(rendered[start : start + per_page])
-        lines.append("【用法】")
-        lines.append("　/钓鱼 卖 1 2 3　按序号卖（可给多个）")
-        lines.append("　/钓鱼 卖 鲤鱼　　按鱼名卖光这种鱼（堆叠的批次这样卖最快）")
-        lines.append("　/钓鱼 卖光光　　一次清空背包")
-        lines.append("　/钓鱼 锁定 1　　 锁定后不会被卖出")
-        lines.append("　/钓鱼 水族馆 放 1 2　放进水族馆")
+        # ⚠️ 这里**不再贴【用法】那几行**（v1.18.50，站长：「移到帮助去，太冗杂了」）：
+        #    卖 / 卖光光 / 锁定 / 放缸的写法在「/钓鱼 帮助」的「背包与买卖」页里
+        #    一条不落，背包本身只留「有什么、值多少」。
         if total_pages > 1:
             lines.append(f"💡 /钓鱼 背包 {page % total_pages + 1} 看下一页")
         # 「上一页 / 下一页」按钮（首尾页各缺一个，只有一页时整排不出现）

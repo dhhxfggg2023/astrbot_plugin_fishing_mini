@@ -4711,10 +4711,11 @@ async def main():
             self.raw_message = FakeRaw(group, openid)
 
     class PlatEvent(FakeEvent):
-        def __init__(self, sid, platform="qq_official", api=None, group="G1", openid=""):
+        def __init__(self, sid, platform="qq_official", api=None, group="G1", openid="", mid="MID-1"):
             super().__init__(sid)
             self._platform = platform
             self.message_obj = FakeMsgObj(group, openid)
+            self.message_obj.message_id = mid
             self.bot = type("B", (), {"api": api})() if api else None
 
         def get_platform_name(self):
@@ -4769,7 +4770,9 @@ async def main():
             return {"id": "m3"}
 
     api2 = PickyApi()
-    ok = await plugin._send_with_buttons(PlatEvent("b5", api=api2), "带按钮的消息", rows)
+    ok = await plugin._send_with_buttons(
+        PlatEvent("b5", api=api2, mid="MID-PICKY"), "带按钮的消息", rows
+    )
     check(
         ok and len(api2.calls) == 2 and api2.calls[1]["msg_type"] == 0
         and "keyboard" in api2.calls[1],
@@ -4780,19 +4783,80 @@ async def main():
     off_cfg["button_mode"] = "关闭"
     plugin_off = make_plugin(off_cfg)
     check(
-        not await plugin_off._send_with_buttons(PlatEvent("b6", api=FakeApi()), "x", rows),
+        not await plugin_off._send_with_buttons(
+            PlatEvent("b6", api=FakeApi(), mid="MID-OFF"), "x", rows
+        ),
         "button_mode=关闭 时完全不发按钮",
     )
     ok = await plugin._send_with_buttons(
-        PlatEvent("b2", platform="aiocqhttp", api=api), "文本", rows
+        PlatEvent("b2", platform="aiocqhttp", api=api, mid="MID-OTHER"), "文本", rows
     )
     check(not ok, "其它平台返回 False（调用方退回纯文本）")
     ok = await plugin._send_with_buttons(FakeEvent("b3"), "文本", rows)
     check(not ok, "事件里没有 bot 时不炸、直接退回纯文本")
     ok = await plugin._send_with_buttons(
-        PlatEvent("b4", api=api, group="", openid="U1"), "文本", rows
+        PlatEvent("b4", api=api, group="", openid="U1", mid="MID-C2C"), "文本", rows
     )
     check(ok and any(c["kind"] == "c2c" for c in api.calls), "单聊走 post_c2c_message")
+
+    # --- 一条入站消息只有第一条回复能挂键盘（v1.18.49）---
+    # QQ 官方：每个 msg_id 最多被动回复 5 次，而**主动发送不能带键盘** ——
+    # 所以第 2 条起再挂键盘不但发不出去（40034128），还会白烧一次回复次数。
+    # 插件改成「键盘名额按 msg_id 只发一次」，第一处需要按钮的回复拿走它。
+    async def _say_calls(btn_plugin, scene, text, use_buttons=True, mid="MID-1"):
+        api_x = FakeApi()
+        ev_x = PlatEvent("kb1", api=api_x, mid=mid)
+        plain = []
+        async for r in btn_plugin._say(event=ev_x, text=text, scene=scene, buttons=use_buttons):
+            plain.append(r.text if hasattr(r, "text") else str(r))
+        return api_x.calls, plain
+
+    # ⚠️ 名额是按 msg_id 记账的，而上面那些用例已经把 "MID-1" 用掉了 ——
+    #    这里用一个全新的插件 + 没被碰过的 msg_id，免得互相干扰。
+    _kbp = make_plugin()
+    _kb1, _p1 = await _say_calls(_kbp, "cast.hit", "第一次要按钮", mid="MID-KB-1")
+    _kb2, _p2 = await _say_calls(_kbp, "cast.multi_summary", "第二次还要按钮", mid="MID-KB-1")
+    check(
+        len(_kb1) == 1 and "keyboard" in _kb1[0] and _p1 == [],
+        f"第一条带按钮的回复拿到键盘 -> 发出 {len(_kb1)} 条",
+    )
+    check(
+        _kb2 == [] and len(_p2) == 1,
+        f"同一个 msg_id 的第二条**不再挂键盘**（不然 40034128，还白烧一次回复次数）-> "
+        f"发出 {len(_kb2)} 条",
+    )
+    _kb3, _p3 = await _say_calls(_kbp, "cast.hit", "换一条入站消息", mid="MID-KB-2")
+    check(
+        len(_kb3) == 1 and "keyboard" in _kb3[0],
+        "不同的 msg_id 各有一个名额（下一条指令照常带按钮）",
+    )
+    _kb4, _p4 = await _say_calls(_kbp, "cast.hit", "强制不带", use_buttons=False, mid="MID-KB-3")
+    check(
+        _kb4 == [] and len(_p4) == 1,
+        f"buttons=False 强制纯文本（连名额都不占）-> 发出 {len(_kb4)} 条",
+    )
+    _kb5, _p5 = await _say_calls(_kbp, "cast.hit", "占过的名额不会还回来", mid="MID-KB-1")
+    check(
+        _kb5 == [],
+        "名额用掉就不会归还（同一条入站消息后面永远只是纯文本）",
+    )
+    # 新的一条指令（同一条入站消息被重投 / 重放）→ 入口处腾名额，又能挂键盘
+    _kbp._reset_keyboard_slot(_ev_reset := PlatEvent("kb9", api=FakeApi(), mid="MID-KB-1"))
+    _kb6, _p6 = await _say_calls(_kbp, "cast.hit", "重投后又可以挂", mid="MID-KB-1")
+    check(
+        len(_kb6) == 1 and "keyboard" in _kb6[0],
+        "每条新指令入口都会腾出名额（_reset_keyboard_slot），重投不会永远没按钮",
+    )
+    check(
+        "_reset_keyboard_slot(event)" in (PLUGIN_DIR / "main.py").read_text(encoding="utf-8"),
+        "指令入口真的调了 _reset_keyboard_slot（连钓中途不重置，只有入口重置）",
+    )
+    # 战报不带按钮的**真正原因**是这个分配器，不是写死的 buttons=False
+    check(
+        "_keyboard_slot_free" in (PLUGIN_DIR / "_interactions.py").read_text(encoding="utf-8")
+        and "buttons=False" not in _src_engine,
+        "键盘归属由 _keyboard_slot_free 统一分配（战报不再靠写死的 buttons=False）",
+    )
 
     # --- v1.18.33：需要翻页的界面多一排「上一页 / 下一页」按钮 ---
     # 规则：只有一页 → 整排不出现；第一页不给「上一页」、最后一页不给「下一页」
@@ -4845,7 +4909,7 @@ async def main():
     ]
     await _pb._save_player(_pbp)
     _papi = FakeApi()
-    await cmd(_pb, PlatEvent("89501", api=_papi), "背包", "2", "")
+    await cmd(_pb, PlatEvent("89501", api=_papi, mid="MID-BAG2"), "背包", "2", "")
     _prows = _papi.calls[-1]["keyboard"]["content"]["rows"] if _papi.calls else []
     check(
         [b["action"]["data"] for b in _prows[-1]["buttons"]]
@@ -4856,7 +4920,7 @@ async def main():
         str([[b["action"]["data"] for b in r["buttons"]] for r in _prows][-1:]),
     )
     _papi2 = FakeApi()
-    await cmd(_pb, PlatEvent("89501", api=_papi2), "背包", "3", "")
+    await cmd(_pb, PlatEvent("89501", api=_papi2, mid="MID-BAG3"), "背包", "3", "")
     _prows3 = (
         _papi2.calls[-1]["keyboard"]["content"]["rows"] if _papi2.calls else []
     )
@@ -5902,9 +5966,26 @@ async def main():
     body = text_of(out)
     _ml = await _mp._load_player("89611")
     check(
-        "连钓 18 次" in body and body.count("自动用上") == 2,
-        f"18 竿 > 玉髓灯的 15 竿 -> 中途再补一个（批里两次「自动用上」）-> "
+        "连钓 18 次" in body
+        and body.count("自动用上") == 1
+        and "×2" in body,
+        f"18 竿 > 玉髓灯的 15 竿 -> 中途补了第二个，但**同一种补给只说一次**（合并成 ×2）-> "
         f"{[l for l in body.splitlines() if '自动用上' in l]}",
+    )
+    # v1.18.50：补给说明**一律贴在末尾**，而且完全相同的句子合并成一条（×N）——
+    # 以前它插在渔获清单中间（补货发生在第 N 竿就贴在第 N 竿旁边），把 1. 2. 3. 劈成两段。
+    _bl = body.splitlines()
+    _sup_idx = [i for i, l in enumerate(_bl) if "自动用上" in l or "自动补货" in l]
+    _value_idx = [i for i, l in enumerate(_bl) if "渔获估值" in l]
+    check(
+        bool(_value_idx) and bool(_sup_idx) and min(_sup_idx) > max(_value_idx),
+        f"自动补给的说明全在「渔获估值」之后（不再插在渔获清单中间）-> "
+        f"补给行 {_sup_idx}、估值行 {_value_idx}",
+    )
+    check(
+        any("×2" in _bl[i] for i in _sup_idx) and not any("差" in _bl[i] for i in _sup_idx),
+        f"补了两次的那句合并成「…　×2」（同一种补货只提示一次）-> "
+        f"{[_bl[i] for i in _sup_idx]}",
     )
     check(
         _ml["gold"] == _price,
@@ -5925,7 +6006,7 @@ async def main():
         f"{body.count('金币不够自动补货')} 次、余额 {_ml2['gold']}",
     )
     check(
-        "连钓 18 次" in body and body.count("自动用上") == 1,
+        "连钓 18 次" in body,
         "这一批照常跑完（只是后半段没保底）",
     )
     # 没指定就不替他买
@@ -7655,6 +7736,24 @@ async def main():
         check(kw in text_of(out), f"/钓鱼 {' '.join(x for x in args if x)} -> {kw}")
     out = await cmd(plugin, ev, "订单", "", "")
     check("订单" in text_of(out), "/钓鱼 订单")
+    # v1.18.50：背包不再贴【用法】那几行（站长：「移到帮助去，太冗杂了」）——
+    # 但那些写法在 /钓鱼 帮助 里必须一条不少，否则就是真的把功能藏起来了。
+    _bag_body = text_of(await cmd(plugin, ev, "背包", "", ""))
+    _help2 = text_of(await cmd(plugin, ev, "帮助", "2", ""))
+    _help3 = text_of(await cmd(plugin, ev, "帮助", "3", ""))
+    check(
+        "【用法】" not in _bag_body and "卖光光" not in _bag_body,
+        f"背包只看「有什么、值多少」，不再重复贴用法 -> "
+        f"{[l for l in _bag_body.splitlines() if '用法' in l]}",
+    )
+    check(
+        all(k in _help2 for k in ("/钓鱼 卖 1 2 3", "卖光光", "锁定 1")),
+        "背包的卖 / 卖光光 / 锁定用法都在帮助「背包与买卖」页里",
+    )
+    check(
+        "/钓鱼 放 1 3 5" in _help3,
+        "「放进水族馆」的写法在帮助「水族馆」页里（背包不再重复一遍）",
+    )
     out = await cmd(plugin, ev, "乱写的", "", "")
     check("不认识" in text_of(out), "未知子命令有提示")
     # 老指令「金币」名不符实（它显示的其实是档案），现在只给改名提示
