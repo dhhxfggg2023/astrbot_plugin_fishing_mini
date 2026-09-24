@@ -205,7 +205,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 18, "标签页数量 = 18（13 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
+  check(Object.keys(T.TAB_BY_ID).length === 19, "标签页数量 = 19（14 内容表（含大鱼乐）+ 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个（离线演示数据，与线上 19 个无关）", (T.state.data.locations || []).length);
@@ -399,8 +399,8 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 17,
-    "17 个标签入口都有条目数徽标（13 原有 + 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
+  check(tabsHtml.split("tab-count").length - 1 === 18,
+    "19 个标签入口都有条目数徽标（14 内容表（含大鱼乐）+ 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     tabsHtml.split("tab-count").length - 1);
   check(tabsHtml.indexOf('data-tab="replies"') > 0, "标签栏里有「💬 回复」入口");
   check(T.TAB_BY_ID.buttons.label.indexOf("原始文本") > 0,
@@ -574,9 +574,9 @@ function runAssertions() {
   const payload = T.buildPayload();
   check(["fish", "locations", "baits", "rods", "items", "collectibles", "titles", "variants", "weather",
     "numbers", "buttons", "aliases", "custom"]
-    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 13 张表");
+    .every(function (k) { return Array.isArray(payload[k]); }), "载荷包含全部 14 张表");
   check(!!payload.autoBackup && payload.autoBackup.dailyHour === 4, "载荷带上自动备份设置");
-  check(Object.keys(payload).length === 15, "载荷字段数 = 15（13 表 + numbers + autoBackup）", Object.keys(payload).length);
+  check(Object.keys(payload).length === 16, "载荷字段数 = 16（14 表 + numbers + autoBackup）", Object.keys(payload).length);
   check(payload.players === undefined, "玩家页的数据不进「内容表」载荷（走独立接口）");
 
   const snapWithNote = T.renderSnapCard({ kind: "manual", note: "改物价前", time: "2026-09-18 18:20", players: 35, size: "131 KB" }, 0);
@@ -686,8 +686,8 @@ async function baitHookColumn() {
    ============================================================================= */
 async function channelHelpers() {
   console.log("\n[12] 数据通道：配置 <-> 表格 的转换");
-  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,titles,buttons,aliases,custom",
-    "13 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
+  check(Object.keys(T.TABLE_DEFS).join(",") === "fish,rods,baits,items,locations,collectibles,variants,weather,easter_eggs,titles,lottery,buttons,aliases,custom",
+    "14 张内容表都有解析/序列化定义", Object.keys(T.TABLE_DEFS).join(","));
   check(T.TABLE_DEFS.fish.configKey === "fish_defs" && T.TABLE_DEFS.fish.configType === "text",
     "fish_defs 是文本表（多行），其余是字符串数组");
   check(T.TABLE_DEFS.locations.configKey === "location_defs", "钓点表 -> location_defs");
@@ -874,8 +874,8 @@ async function channelHelpers() {
 
   // 序列化
   const serialized = T.serializeContentTables();
-  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,title_defs,button_defs,command_aliases,custom_commands",
-    "序列化输出 13 张配置表", Object.keys(serialized).join(","));
+  check(Object.keys(serialized).join(",") === "fish_defs,rod_defs,bait_defs,item_defs,location_defs,collectible_defs,variant_defs,weather_defs,easter_egg_defs,title_defs,lottery_prizes,button_defs,command_aliases,custom_commands",
+    "序列化输出 14 张配置表", Object.keys(serialized).join(","));
   check(typeof serialized.fish_defs === "string"
     && serialized.fish_defs.split("\n").length === T.state.data.fish.length,
     "fish_defs 的行数 = 当前表格行数（这里是 " + T.state.data.fish.length + " 行）",
@@ -1598,7 +1598,7 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 131, "配置 schema 里是 131 个键", schemaKeys.length);
+  check(schemaKeys.length === 140, "配置 schema 里是 140 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
   check(pageKeys.indexOf("hostile_keywords") < 0,
@@ -1682,9 +1682,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 131 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 131,
-    "131 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 140 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 140,
+    "140 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1692,12 +1692,12 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "131/131 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "140/140 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/131 条 ≥30 字");
+    longDoc.length + "/140 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
@@ -1736,8 +1736,8 @@ async function configKeysCoverage() {
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 131 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 131 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 140 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 140 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
@@ -1781,7 +1781,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 131, "清空搜索词 -> 又看到全部 131 个键");
+  check(T.keysFilteredRows().length === 140, "清空搜索词 -> 又看到全部 140 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -1844,8 +1844,8 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 131 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 131 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 140 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 140 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
   const noDemo = T.NUMBER_KEYS.filter(function (item) {
     return T.DEMO_NUMBER_VALUES[item[0]] === undefined;

@@ -3468,6 +3468,365 @@ class CommandsMixin:
             yield _r
 
     # =========================================================================
+    # 大鱼乐（v1.18.51）：现实彩票玩法
+    # =========================================================================
+
+    def _lottery_rows(self) -> list[dict[str, Any]]:
+        """当前生效的奖表（站长在配置/编辑器里改一行就立即生效）。"""
+        try:
+            return LOTTERY.parse_prize_rows(self.cfg.get("lottery_prizes"))
+        except Exception as e:                                        # pragma: no cover
+            logger.error(f"大鱼乐奖表解析失败：{e}", exc_info=True)
+            return []
+
+    def _lottery_ticket_price(self) -> int:
+        return max(0, _safe_int(self.cfg.get("lottery_ticket_price"), 5000, 0))
+
+    def _lottery_jackpot_gold(self) -> int:
+        return max(0, _safe_int(self.cfg.get("lottery_jackpot_gold"), 0, 0))
+
+    def _lottery_jackpot_prize(self) -> str:
+        """哪一档算头奖（配置可改；留空 = 不设头奖）。"""
+        return LOTTERY.jackpot_id(self)
+
+    def _lottery_ev_warn_once(self) -> bool:
+        """「奖表是印钞机」这条警告每条指令只报一次（别在连抽时刷日志）。"""
+        if getattr(self, "_lottery_ev_warned", False):
+            return False
+        self._lottery_ev_warned = True
+        return True
+
+    def _lottery_buy_tickets(self, player: dict[str, Any], want: int) -> tuple[int, int, int]:
+        """扣钱买票（**在锁里调用**）。返回 ``(真正买到的张数, 花掉的金币, 今天剩余张数)``。
+
+        「今天还能买几张」由 ``lottery_daily_limit`` 管（0 = 不限）；
+        钱不够时**按买得起的张数买**，而不是整笔拒绝 —— 玩家写 10 结果只能买 3 张时，
+        给他 3 张比甩一句「钱不够」舒服。
+        """
+        price = self._lottery_ticket_price()
+        limit = _safe_int(self.cfg.get("lottery_daily_limit"), 0, 0)
+        left = _daily_left(player, "lottery", limit)                  # noqa: F821
+        if left is not None:
+            want = min(want, left)
+        gold = _safe_int(player.get("gold"), 0, 0)
+        if price > 0:
+            want = min(want, gold // price)
+        if want <= 0:
+            return 0, 0, (left if left is not None else -1)
+        cost = want * price
+        player["gold"] = gold - cost
+        _daily_add(player, "lottery", want)                           # noqa: F821
+        player["lottery_total"] = _safe_int(player.get("lottery_total"), 0, 0) + want
+        remaining = _daily_left(player, "lottery", limit)             # noqa: F821
+        return want, cost, (remaining if remaining is not None else -1)
+
+    def _lottery_apply_prize(
+        self, player: dict[str, Any], row: dict[str, Any]
+    ) -> dict[str, Any]:
+        """把一档奖品发到玩家身上（**在锁里调用**）。
+
+        返回给回复用的一条记录：``{"row", "kind", "line", "gold", "fish"}``。
+        鱼的发放**完全复用** ``_new_instance`` + ``_record_catch`` —— 图鉴、成就、
+        里程碑、最佳纪录、变异计数全都自动认，不新开任何写档路径。
+        """
+        kind = str(row.get("kind") or "none")
+        count = max(1, _safe_int(row.get("count"), 1, 1))
+        record: dict[str, Any] = {
+            "row": row, "kind": kind, "line": "", "gold": 0, "fish": [],
+        }
+        if kind == "none":
+            record["line"] = f"🍃 {row.get('desc')}"
+            return record
+        if kind == "gold":
+            amount = LOTTERY.prize_gold_amount(
+                row, self._lottery_jackpot_gold(), self._lottery_jackpot_prize()
+            )
+            player["gold"] = _safe_int(player.get("gold"), 0, 0) + amount
+            record["gold"] = amount
+            record["line"] = f"🪙 {row.get('desc')}　+{_fmt_gold(amount)}"
+            return record
+        if kind == "fish":
+            param = str(row.get("param") or "")
+            rarity, _, tail = param.partition(":")
+            quality, _, variant = tail.partition(":")
+            made: list[str] = []
+            for _ in range(count):
+                fish_id = LOTTERY.pick_fish_for_prize(rarity or "all")
+                if not fish_id:
+                    continue
+                qmult = LOTTERY.prize_quality_mult(param)
+                if qmult is None:
+                    qmult = _roll_quality_mult(
+                        self.cfg.get("quality_weights"), cfg=self.cfg
+                    )
+                catch = _new_instance(
+                    fish_id, qmult, source="lottery",
+                    variant=(variant.strip() or None),
+                )
+                if catch is None:
+                    continue
+                self._record_catch(player, catch)
+                made.append(_instance_line(catch))
+                record["fish"].append(catch)
+            if made:
+                record["line"] = f"{row.get('desc')}　" + "　".join(made)
+            else:
+                record["line"] = f"🍃 {row.get('desc')}（鱼种没找到，这档空转）"
+            return record
+        if kind == "item":
+            item_id = str(row.get("param") or "").strip()
+            item = self.items.get(item_id)
+            if item is None:
+                record["line"] = f"🍃 {row.get('desc')}（道具 {item_id} 不存在）"
+                return record
+            bag = player.setdefault("items", {})
+            bag[item_id] = _safe_int(bag.get(item_id), 0, 0) + count
+            record["line"] = (
+                f"{item.get('emoji') or '🎁'} {item['name']} ×{count}"
+                f"　（{row.get('desc')}）"
+            )
+            return record
+        if kind == "bait":
+            bait_id = str(row.get("param") or "").strip()
+            bait = self.baits.get(bait_id)
+            if bait is None:
+                record["line"] = f"🍃 {row.get('desc')}（鱼饵 {bait_id} 不存在）"
+                return record
+            baits = player.setdefault("baits", {})
+            baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + count
+            record["line"] = (
+                f"{bait.get('emoji') or '🪱'} {bait['name']} ×{count}"
+                f"　（{row.get('desc')}）"
+            )
+            return record
+        if kind == "baitpack":
+            baits = player.setdefault("baits", {})
+            got_bait: list[str] = []
+            for bait_id, num in LOTTERY.parse_reward_pack(row.get("param")):
+                bait = self.baits.get(bait_id)
+                if bait is None:
+                    continue
+                baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + num
+                got_bait.append(f"{bait.get('emoji') or '🪱'}{bait['name']} ×{num}")
+            record["line"] = (
+                f"🎁 {row.get('desc')}　" + "　".join(got_bait) if got_bait
+                else f"🍃 {row.get('desc')}（鱼饵包里没有有效鱼饵）"
+            )
+            return record
+        if kind == "reward":
+            bag = player.setdefault("items", {})
+            got: list[str] = []
+            for item_id, num in LOTTERY.parse_reward_pack(row.get("param")):
+                item = self.items.get(item_id)
+                if item is None:
+                    continue
+                bag[item_id] = _safe_int(bag.get(item_id), 0, 0) + num
+                got.append(f"{item.get('emoji') or '🎁'}{item['name']} ×{num}")
+            record["line"] = (
+                f"🎁 {row.get('desc')}　" + "　".join(got) if got
+                else f"🍃 {row.get('desc')}（道具包里没有有效道具）"
+            )
+            return record
+        record["line"] = f"🍃 {row.get('desc')}"
+        return record
+
+    async def _cmd_lottery(
+        self,
+        event: AstrMessageEvent,
+        user_id: str,
+        a2: str = "",
+        after_first: str = "",
+    ):
+        """``/钓鱼 大鱼乐 [张数]`` —— 买票开奖；``概率`` 看奖级与概率。
+
+        **两次进锁**：先扣钱买票（拿到张数），再发奖 —— 中间不持锁，
+        免得抽 50 张时把别的子命令全堵住（连钓的教训：持锁期间谁都得等）。
+        发奖那一步还没落盘，所以中途异常也只会「这一次白抽」，不会吞掉存档。
+        """
+        rows = self._lottery_rows()
+        arg = str(a2 or "").strip()
+        tail = str(after_first or "").strip()
+
+        # ---- 概率表 / 说明（不花钱、不写档）----
+        if arg in ("概率", "几率", "odds", "prob") or tail in ("概率", "几率", "odds"):
+            top = self._lottery_jackpot_prize()
+            lines = LOTTERY.lottery_odds_lines(
+                self, rows, self._lottery_jackpot_gold(), top
+            )
+            price = self._lottery_ticket_price()
+            if price >= 0:
+                ev = LOTTERY.lottery_expected_return(
+                    self, rows, self._lottery_jackpot_gold(), top
+                )
+                label, level = LOTTERY.lottery_expectation_label(ev, price)
+                lines.append("　—　" + label)
+                if level == "bad" and self._lottery_ev_warn_once():
+                    logger.warning(                                    # noqa: F821
+                        LOTTERY.ev_guard_message(
+                            self, rows, self._lottery_jackpot_gold(), top
+                        )
+                    )
+            lines.append("　写法：/钓鱼 大鱼乐 1　/钓鱼 大鱼乐 10")
+            async for _r in self._say_msg(event, "lottery.odds", event.plain_result("\n".join(lines))):
+                yield _r
+            return
+
+        if not rows:
+            async for _r in self._say_msg(event, "lottery.view", event.plain_result(
+                    "🎰 大鱼乐还没配奖表（配置 lottery_prizes 是空的）\n"
+                    "　站长把奖表填上就能开张"
+                )):
+                yield _r
+            return
+
+        # ---- 奖表自检：期望回报 ≥ 票价 = 印钞机（站长有权这么配，但不能悄悄放过）----
+        # 只提醒、不阻断：这是站长的服务器，他明确知道自己在做什么（例如活动期间
+        # 故意送钱）。但日志与 /钓鱼 大鱼乐 概率 都会把这件事写清楚。
+        if rows:
+            guard = LOTTERY.ev_guard_message(
+                self, rows, self._lottery_jackpot_gold(), self._lottery_jackpot_prize()
+            )
+            if guard and self._lottery_ev_warn_once():
+                logger.warning(guard)                                  # noqa: F821
+
+        price = self._lottery_ticket_price()
+        try:
+            want = max(1, _safe_int(arg, 1, 1)) if arg else 1
+        except Exception:                                                # pragma: no cover
+            want = 1
+        # 一次买太多会撑爆一条消息（QQ 单条有长度上限），所以有个上限；
+        # 站长想一次抽更多就调 lottery_max_per_call。
+        per_call = max(1, _safe_int(self.cfg.get("lottery_max_per_call"), 30, 1))
+        if want > per_call:
+            want = per_call
+
+        # ---- 第一次进锁：买票（扣钱 + 记今日额度）----
+        async with self._lock_for(user_id):
+            player = await self._load_player(user_id, strict=True)       # noqa: F821
+            limit = _safe_int(self.cfg.get("lottery_daily_limit"), 0, 0)
+            left_before = _daily_left(player, "lottery", limit)          # noqa: F821
+            if left_before is not None and left_before <= 0:
+                async for _r in self._say_msg(event, "lottery.limit", event.plain_result(
+                        f"🌙 今天的大鱼乐买够了（{_daily_used(player, 'lottery')}/"  # noqa: F821
+                        f"{limit} 张），明天再来\n"
+                        f"　（限购数量与单价都能在编辑器「⚙️ 数值」页改）"
+                    )):
+                    yield _r
+                return
+            bought, cost, remaining = self._lottery_buy_tickets(player, want)
+            if bought <= 0:
+                gold = _safe_int(player.get("gold"), 0, 0)
+                short = price * want - gold
+                async for _r in self._say_msg(event, "lottery.no_gold", event.plain_result(
+                        f"💸 一张票 {_fmt_gold(price)} 金，你有 {_fmt_gold(gold)}"  # noqa: F821
+                        + (f"\n　想买 {want} 张还差 {_fmt_gold(short)}" if want > 1 else "")
+                        + "\n　（/钓鱼 卖光光 可以清背包换钱）"
+                    )):
+                    yield _r
+                return
+            await self._save_player(player)
+
+        # ---- 开奖（全部在内存里算，最后一次性落盘）----
+        pity_cap = max(0, _safe_int(self.cfg.get("lottery_pity_count"), 0, 0))
+        pity_id = str(self.cfg.get("lottery_pity_prize") or "").strip()
+        pity_row = next((r for r in rows if str(r.get("id")) == pity_id), None)
+        loses = _safe_int(player.get("lottery_loses"), 0, 0)
+        draws: list[dict[str, Any]] = []
+        pity_hits = 0
+        for _ in range(bought):
+            row = LOTTERY.roll_prize(rows)
+            if row is None:
+                break
+            # 保底按「**开始抽这一张之前**已经连输几张」判定（v1.18.51）：
+            # 站长把 pity_count 填 3，就是「连输 3 张，第 4 张必中」——
+            # 和现实里的保底口径一致（先攒够次数，再兑现）。
+            # ⚠️ 不能用 `loses += 1` 之后的数去比：那样这一张空了才算到 3，
+            #    会变成「连输到 3 之后**再下一张**才保底」，玩家会以为保底没生效。
+            if pity_cap and pity_row is not None and loses >= pity_cap:
+                row = pity_row
+                pity_hits += 1
+            if str(row.get("kind")) == "none":
+                loses += 1
+            else:
+                loses = 0
+            draws.append(row)
+
+        # ---- 第二次进锁：发奖（鱼 / 金币 / 道具 / 鱼饵）+ 落盘 ----
+        async with self._lock_for(user_id):
+            player = await self._load_player(user_id, strict=True)       # noqa: F821
+            records = [self._lottery_apply_prize(player, row) for row in draws]
+            player["lottery_loses"] = max(0, loses)
+            player["lottery_wins"] = _safe_int(player.get("lottery_wins"), 0, 0) + sum(
+                1 for r in records if str(r.get("kind")) != "none"
+            )
+            new_ach = self._check_achievements(player)
+            milestone = self._milestone_text(player)                     # noqa: F821
+            saved = await self._save_player(player)
+
+        # ---- 回复：一次汇总成**尽量少的消息** ----
+        # 20 连抽就是 20 行，一条消息装不下（QQ 有长度上限），所以按行数/字数切段。
+        total_gold = sum(int(r.get("gold") or 0) for r in records)
+        fish_count = sum(len(r.get("fish") or []) for r in records)
+        winner = [r for r in records if str(r.get("kind")) != "none"]
+        header = f"🎰 大鱼乐 ×{len(records)}　（-{_fmt_gold(cost)} 金）"      # noqa: F821
+        body: list[str] = []
+        for i, rec in enumerate(records, start=1):
+            body.append(f"{i}. {rec.get('line')}")
+        summary_bits = [f"上奖 {len(winner)}/{len(records)} 张"]
+        if fish_count:
+            summary_bits.append(f"鱼 {fish_count} 条")
+        if total_gold:
+            summary_bits.append(f"金币 +{_fmt_gold(total_gold)}")         # noqa: F821
+        summary = "🧮 " + "｜".join(summary_bits)
+        tail_bits = [f"💰 {_fmt_gold(player.get('gold', 0))}"]               # noqa: F821
+        limit = _safe_int(self.cfg.get("lottery_daily_limit"), 0, 0)
+        left_now = _daily_left(player, "lottery", limit)                     # noqa: F821
+        if left_now is not None:
+            tail_bits.append(f"今日还能买 {left_now} 张")
+        if pity_hits:
+            tail_bits.append(
+                f"🎗️ 连输 {pity_cap} 张保底中了 {pity_hits} 次"
+            )
+        # 一条消息装得下就直接发一条（QQ 总条数越少越安全：被动回复只有 5 次）
+        chunks: list[list[str]] = []
+        current: list[str] = [header]
+        for line in body:
+            current.append(line)
+            if len(current) >= 18:
+                chunks.append(current)
+                current = []
+        if current and len(current) > 1:
+            chunks.append(current)
+        if not chunks:
+            chunks = [[header]]
+        chunks[-1] = chunks[-1] + [summary] + tail_bits
+        if new_ach:
+            chunks[-1].append("🎉 " + "；".join(new_ach))
+        if milestone:
+            chunks[-1].append(milestone)
+        if not saved:
+            chunks[-1].append("⚠️ 数据保存失败，这批奖品可能不会保留（请把这条消息发给管理员核对）")
+        for chunk in chunks:
+            async for _r in self._say_msg(event, "lottery.result", event.plain_result("\n".join(chunk))):
+                yield _r
+
+        # 头奖播报（配置 lottery_announce 打开才会响；头奖是哪一档由
+        # lottery_jackpot_prize 指定 —— 站长把奖品换掉也照样认）
+        top_id = self._lottery_jackpot_prize()
+        if bool(self.cfg.get("lottery_announce")) and top_id:
+            jack = [
+                r for r in records
+                if str((r.get("row") or {}).get("id")) == top_id
+            ]
+            if jack:
+                await self._push(
+                    event,
+                    "broadcast.catch",
+                    f"🎉🎉 大鱼乐头奖！{jack[0].get('line')}",
+                    values={"昵称": self._sender_name(event)},
+                )
+
+    # =========================================================================
     # 帮助
     # =========================================================================
 

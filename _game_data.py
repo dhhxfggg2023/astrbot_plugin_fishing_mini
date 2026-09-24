@@ -2102,6 +2102,25 @@ sign.done|看背包|/钓鱼 背包|default
 sign.done|今日|/钓鱼 今日|default
 sign.result|再来一竿|/钓鱼|default
 sign.result|看背包|/钓鱼 背包|default
+lottery.view|买 1 张|/钓鱼 大鱼乐 1|primary
+lottery.view|买 10 张|/钓鱼 大鱼乐 10|default
+lottery.view|看概率|/钓鱼 大鱼乐 概率|default
+lottery.view|看背包|/钓鱼 背包|default
+lottery.no_gold|卖光光|/钓鱼 卖光光|primary
+lottery.no_gold|看背包|/钓鱼 背包|default
+lottery.no_gold|再来一竿|/钓鱼|default
+lottery.limit|看概率|/钓鱼 大鱼乐 概率|default
+lottery.limit|再来一竿|/钓鱼|default
+lottery.limit|看背包|/钓鱼 背包|default
+lottery.result|再来一张|/钓鱼 大鱼乐 1|primary
+lottery.result|再来十张|/钓鱼 大鱼乐 10|default
+lottery.result|看概率|/钓鱼 大鱼乐 概率|default
+lottery.result|看背包|/钓鱼 背包|default
+lottery.odds|买 1 张|/钓鱼 大鱼乐 1|primary
+lottery.odds|买 10 张|/钓鱼 大鱼乐 10|default
+lottery.odds|再来一竿|/钓鱼|default
+lottery.pity|再来一张|/钓鱼 大鱼乐 1|primary
+lottery.pity|看背包|/钓鱼 背包|default
 today.view|再来一竿|/钓鱼|default
 today.view|看订单|/钓鱼 订单|default
 today.view|钓点|/钓鱼 钓点|default

@@ -1062,6 +1062,10 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # "reroll": 洗髓丹颗数, "offering": 供奉次数}；跨天由 _daily_reset 清零
         "daily_date": "",
         "daily_used": {},
+        # 大鱼乐（v1.18.51）：连输计数（到 lottery_pity_count 就保底）与累计张数。
+        # 「今天买了几张」走 daily_used["lottery"]，跨天自动清零。
+        "lottery_loses": 0,
+        "lottery_total": 0,
         "decorations": [],     # 水族馆装饰：[{id, rate, ts, expire_ts}]（耐久到点自动失效）
         "buff_casts_left": 0,  # 钓手手气 buff 还剩几竿（0 = 没有 buff）
         "aquarium_slots": [],  # 已解锁的水族馆扩建栏位名
@@ -2156,6 +2160,11 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         # 拉线技巧计数（用于成就）
         player["perfect_pulls"] = _safe_int(raw.get("perfect_pulls"), 0, 0)
         player["clutch_wins"] = _safe_int(raw.get("clutch_wins"), 0, 0)
+        # 大鱼乐（v1.18.51）：连输计数（保底用）与累计买了几张。
+        # ⚠️ 这个「读档修复」是**白名单**式的：新加的玩家字段不写在这里就会被丢掉
+        #    （test_local 的存档字段守卫会抓到这件事）。
+        player["lottery_loses"] = max(0, _safe_int(raw.get("lottery_loses"), 0, 0))
+        player["lottery_total"] = max(0, _safe_int(raw.get("lottery_total"), 0, 0))
 
         # --- 里程碑提示记录 ---
         raw_ms = raw.get("milestones")
@@ -2582,6 +2591,7 @@ SCENE_GROUPS: tuple[tuple[str, str, str], ...] = (
     ("page", "📄 翻页", "分页界面的「上一页 / 下一页」（跟着页码走，见 v1.18.35）"),
     ("custom", "🧩 自定义", "站长自定义命令"),
     ("extras", "🏷 称号与供奉", "自动补给 / 称号 / 香火供奉（v1.18.17 的后期金币回收口）"),
+    ("lottery", "🎰 大鱼乐", "彩票：买票 / 开奖 / 概率表（v1.18.51）"),
     ("system", "⚙️ 通用", "兜底报错、群播报与共用按钮组"),
 )
 
@@ -2778,6 +2788,13 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("stamina.view", "stamina", "体力状态", ""),
     ("sign.done", "sign", "今天已经签到过了", ""),
     ("sign.result", "sign", "签到成功", ""),
+    # ---- 大鱼乐（v1.18.51）----
+    ("lottery.view", "lottery", "大鱼乐买票界面（张数 / 票价 / 今天还能买几张）", ""),
+    ("lottery.no_gold", "lottery", "金币不够买票", ""),
+    ("lottery.limit", "lottery", "今天买够了（每日限购挡下来）", ""),
+    ("lottery.result", "lottery", "开奖结果", ""),
+    ("lottery.odds", "lottery", "奖级与概率表（站长要求公开概率）", ""),
+    ("lottery.pity", "lottery", "保底触发（连输 N 张后必中）", ""),
     ("today.view", "today", "今日天气与行情", ""),
     # ---- 排行 ----
     ("rank.empty", "rank", "全服还没有排行数据", ""),
@@ -2865,6 +2882,7 @@ BUTTON_BASE_BY_GROUP: dict[str, str] = {
     "help": "help.page",
     "custom": "cast",            # 自定义命令的回复：也兜底到 cast 的按钮
     "extras": "title.list",
+    "lottery": "lottery.view",
     "system": "cast",            # 报错 / 群播报：给「再来一竿 / 看背包」最实用
 }
 

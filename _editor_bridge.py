@@ -99,6 +99,8 @@ CONTENT_TABLES: dict[str, type] = {
     "button_defs": str,   # 场景|文案|点击后发送|样式（回复里的按钮）
     "command_aliases": str,   # 规范子命令|别名,别名（命令别名）
     "custom_commands": str,   # 命令名|动作:内容（自定义命令）
+    # 大鱼乐奖表（v1.18.51）：id|概率|类型|参数|数量|说明（奖品完全由它决定）
+    "lottery_prizes": str,
 }
 
 

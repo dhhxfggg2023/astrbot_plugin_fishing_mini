@@ -7814,9 +7814,9 @@ async def main():
     # ---- 14.1 内置写法总表：自检 + 与真实分派链的一致性 ----
     kw = mod.SUBCOMMAND_KEYWORDS
     check(
-        len(kw) == 32,
+        len(kw) == 33,
         f"子命令总表 {len(kw)} 行（v1.18.13 商店拆成鱼竿/道具/鱼饵，外加「买」；"
-        f"v1.18.17 又加了 自动/称号/供奉）",
+        f"v1.18.17 又加了 自动/称号/供奉；v1.18.51 加了大鱼乐）",
     )
     check(all(name in words for name, words in kw.items()), "每一行都含自己的规范名")
     _seen: dict[str, int] = {}
@@ -8214,7 +8214,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 131,
+        len(_schema) == 140,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8229,7 +8229,8 @@ async def main():
         f" + title_defs/offering_* 四项"
         f" + v1.18.18 的四个每日额度 + v1.18.20 的 escape_difficulty_weight"
         f" + v1.18.22 的 luck_weight_step/luck_cap"
-        f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode；"
+        f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode"
+        f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -8238,7 +8239,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 128, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 137, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -10560,6 +10561,352 @@ async def main():
             {"buff_floor": 2.0, "buff_floor_casts": 0}
         ) == 0.0,
         "掷骰这一层认得 floor，玩家状态那一层认竿数（用光就不保底）",
+    )
+
+    # =====================================================================
+    print("\n[10ag] 大鱼乐：彩票（v1.18.51）")
+    # 站长要的是一套「现实彩票搬进游戏」的玩法：花金币买票、即时开奖，
+    # 奖品可以是鱼（含正常钓不到的神话/神品）、金币、道具、鱼饵。
+    # 这个区块守三件事：**奖品全部可配**、**期望回报必须小于票价**、**存档安全**。
+    _lot = mod.LOTTERY
+    _lot_p = make_plugin()
+    _lot_rows = _lot_p._lottery_rows()
+    check(
+        len(_lot_rows) >= 5
+        and {r["kind"] for r in _lot_rows} >= {"fish", "gold", "baitpack", "none"},
+        f"默认奖表解析出 {len(_lot_rows)} 档，鱼/金币/鱼饵包/谢谢惠顾都有 -> "
+        f"{sorted({r['kind']} for r in _lot_rows)}",
+    )
+    check(
+        {"fish", "gold", "item", "bait", "reward", "baitpack", "none"} == set(_lot.PRIZE_KINDS),
+        f"支持的奖级类型齐了（{len(_lot.PRIZE_KINDS)} 种，站长能写进奖表的词）",
+    )
+
+    # --- 解析容错：坏行跳过而不是让插件起不来 ---
+    _junk = (
+        "# 注释行\n"
+        "good|5|gold||1000|好行\n"
+        "坏行没有竖线\n"
+        "badkind|5|不存在的类型|x|1|会被跳过\n"
+        "zero|0|gold||1|权重 0 也跳过\n"
+        "nofield|abc|gold||1|概率写坏 = 0，跳过\n"
+    )
+    _junk_rows = _lot.parse_prize_rows(_junk)
+    check(
+        len(_junk_rows) == 1 and _junk_rows[0]["id"] == "good",
+        f"奖表坏行只跳过、不抛错（认出来 {len(_junk_rows)} 行）",
+    )
+    check(
+        _lot.parse_prize_rows("") == [] and _lot.parse_prize_rows(None) == [],
+        "空奖表返回空列表（调用方会说清「还没开张」）",
+    )
+
+    # --- 经济护栏：期望回报必须小于票价 ---
+    _price = _lot_p._lottery_ticket_price()
+    _ev = _lot.lottery_expected_return(
+        _lot_p, _lot_rows, _lot_p._lottery_jackpot_gold(),
+        _lot_p._lottery_jackpot_prize(),
+    )
+    check(
+        0 < _ev < _price,
+        f"默认奖表期望回报 {_ev:.0f} 金/张 < 票价 {_price}（回报率 {_ev / _price:.0%}）",
+    )
+    check(
+        _ev / _price <= 0.95,
+        f"留了足够的庄家优势（{1 - _ev / _price:.0%} ≥ 5%，不然容易被改爆）",
+    )
+    _label, _level = _lot.lottery_expectation_label(_ev, _price)
+    check(_level == "ok", f"期望正常时不告警 -> {_label}")
+    # 印钞机奖表必须能识别出来（站长有权这么配，但不能悄悄放过）
+    _print_rows = _lot.parse_prize_rows(
+        "myth|5|fish|all:神品|1|神品鱼\nnone|95|none||0|空"
+    )
+    _bad_ev = _lot.lottery_expected_return(
+        _lot_p, _print_rows, _lot_p._lottery_jackpot_gold(), "myth"
+    )
+    _bad_label, _bad_level = _lot.lottery_expectation_label(_bad_ev, _price)
+    check(
+        _bad_level == "bad" and "印钞机" in _bad_label,
+        f"期望 ≥ 票价时明确报「印钞机」-> {_bad_level}",
+    )
+    check(
+        "不低于票价" in _lot.ev_guard_message(
+            _lot_p, _print_rows, _lot_p._lottery_jackpot_gold(), "myth"
+        ),
+        "ev_guard_message 会给出一句能直接写进日志的警告",
+    )
+    check(
+        _lot.ev_guard_message(
+            _lot_p, _lot_rows, _lot_p._lottery_jackpot_gold(),
+            _lot_p._lottery_jackpot_prize(),
+        ) == "",
+        "正常奖表不产生警告（别天天喊狼来了）",
+    )
+
+    # --- 概率显示：头奖 0.001% 不能被四舍五入成 0.00% ---
+    _odds = "\n".join(
+        _lot.lottery_odds_lines(
+            _lot_p, _lot_rows, _lot_p._lottery_jackpot_gold(),
+            _lot_p._lottery_jackpot_prize(),
+        )
+    )
+    check(
+        "0.00%（" not in _odds and "0.00%" not in _odds.replace("0.001%", ""),
+        f"极小概率不会显示成 0.00%（自动加小数位）-> "
+        f"{[l for l in _odds.splitlines() if '%' in l][-1][:40]}",
+    )
+    check("👑" in _odds, "概率页给头奖那一档戴上皇冠标记")
+    check(
+        _lot.fmt_percent(0.5) == "50.00%" and _lot.fmt_percent(0.0000126).endswith("%")
+        and float(_lot.fmt_percent(0.0000126).rstrip("%")) > 0,
+        f"概率格式：常规两位、极小值自动补位 -> {_lot.fmt_percent(0.5)} / "
+        f"{_lot.fmt_percent(0.0000126)}",
+    )
+
+    # --- 抽奖与发奖：鱼/金币/道具/鱼饵四条路径都真的落到存档里 ---
+    _draw_p = make_plugin()
+    _dp = mod._default_player("89631")
+    _dp["gold"] = 10 ** 7
+    await _draw_p._save_player(_dp)
+    _gd = await _draw_p._load_player("89631")
+    _gold_before = _gd["gold"]
+    _got = _draw_p._lottery_apply_prize(
+        _gd, {"id": "t", "kind": "gold", "param": "", "count": 12345, "desc": "现金"}
+    )
+    check(
+        _got["gold"] == 12345 and _gd["gold"] == _gold_before + 12345,
+        f"金币奖真的进账（+{_got['gold']}）",
+    )
+    _got = _draw_p._lottery_apply_prize(
+        _gd, {"id": "t2", "kind": "item", "param": "feed_basic", "count": 3, "desc": "饲料"}
+    )
+    check(
+        _gd["items"].get("feed_basic") == 3 and "普通饲料" in _got["line"],
+        f"道具奖进 items 口袋 -> {_got['line']}",
+    )
+    _got = _draw_p._lottery_apply_prize(
+        _gd, {"id": "t3", "kind": "bait", "param": "worm", "count": 20, "desc": "鱼饵"}
+    )
+    check(
+        _gd["baits"].get("worm") == 20 and "蚯蚓" in _got["line"],
+        f"鱼饵奖进 baits 口袋 -> {_got['line']}",
+    )
+    _got = _draw_p._lottery_apply_prize(
+        _gd,
+        {"id": "t4", "kind": "reward", "param": "feed_basic:2,hot_soup:1",
+         "count": 1, "desc": "道具包"},
+    )
+    check(
+        _gd["items"].get("hot_soup") == 1 and _gd["items"].get("feed_basic") == 5,
+        f"道具包一次发多件 -> {_got['line']}",
+    )
+    _got = _draw_p._lottery_apply_prize(
+        _gd,
+        {"id": "t4b", "kind": "baitpack", "param": "worm:20,bread:30",
+         "count": 1, "desc": "鱼饵包"},
+    )
+    check(
+        _gd["baits"].get("bread") == 30 and _gd["baits"].get("worm") == 40
+        and "蚯蚓" in _got["line"] and "面包屑" in _got["line"],
+        f"鱼饵包一次发多种（默认奖表用的就是这个）-> {_got['line']}",
+    )
+    _got = _draw_p._lottery_apply_prize(
+        _gd, {"id": "t5", "kind": "none", "param": "", "count": 0, "desc": "谢谢惠顾"}
+    )
+    check(_got["kind"] == "none" and _got["gold"] == 0, "谢谢惠顾什么都不发")
+
+    # --- 鱼奖：指定稀有度 + 指定个体品质（神品只有这一条路能拿到） ---
+    _fish_lines = []
+    for _ in range(30):
+        _r = _draw_p._lottery_apply_prize(
+            _gd,
+            {"id": "f", "kind": "fish", "param": "神话:神品", "count": 1, "desc": "神话神品"},
+        )
+        if _r["fish"]:
+            _fish_lines.append(_r["fish"][0])
+    check(
+        len(_fish_lines) == 30
+        and all(mod._fish_rarity(x["fish_id"]) == "神话" for x in _fish_lines)
+        and all(mod._quality_label(x["quality_mult"])[0] == "神品" for x in _fish_lines),
+        f"fish 奖按「神话:神品」发货（{len(_fish_lines)} 条全对）",
+    )
+    check(
+        all(x.get("source") == "lottery" for x in _fish_lines),
+        "中奖的鱼带 source=lottery（和正常钓鱼区分开，方便排查）",
+    )
+    check(
+        _gd["total_caught"] >= 30
+        and all(x["id"] in (_gd["collection"] or {}) or True for x in _fish_lines),
+        f"中奖的鱼走了 _record_catch -> 累计 {_gd['total_caught']} 条",
+    )
+    _key0 = mod._codex_key(_fish_lines[0]["fish_id"], _fish_lines[0].get("variant"))
+    check(
+        _key0 in (_gd.get("collection") or {}),
+        "中奖的鱼进图鉴（和钓上来的一视同仁）",
+    )
+    _var = _draw_p._lottery_apply_prize(
+        _gd,
+        {"id": "f2", "kind": "fish", "param": "常见:珍品:golden", "count": 1, "desc": "异色"},
+    )
+    check(
+        _var["fish"] and _var["fish"][0].get("variant") == "golden",
+        f"fish 奖第三段能指定变异 -> {(_var['fish'] or [{}])[0].get('variant')}",
+    )
+
+    # --- /钓鱼 大鱼乐：买票扣钱、开奖、限购、保底 ---
+    _lot_cfg = dict(
+        _CFG,
+        lottery_ticket_price=1000,
+        lottery_daily_limit=3,
+        lottery_pity_count=0,
+        # 奖表钉死成「必中一档」方便断言（期望也不超票价）
+        lottery_prizes="prize|1|gold||500|中 500 金\nblank|0|none||0|空",
+    )
+    _lp = make_plugin(_lot_cfg)
+    _lplayer = mod._default_player("89641")
+    _lplayer["gold"] = 2500
+    await _lp._save_player(_lplayer)
+    _out = await cmd(_lp, FakeEvent("89641"), "大鱼乐", "1", "")
+    _lplayer = await _lp._load_player("89641")
+    check(
+        _lplayer["gold"] == 2500 - 1000 + 500,
+        f"买 1 张开奖：-1000 票价 +500 奖 -> {_lplayer['gold']}",
+    )
+    check("大鱼乐" in text_of(_out) and "中 500 金" in text_of(_out),
+        "开奖回复里有奖级说明")
+    check(
+        mod._daily_used(_lplayer, "lottery") == 1,
+        f"今日额度记了 1 张 -> {mod._daily_used(_lplayer, 'lottery')}",
+    )
+    # 限购：一天只能买 3 张
+    await cmd(_lp, FakeEvent("89641"), "大鱼乐", "10", "")
+    _lplayer = await _lp._load_player("89641")
+    check(
+        mod._daily_used(_lplayer, "lottery") == 3,
+        f"限购 3 张挡住超额购买 -> 今日 {mod._daily_used(_lplayer, 'lottery')} 张",
+    )
+    _out = await cmd(_lp, FakeEvent("89641"), "大鱼乐", "1", "")
+    check(
+        "买够了" in text_of(_out) and "明天" in text_of(_out),
+        f"买满后再买给一句人话 -> {text_of(_out).splitlines()[0][:40]}",
+    )
+    _lplayer = await _lp._load_player("89641")
+    check(_lplayer["gold"] == 2500 - 3000 + 1500, f"限购期间不再扣钱 -> {_lplayer['gold']}")
+    # 钱不够：按买得起的张数买，不是整笔拒绝
+    _poor = make_plugin(_lot_cfg)
+    _pp = mod._default_player("89642")
+    _pp["gold"] = 0
+    await _poor._save_player(_pp)
+    _out = await cmd(_poor, FakeEvent("89642"), "大鱼乐", "1", "")
+    _pp = await _poor._load_player("89642")
+    check(
+        "一张票" in text_of(_out) and _pp["gold"] == 0
+        and mod._daily_used(_pp, "lottery") == 0,
+        f"没钱时不扣额度也不发奖 -> {text_of(_out).splitlines()[0][:40]}",
+    )
+
+    # 保底：连输 N 张后必中（把连输计数直接摆到临界值，避免靠随机性）
+    _pity_cfg = dict(
+        _CFG,
+        lottery_ticket_price=100,
+        lottery_daily_limit=100,
+        lottery_pity_count=3,
+        lottery_pity_prize="prize",
+        # 「谢谢惠顾」权重远大于奖档 —— 没有保底的话这一张几乎必空
+        lottery_prizes="prize|1|gold||10|中 10 金\nblank|20|none||0|空",
+    )
+    _pp2 = make_plugin(_pity_cfg)
+    _pplayer = mod._default_player("89643")
+    _pplayer["gold"] = 10 ** 6
+    _pplayer["lottery_loses"] = 3          # 已经连输 3 张（= pity_count）
+    await _pp2._save_player(_pplayer)
+    _out = await cmd(_pp2, FakeEvent("89643"), "大鱼乐", "1", "")
+    _pplayer = await _pp2._load_player("89643")
+    check(
+        _pplayer.get("lottery_loses") == 0,
+        f"连输到 pity_count 后那一张触发保底并清零连输计数 -> "
+        f"{_pplayer.get('lottery_loses')}",
+    )
+    check(
+        _pplayer["gold"] == 10 ** 6 - 100 + 10,
+        f"保底那一张真的中了奖 -> {_pplayer['gold']}",
+    )
+    _pity_txt = text_of(_out)
+    check(
+        "连输" in _pity_txt and "保底" in _pity_txt,
+        f"回复里说明这一张是保底 -> "
+        f"{[l for l in _pity_txt.splitlines() if '保底' in l]}",
+    )
+    check(
+        "中 10 金" in _pity_txt,
+        "保底给的是配置里指定的那一档（lottery_pity_prize）",
+    )
+    # 不设保底时，连输计数只增不清（用一张**必空**的奖表来验，别靠随机）
+    _nopity = make_plugin(dict(
+        _pity_cfg, lottery_pity_count=0,
+        lottery_prizes="prize|1|gold||10|中 10 金\nblank|9999|none||0|空",
+    ))
+    _np = mod._default_player("89646")
+    _np["gold"] = 10 ** 6
+    _np["lottery_loses"] = 7
+    await _nopity._save_player(_np)
+    await cmd(_nopity, FakeEvent("89646"), "大鱼乐", "1", "")
+    _np = await _nopity._load_player("89646")
+    check(
+        _np.get("lottery_loses") == 8,
+        f"pity_count=0 时不保底、计数照常累加 -> {_np.get('lottery_loses')}",
+    )
+    check(
+        _np["gold"] == 10 ** 6 - 100,
+        f"没保底那一张就是白买（只扣票价）-> {_np['gold']}",
+    )
+
+    # 概率页：不花钱、能看长期期望
+    _odds_out = await cmd(_lot_p, FakeEvent("89644"), "大鱼乐", "概率", "")
+    _odds_txt = text_of(_odds_out)
+    check(
+        "奖级与概率" in _odds_txt and "长期期望" in _odds_txt,
+        f"/钓鱼 大鱼乐 概率 给出概率与长期期望 -> {_odds_txt.splitlines()[-2][:44]}",
+    )
+
+    # --- 换掉整张奖表（站长要的「奖品也可以配置」）---
+    _custom_cfg = dict(
+        _CFG,
+        lottery_ticket_price=2000,
+        lottery_jackpot_prize="mine",
+        lottery_prizes=(
+            "mine|1|fish|all:神品|1|自定头奖\n"
+            "rich|20|gold||800|自定现金\n"
+            "kit|30|item|pill_quality|1|自定道具\n"
+            "none|49|none||0|自定空"
+        ),
+    )
+    _cp = make_plugin(_custom_cfg)
+    _crows = _cp._lottery_rows()
+    check(
+        [r["id"] for r in _crows] == ["mine", "rich", "kit", "none"],
+        f"整张奖表可以换成完全不同的奖品 -> {[r['id'] for r in _crows]}",
+    )
+    check(
+        _cp._lottery_jackpot_prize() == "mine",
+        "「哪一档算头奖」也是配置项（不写死 jackpot）",
+    )
+    _cev = _lot.ev_guard_message(
+        _cp, _crows, _cp._lottery_jackpot_gold(), _cp._lottery_jackpot_prize()
+    )
+    check(bool(_cev), "自定奖表同样会被期望护栏检查（不因为换了 id 就漏检）")
+    _cplayer = mod._default_player("89645")
+    _cplayer["gold"] = 10 ** 6
+    await _cp._save_player(_cplayer)
+    _out = await cmd(_cp, FakeEvent("89645"), "大鱼乐", "3", "")
+    _cplayer = await _cp._load_player("89645")
+    check(
+        _cplayer["gold"] <= 10 ** 6 - 3 * 2000 + 3 * 800,
+        f"自定奖表照常跑（金币只减不增超出预期）-> {_cplayer['gold']}",
+    )
+    check(
+        len(_out) == 1,
+        f"连抽 3 张只回**一条**消息（QQ 被动回复只有 5 次）-> {len(_out)} 条",
     )
 
     # =====================================================================

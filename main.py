@@ -130,6 +130,8 @@ EFFECT_REG: Any = _load_sibling("_effects", "astrbot_fishing_effects")
 TEXT_LIB: Any = _load_sibling("_texts", "astrbot_fishing_texts")
 #: 旧作用域数据找回（作者名改过 -> plugin_id 变过 -> 老存档留在别的 scope 里）
 LEGACY: Any = _load_sibling("_legacy", "astrbot_fishing_legacy")
+#: 大鱼乐彩票的奖表解析 / 抽奖 / 期望值模型（v1.18.51）
+LOTTERY: Any = _load_sibling("_lottery", "astrbot_fishing_lottery")
 
 
 class _MissingMixin:
@@ -218,6 +220,8 @@ SUBCOMMAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     "自动": ("自动", "自动补给", "auto"),
     "称号": ("称号", "头衔", "title"),
     "供奉": ("供奉", "香火", "上香", "offering"),
+    # 大鱼乐（v1.18.51）：现实彩票玩法。别名挑的是玩家真会打的词
+    "大鱼乐": ("大鱼乐", "彩票", "抽奖", "lottery", "lotto", "买彩票", "乐透"),
 }
 
 #: 全部内置写法（含规范名本身）：自定义命令不许与它们重名（内置永远优先）
@@ -456,6 +460,49 @@ DEFAULTS: dict[str, Any] = {
     "consume_bait_on_empty": False,
     "bait_hook_rates": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0",
     "content_auto_merge": True,     # 旧配置自动合并新版内容（钓点/鱼饵/鱼竿/道具）
+    # =========================================================================
+    # 三·九、大鱼乐（v1.18.51）：现实彩票的玩法搬进游戏
+    # =========================================================================
+    # 花金币买票，即时开奖；奖品可以是鱼（含正常钓不到的神话 / 神品）、金币、
+    # 道具、鱼饵。**彩票的经济学是「期望回报 < 票价」**，所以：
+    #   * 基础奖表的期望回报约 94%（庄家优势 6%），票钱是**纯金币出口**；
+    #   * 默认有每日限购与连输保底，挡住「有钱就一次买两万张」。
+    # 奖表每一行：``id|概率(可写 0.05 这种百分比数)|类型|参数|数量|说明``
+    #   类型 fish  参数 = ``稀有度[:品质[:变异id]]``，稀有度写 all = 任意
+    #   类型 gold  参数留空，数量 = 给多少金币
+    #   类型 item  参数 = 道具 id，数量 = 给几个
+    #   类型 bait  参数 = 鱼饵 id，数量 = 给几个
+    #   类型 baitpack 参数 = `id:数量,id:数量`（鱼饵包）
+    #   类型 reward 参数 = ``id:数量,id:数量``（道具包）
+    #   类型 none  谢谢惠顾（什么都不给）
+    # 「概率」用的是**相对权重**（不必凑够 100，代码按总和归一化），所以站长想调
+    # 爆率、想加档、想删档、想把奖品换成任何鱼/道具/鱼饵/金币，都只改这一张表 ——
+    # **没有任何一档是写死在代码里的**（连"头奖是哪一个"都由
+    # ``lottery_jackpot_prize`` 指定）。改完可以发 ``/钓鱼 大鱼乐 概率`` 自查
+    # 实际概率与长期期望（期望必须小于票价，否则测试会红）。
+    "lottery_prizes": "\n".join([
+        "jackpot|0.001|fish|all:神品|1|神话鱼 · 神品　🐉 头奖",
+        "first|0.01|fish|神话:绝品|1|神话鱼 · 绝品　🌈 一等奖",
+        "second|0.03|fish|传说:绝品|1|传说鱼 · 绝品　✨ 二等奖",
+        "gold_big|2.8|gold||50000|现金 50,000 金　💰 三等奖",
+        "gold_mid|11.3|gold||15000|现金 15,000 金　💵 四等奖",
+        "gold_small|8|gold||5000|回本 5,000 金　🪙 五等奖",
+        "fish_rare|3|fish|稀有:珍品|1|稀有鱼 · 珍品　🐡 六等奖",
+        "bait_pack|2|baitpack|worm:20,bread:30|1|鱼饵包：蚯蚓 ×20 + 面包屑 ×30　🪱",
+        "blank|52|none||0|谢谢惠顾　（牌子翻过来写着「再来一张」）",
+    ]),
+    #: **哪一个奖级算「头奖」**（填奖表行首的 id；留空 = 不设头奖）。
+    #: 只有它享受两件特殊待遇：额外送 ``lottery_jackpot_gold``、开了
+    #: ``lottery_announce`` 时群播报。站长把奖品换掉/改档时记得同步这个 id。
+    "lottery_jackpot_prize": "jackpot",
+    #: 头奖额外送的金币（写 0 = 头奖只给奖品不给钱）
+    "lottery_jackpot_gold": 500000,
+    "lottery_ticket_price": 5000,       # 每张票多少金币
+    "lottery_daily_limit": 50,          # 每天最多买几张（0 = 不限）
+    "lottery_max_per_call": 30,         # 一次最多连抽多少张（挡消息过长）
+    "lottery_pity_count": 15,           # 连输多少张后保底给一张（0 = 不保底）
+    "lottery_pity_prize": "third",      # 保底给哪一行奖（默认三等奖）
+    "lottery_announce": False,          # 中头奖是否在群里播报
     "button_mode": "自动",          # QQ 官方按钮发送形态：自动/markdown/text/关闭
     # 回复开头怎么称呼发送者：关闭 / 昵称 / @（默认「昵称」）。只加在每条指令的
     # 第一条回复上，按钮路径与纯文本路径都会加（见 _interactions._mention_prefix）。
@@ -650,6 +697,8 @@ DEFAULTS_SYNC_EXCLUDE_KEYS = DEFAULTS_SYNC_EXCLUDE_KEYS | frozenset(
         # 命令别名 / 自定义命令也是「站长自己写的内容」，同样不许被升级覆盖
         "command_aliases",
         "custom_commands",
+        # 大鱼乐奖表（v1.18.51）：站长会自己调爆率/换奖品，不能被升级重置
+        "lottery_prizes",
         # 按钮排布与回复文案同理：站长改过的排版/文案不能被升级重置
         "button_layout",
         "text_overrides",
@@ -671,6 +720,9 @@ CONTENT_TEXT_KEYS: tuple[str, ...] = (
     # 必须能自己补进来。按「场景 id」去重，所以站长自己配过的场景一行都不动
     # （他的排版、样式、文案优先级全都保留），只补他完全没有的场景。
     "button_defs",
+    # 大鱼乐奖表（v1.18.51）：按行首 id 去重，官方新增奖级能补进老配置，
+    # 站长改过的那几行原样保留。
+    "lottery_prizes",
 )
 
 
@@ -4780,6 +4832,9 @@ class FishingPlugin(
             handler = self._cmd_rods(event, user_id, a2, after_first)
         elif key in ("杂物", "漂流瓶", "收集品", "collect"):
             handler = self._cmd_collectibles(event, user_id)
+        elif key in ("大鱼乐", "彩票", "抽奖", "lottery", "lotto", "买彩票", "乐透"):
+            # a2 是张数，after_first 是「概率 / 记录」这类子参数
+            handler = self._cmd_lottery(event, user_id, a2, after_first)
 
         # ---- 常用操作的「一步到位」短写法（v1.18.0）---------------------------------
         # 让玩家少打字：把「水族馆 取 1」「商店 买 蚯蚓」「竿 用 星辉竿」这类嵌套写法
@@ -5592,6 +5647,8 @@ SIBLING_MODULES: tuple[Any, ...] = tuple(
         BACKUP_MODULE,
         # 旧作用域找回：要用注入进来的 logger 报「打不开库」这类情况
         LEGACY,
+        # 大鱼乐（v1.18.51）：解析奖表、期望值模型都要用注入进来的鱼池/道具/品质常量
+        LOTTERY,
     )
     if module is not None
 )

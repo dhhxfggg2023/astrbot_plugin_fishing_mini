@@ -75,6 +75,13 @@ TEXTS: dict[str, str] = {
     "profile.renamed": "{原文}",  # 动态文本
     "profile.view": "{原文}",  # 动态文本
     "sign.result": "{原文}",  # 动态文本
+    # ---- 大鱼乐（v1.18.51）：全部是代码拼装的动态文本 ----
+    "lottery.view": "{原文}",  # 动态文本
+    "lottery.no_gold": "{原文}",  # 动态文本
+    "lottery.limit": "{原文}",  # 动态文本
+    "lottery.result": "{原文}",  # 动态文本（开奖清单 + 汇总）
+    "lottery.odds": "{原文}",  # 动态文本（概率表由奖表算出来）
+    "lottery.pity": "{原文}",  # 动态文本
     "story.result": "{原文}",  # 动态文本
     "orders.list": "{原文}",  # 动态文本
     "location.list": "{原文}",  # 动态文本
@@ -297,6 +304,13 @@ SAMPLE_ORIGINAL: dict[str, str] = {
     "profile.view": "📇 档案\n等级 5　金币 3,800",
     "today.view": "🌤️ 今日　晴　💰 行情：鲤鱼 +10%",
     "sign.result": "✅ 签到 +30　💰 3,830",
+    # ---- 大鱼乐（v1.18.51）：SAMPLE_ORIGINAL 是**示例原文**表（编辑器预览用）
+    "lottery.view": "🎰 大鱼乐　5,000 金/张\n　今天还能买 50 张\n　写法：/钓鱼 大鱼乐 1　/钓鱼 大鱼乐 10",
+    "lottery.no_gold": "💸 一张票 5,000 金，你只有 1,200",
+    "lottery.limit": "🌙 今天的大鱼乐买够了（50/50 张），明天再来",
+    "lottery.result": "🎰 大鱼乐 ×1　（-5,000 金）\n1. 神话鱼 · 神品　🐉 头奖　🐉 天陨鹏鱼 🔱神品 · 45,569\n🧮 上奖 1/1 张｜鱼 1 条\n💰 995,000　今日还能买 49 张",
+    "lottery.odds": "🎰 大鱼乐 · 奖级与概率\n　0.0013%（约 1/79,141）　👑 神话鱼 · 神品　≈506,726 金\n　65.71%　谢谢惠顾\n　—　票价 5,000 金/张，长期期望约 4,482 金/张（90%）",
+    "lottery.pity": "🎗️ 连输 15 张，这一张保底中奖！",
     "broadcast.catch": "📢 小明 钓到了 🐟鲤鱼！",
     "sell.locked_note": "🔒 另有 2 条锁定的鱼留在背包里（/钓鱼 解锁 1 可以解锁）",
     "cast.achievement": "🎉 初次下水",
