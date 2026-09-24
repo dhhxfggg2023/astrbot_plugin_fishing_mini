@@ -90,7 +90,22 @@ class InteractionsMixin:
             return None
         return {"content": {"rows": [{"buttons": r} for r in rows]}}
 
-    async def _keyboard_slot_free(self, msg_id: str) -> bool:
+    def _kb_current_msg_id(self) -> str:
+        """当前正在处理的那条入站消息 id（拿不到返回空串）。"""
+        return str(getattr(self, "_kb_msg_id", "") or "")
+
+    def _kb_bind_msg(self, event: AstrMessageEvent) -> str:
+        """把当前事件的 msg_id 记到 ``self._kb_msg_id``（键盘名额按它记账）。"""
+        try:
+            msg_id = str(
+                getattr(getattr(event, "message_obj", None), "message_id", "") or ""
+            )
+        except Exception:
+            msg_id = ""
+        self.__dict__["_kb_msg_id"] = msg_id
+        return msg_id
+
+    async def _keyboard_slot_free(self, msg_id: str, *, peek: bool = False) -> bool:
         """这条入站消息还**有没有键盘名额**（v1.18.49）。
 
         QQ 官方机器人对**一条入站消息**有两道硬限制（官方文档「发送群聊消息」）：
@@ -115,6 +130,9 @@ class InteractionsMixin:
         now = time.time()
         if msg_id in used:
             return False
+        if peek:
+            # 只看不占（咬钩提示借用名额时用，见 `_send_with_buttons`）
+            return True
         used[msg_id] = now
         if len(used) > 512:
             for old in [k for k, ts in used.items() if now - ts >= 1800]:
@@ -145,9 +163,13 @@ class InteractionsMixin:
             self.__dict__.setdefault("_kb_used_msgs", {}).pop(msg_id, None)
 
     async def _send_with_buttons(
-        self, event: AstrMessageEvent, text: str, rows: list[list[dict[str, Any]]]
+        self, event: AstrMessageEvent, text: str, rows: list[list[dict[str, Any]]],
+        *, own: bool = True,
     ) -> bool:
         """发一条带按钮的消息；不支持/失败返回 False（调用方退回纯文本）。
+
+        ``own=False``：照常挂键盘，但**不占**这条入站消息的键盘名额（给咬钩提示用，
+        让名额留给这一轮最后那条带按钮的回复，见 `_say` 的说明）。
 
         官方文档里「带键盘的消息」示例是 **markdown + keyboard**（msg_type=2），
         但纯文本 + keyboard（msg_type=0）在部分场景也能用，而且 markdown 需要
@@ -181,7 +203,18 @@ class InteractionsMixin:
         #    走 AstrBot 正常的发送链路（被动回复用完时它还有主动发送兜底）。
         #    这里**不能**硬发带 keyboard 的请求：那会撞 40034128，
         #    既发不出键盘、又要多烧一条被动回复次数。
-        if not await self._keyboard_slot_free(msg_id):
+        #    ``own=False``（咬钩提示）：名额空着就借用一次、**但不占**（留给后面那条
+        #    更值得点的回复）；名额已经被占了就**干脆不挂** —— 同一条消息的键盘是插进去
+        #    就不再变的，硬挂一次既白发请求、又会让「填满之后的那条」看着像有按钮但其实是旧的。
+        #    所以连钓里只有**第一条**咬钩提示带「拉线！」（那时名额还空着），
+        #    之后的时间提示/挣脱提示刻意走 `buttons=False` 保持名额空着，
+        #    最后由**连钓战报**拿走名额 —— 战报才是跑完之后最想点的那一排。
+        if own:
+            if not await self._keyboard_slot_free(msg_id):
+                return False
+        elif await self._keyboard_slot_free(msg_id, peek=True):
+            pass
+        else:
             return False
 
         shapes: list[dict[str, Any]] = []
@@ -307,6 +340,7 @@ class InteractionsMixin:
         again_values: dict[str, str] | None = None,
         *,
         buttons: bool = True,
+        keyboard_own: bool = True,
     ):
         """**统一输出出口**：先按场景叠加文案覆盖，再能发按钮就发按钮，否则退回纯文本。
 
@@ -330,6 +364,12 @@ class InteractionsMixin:
         一般不用它 —— 键盘归属由 `_keyboard_slot_free` 自动分配（QQ 官方一条入站消息
         只有第一条回复能挂键盘，见那里的说明）。它留给「明知挂了也白挂」的场合。
 
+        ``keyboard_own=False``：**这条回复照常带按钮，但不占用键盘名额**（v1.18.52）。
+        只给「咬钩提示」用：QQ 一条入站消息只有一个键盘名额，如果咬钩提示占着它，
+        连钓战报就永远没按钮（站长报的「连钓只有第一条回复有按钮」）。
+        让位之后名额落到**这一轮最后那条带按钮的回复**上 ——
+        单竿是「钓到鱼的结果」，连钓是战报，正好是事后最想点的那一排。
+
         用法：``async for r in self._say(event, text, "bag.list"): yield r``
         """
         text = self._scene_text(scene, text, values)
@@ -345,7 +385,7 @@ class InteractionsMixin:
             rows = self._scene_rows(scene) if scene else []
             # 动态按钮排在最后：先「上一页 / 下一页」，再「再次使用」
             rows = rows + self._page_rows(scene, page) + self._again_rows(scene, again_values)
-        if rows and await self._send_with_buttons(event, text, rows):
+        if rows and await self._send_with_buttons(event, text, rows, own=keyboard_own):
             return
         yield event.plain_result(text)
 
@@ -359,20 +399,22 @@ class InteractionsMixin:
         again_values: dict[str, str] | None = None,
         *,
         buttons: bool = True,
+        keyboard_own: bool = True,
     ):
         """``_say`` 的「消息对象版」：``message`` 一般来自 ``event.plain_result(文字)``。
 
         存在的意义：让几百处已经在用的 ``yield event.plain_result(...)`` 只需要
         在外面套一层就能带上场景按钮与文案覆盖，不用把里面的文案重写一遍。
         取不到文本时原样交出对象（功能不受影响）。``page`` / ``again_values`` 同 ``_say``，
-        ``buttons=False`` 同 ``_say``（这条不挂键盘，免得顶掉更早那条的键盘）。
+        ``buttons=False`` / ``keyboard_own=False`` 也同 ``_say``。
         """
         text = _message_text(message)
         if not text:
             yield message
             return
         async for reply in self._say(
-            event, text, scene, values, page, again_values, buttons=buttons
+            event, text, scene, values, page, again_values,
+            buttons=buttons, keyboard_own=keyboard_own,
         ):
             yield reply
 
@@ -720,6 +762,10 @@ class InteractionsMixin:
                     "秒数": f"{window:.0f}",
                     "手感": tip,
                 },
+                # 咬钩提示**不占**键盘名额（v1.18.52）：QQ 一条入站消息只有一个键盘，
+                # 让位给这一轮最后那条带按钮的回复（单竿 = 钓到鱼的结果 / 连钓 = 战报），
+                # 否则连钓里「第一条（咬钩提示）之后全没按钮」—— 站长报的就是这个。
+                keyboard_own=False,
             ):
                 yield reply
 
@@ -772,10 +818,11 @@ class InteractionsMixin:
                 {"deadline": None, "quiet": quiet},
                 "timeout",
             )
-            async for _r in self._say_msg(event, "pull.timeout", event.plain_result(
-                    f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
-                    f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
-                )):
+            async for _r in self._say_msg(
+                    event, "pull.timeout", event.plain_result(
+                        f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
+                        f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
+                    ), buttons=False, keyboard_own=False):
                 yield _r
             yield {"catch": None, "rating": "失败", "bonus": 0.0}
             return
@@ -789,9 +836,10 @@ class InteractionsMixin:
             # 记下「这一下确实拉到了、但鱼挣脱了」：之后玩家再补一发「拉」时，
             # 提示会说「这一下拉晚了」而不是「没有鱼咬钩」
             self._note_pull_window(user_id, {"quiet": quiet}, "escape")
-            async for _r in self._say_msg(event, "pull.escape", event.plain_result(
-                    f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
-                )):
+            async for _r in self._say_msg(
+                    event, "pull.escape", event.plain_result(
+                        f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
+                    ), buttons=False, keyboard_own=False):
                 yield _r
             yield {"catch": None, "rating": rating, "bonus": 0.0}
             return

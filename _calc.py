@@ -2795,6 +2795,8 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("lottery.result", "lottery", "开奖结果", ""),
     ("lottery.odds", "lottery", "奖级与概率表（站长要求公开概率）", ""),
     ("lottery.pity", "lottery", "保底触发（连输 N 张后必中）", ""),
+    ("lottery.off", "lottery", "大鱼乐总开关关着（站长在编辑器里停了）", ""),
+    ("lottery.switches", "lottery", "功能开关清单（调试用：总开关/异色/播报…）", ""),
     ("today.view", "today", "今日天气与行情", ""),
     # ---- 排行 ----
     ("rank.empty", "rank", "全服还没有排行数据", ""),

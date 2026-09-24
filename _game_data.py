@@ -2109,6 +2109,12 @@ lottery.view|看背包|/钓鱼 背包|default
 lottery.no_gold|卖光光|/钓鱼 卖光光|primary
 lottery.no_gold|看背包|/钓鱼 背包|default
 lottery.no_gold|再来一竿|/钓鱼|default
+lottery.off|开关|/钓鱼 大鱼乐 开关|primary
+lottery.off|再来一竿|/钓鱼|default
+lottery.off|帮助|/钓鱼 帮助|default
+lottery.switches|买 1 张|/钓鱼 大鱼乐 1|primary
+lottery.switches|看概率|/钓鱼 大鱼乐 概率|default
+lottery.switches|再来一竿|/钓鱼|default
 lottery.limit|看概率|/钓鱼 大鱼乐 概率|default
 lottery.limit|再来一竿|/钓鱼|default
 lottery.limit|看背包|/钓鱼 背包|default

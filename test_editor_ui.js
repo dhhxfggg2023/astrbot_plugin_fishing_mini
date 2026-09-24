@@ -1598,7 +1598,7 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 140, "配置 schema 里是 140 个键", schemaKeys.length);
+  check(schemaKeys.length === 143, "配置 schema 里是 143 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
   check(pageKeys.indexOf("hostile_keywords") < 0,
@@ -1682,9 +1682,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 140 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 140,
-    "140 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 143 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 143,
+    "143 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1692,12 +1692,12 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "140/140 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "143/143 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/140 条 ≥30 字");
+    longDoc.length + "/143 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
@@ -1736,13 +1736,13 @@ async function configKeysCoverage() {
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 140 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 140 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 143 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 143 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
-  check(blank.join(",") === "backup_dir,config_fingerprint,content_tables_hint,fish_value_overrides,user_edited_keys",
-    "演示态里没有空白行（这 5 个键的插件默认值本来就是空串 / 空表：存档目录留空 = 用插件目录下的 backups/）",
+  check(blank.join(",") === "backup_dir,config_fingerprint,content_tables_hint,fish_value_overrides,lottery_force_prize,user_edited_keys",
+    "演示态里没有空白行（这 6 个键的插件默认值本来就是空串 / 空表：存档目录留空 = 用插件目录下的 backups/；lottery_force_prize 留空 = 不强制奖级）",
     blank.join(","));
   const jumpRow = T.state.data.numbers.filter(function (r) { return r.key === "fish_defs"; })[0];
   check(T.numberEntryCellHtml(jumpRow).indexOf('data-act="num:jump"') > 0 &&
@@ -1781,7 +1781,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 140, "清空搜索词 -> 又看到全部 140 个键");
+  check(T.keysFilteredRows().length === 143, "清空搜索词 -> 又看到全部 143 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -1844,8 +1844,8 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 140 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 140 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 143 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 143 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
   const noDemo = T.NUMBER_KEYS.filter(function (item) {
     return T.DEMO_NUMBER_VALUES[item[0]] === undefined;

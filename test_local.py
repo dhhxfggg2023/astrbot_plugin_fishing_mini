@@ -4803,11 +4803,13 @@ async def main():
     # QQ 官方：每个 msg_id 最多被动回复 5 次，而**主动发送不能带键盘** ——
     # 所以第 2 条起再挂键盘不但发不出去（40034128），还会白烧一次回复次数。
     # 插件改成「键盘名额按 msg_id 只发一次」，第一处需要按钮的回复拿走它。
-    async def _say_calls(btn_plugin, scene, text, use_buttons=True, mid="MID-1"):
+    async def _say_calls(btn_plugin, scene, text, use_buttons=True, mid="MID-1", use_own=True):
         api_x = FakeApi()
         ev_x = PlatEvent("kb1", api=api_x, mid=mid)
         plain = []
-        async for r in btn_plugin._say(event=ev_x, text=text, scene=scene, buttons=use_buttons):
+        async for r in btn_plugin._say(
+            event=ev_x, text=text, scene=scene, buttons=use_buttons, keyboard_own=use_own
+        ):
             plain.append(r.text if hasattr(r, "text") else str(r))
         return api_x.calls, plain
 
@@ -4825,6 +4827,29 @@ async def main():
         f"同一个 msg_id 的第二条**不再挂键盘**（不然 40034128，还白烧一次回复次数）-> "
         f"发出 {len(_kb2)} 条",
     )
+    # 咬钩提示（keyboard_own=False）：名额空着时**借用**一次键盘，但**不占**名额
+    # —— 这样连钓里后面的战报才能拿到按钮（站长报的「连钓只有第一条回复有按钮」）。
+    _kb_borrow, _p_borrow = await _say_calls(
+        _kbp, "pull.hook", "咬钩提示", use_own=False, mid="MID-KB-BORROW"
+    )
+    check(
+        len(_kb_borrow) == 1 and "keyboard" in _kb_borrow[0],
+        "咬钩提示借用键盘（名额空着时照常挂）",
+    )
+    _kb_after, _p_after = await _say_calls(
+        _kbp, "cast.multi_summary", "战报", mid="MID-KB-BORROW"
+    )
+    check(
+        len(_kb_after) == 1 and "keyboard" in _kb_after[0],
+        "借用之后名额还在 -> 后面那条（连钓战报）照样拿到键盘",
+    )
+    _kb_reuse, _p_reuse = await _say_calls(
+        _kbp, "pull.hook", "再咬一次", use_own=False, mid="MID-KB-BORROW"
+    )
+    check(
+        _kb_reuse == [],
+        "名额被别人占掉后，咬钩提示不再白发带键盘的请求（退回纯文本）",
+    )
     _kb3, _p3 = await _say_calls(_kbp, "cast.hit", "换一条入站消息", mid="MID-KB-2")
     check(
         len(_kb3) == 1 and "keyboard" in _kb3[0],
@@ -4839,6 +4864,43 @@ async def main():
     check(
         _kb5 == [],
         "名额用掉就不会归还（同一条入站消息后面永远只是纯文本）",
+    )
+    # --- 连钓的键盘归属：**最后那条带按钮的回复**拿键盘（v1.18.52）---
+    # 站长报「连钓只有第一条回复有按钮」。根因：QQ 一条入站消息只有一个键盘名额，
+    # 而咬钩提示先占着它，后面的战报永远拿不到。现在咬钩提示**借用不占**，
+    # 所以每一竿的「拉线！」都能挂上，跑完的战报也照样有按钮。
+    _kb_cfg = dict(
+        _CFG, interactive_rarities="稀有,传说,神话",
+        rarity_spawn_weights="常见:0,少见:0,稀有:100,传说:0,神话:0",
+        bait_hook_rates="abyss_bait:1.0", window_min=1, window_max=1,
+        multi_pull_enabled=True, multi_escape_mult=0.0, auto_supply_bait=False,
+    )
+    _kbp2 = make_plugin(_kb_cfg)
+    _kbp2p = mod._default_player("89651")
+    _kbp2p["gold"] = 10 ** 7
+    _kbp2p["baits"] = {"abyss_bait": 99}
+    _kbp2p["equipped_bait"] = "abyss_bait"
+    _kbp2p["locations"] = [loc["id"] for loc in mod.LOCATIONS]
+    _kbp2p["current_location"] = mod.LOCATIONS[-1]["id"]
+    await _kbp2._save_player(_kbp2p)
+    _kbapi = FakeApi()
+    _kbev = PlatEvent("89651", api=_kbapi, mid="MID-MULTI")
+    _kbp2._reset_keyboard_slot(_kbev)
+    async for _r in _kbp2._do_multi_cast(_kbev, "89651", 3):
+        pass
+    _kb_msgs = [
+        [b["render_data"]["label"] for row in c["keyboard"]["content"]["rows"]
+         for b in row["buttons"]]
+        for c in _kbapi.calls if "keyboard" in c
+    ]
+    check(
+        len(_kb_msgs) >= 3 and _kb_msgs[-1][:1] == ["再来一竿"],
+        f"连钓跑完时**战报**也拿到键盘（不是只有第一条回复有按钮）-> 带键盘的："
+        f"{_kb_msgs}",
+    )
+    check(
+        all(labels == ["拉线！"] for labels in _kb_msgs[:-1]),
+        f"每一竿的咬钩提示都挂着「拉线！」-> {_kb_msgs[:-1]}",
     )
     # 新的一条指令（同一条入站消息被重投 / 重放）→ 入口处腾名额，又能挂键盘
     _kbp._reset_keyboard_slot(_ev_reset := PlatEvent("kb9", api=FakeApi(), mid="MID-KB-1"))
@@ -8214,7 +8276,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 140,
+        len(_schema) == 143,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8230,7 +8292,8 @@ async def main():
         f" + v1.18.18 的四个每日额度 + v1.18.20 的 escape_difficulty_weight"
         f" + v1.18.22 的 luck_weight_step/luck_cap"
         f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode"
-        f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）；"
+        f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）"
+        f" + v1.18.52 的三个开关（总开关/出异色/强制奖级）；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -8239,7 +8302,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 137, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 140, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -10909,6 +10972,144 @@ async def main():
         f"连抽 3 张只回**一条**消息（QQ 被动回复只有 5 次）-> {len(_out)} 条",
     )
 
+    # --- 异色：奖品出异色的概率**和普通钓鱼一样**（v1.18.52）---
+    # 站长要求「奖品应该有概率得异色，概率和普通钓鱼一样」。
+    # 实现方式就是直接调 `_roll_variant()`（和普通上钩用的是同一个方法、同一份配置），
+    # 所以这条断言卡的是「同一个函数、同一个 variant_chance」。
+    _var_cfg = dict(_CFG, variant_chance=1.0)      # 必出异色
+    _vp = make_plugin(_var_cfg)
+    _vp_p = mod._default_player("89661")
+    _vp_p["gold"] = 10 ** 6
+    _vrec = _vp._lottery_apply_prize(
+        _vp_p, {"id": "f", "kind": "fish", "param": "常见", "count": 1, "desc": "常见鱼"}
+    )
+    check(
+        bool(_vrec["fish"]) and _vrec["fish"][0].get("variant"),
+        f"variant_chance=1.0 时奖品必出异色 -> "
+        f"{(_vrec['fish'] or [{}])[0].get('variant')}",
+    )
+    _novar_cfg = dict(_CFG, variant_chance=0.0)    # 永不出异色
+    _nvp = make_plugin(_novar_cfg)
+    _nvp_p = mod._default_player("89662")
+    _nvp_p["gold"] = 10 ** 6
+    _nvrec = _nvp._lottery_apply_prize(
+        _nvp_p, {"id": "f", "kind": "fish", "param": "常见", "count": 1, "desc": "常见鱼"}
+    )
+    check(
+        bool(_nvrec["fish"]) and not _nvrec["fish"][0].get("variant"),
+        "variant_chance=0.0 时奖品不出异色（跟的就是普通钓鱼那个概率）",
+    )
+    # 总开关关掉异色：即使 variant_chance=1.0 也不出
+    _offvar = make_plugin(dict(_var_cfg, lottery_allow_variant=False))
+    _ovp = mod._default_player("89663")
+    _ovp["gold"] = 10 ** 6
+    _ovrec = _offvar._lottery_apply_prize(
+        _ovp, {"id": "f", "kind": "fish", "param": "常见", "count": 1, "desc": "常见鱼"}
+    )
+    check(
+        bool(_ovrec["fish"]) and not _ovrec["fish"][0].get("variant"),
+        "lottery_allow_variant=false 时鱼奖永不出异色（调试开关生效）",
+    )
+    # 奖表写明 none / 具体 id 时以奖表为准
+    _pin = make_plugin(dict(_var_cfg, lottery_allow_variant=False))
+    _pin_p = mod._default_player("89664")
+    _pin_p["gold"] = 10 ** 6
+    _pin_rec = _pin._lottery_apply_prize(
+        _pin_p, {"id": "f", "kind": "fish", "param": "常见:珍品:golden",
+                 "count": 1, "desc": "固定异色"}
+    )
+    check(
+        bool(_pin_rec["fish"]) and _pin_rec["fish"][0].get("variant") == "golden",
+        "奖表写了具体变异 id 时，即使全局关了异色也固定发那一种（奖表优先）",
+    )
+    # 期望模型也要把异色算进去（不然护栏会低估收益）
+    check(
+        _lot._variant_expectation(_vp, "") > 1.0
+        and _lot._variant_expectation(_vp, "none") == 1.0
+        and _lot._variant_expectation(_vp, "golden") > 1.0,
+        f"期望模型认得异色（未指定 = 按 variant_chance 算，none = 1.0，指定 id = 该变异倍率）",
+    )
+    check(
+        _lot._variant_expectation(make_plugin(dict(_CFG, variant_chance=0.0)), "") == 1.0,
+        "variant_chance=0 时期望模型里的异色倍率就是 1.0（跟着配置走）",
+    )
+
+    # --- 功能开关（v1.18.52）：站长要求「各个功能的功能开关方便我调试」---
+    for _key in ("lottery_enabled", "lottery_allow_variant", "lottery_force_prize"):
+        check(_key in mod.DEFAULTS, f"功能开关 {_key} 是配置项（可在编辑器里改）")
+    _sw_off = make_plugin(dict(_lot_cfg, lottery_enabled=False))
+    _swp = mod._default_player("89665")
+    _swp["gold"] = 10 ** 6
+    await _sw_off._save_player(_swp)
+    _sw_out = text_of(await cmd(_sw_off, FakeEvent("89665"), "大鱼乐", "1", ""))
+    _swp = await _sw_off._load_player("89665")
+    check(
+        "关着" in _sw_out and _swp["gold"] == 10 ** 6
+        and mod._daily_used(_swp, "lottery") == 0,
+        f"总开关关掉后：不扣钱、不发奖、只回一句说明 -> {_sw_out.splitlines()[0][:34]}",
+    )
+    _sw_on = make_plugin(_lot_cfg)
+    _swp2 = mod._default_player("89666")
+    _swp2["gold"] = 10 ** 6
+    await _sw_on._save_player(_swp2)
+    _sw_txt = text_of(await cmd(_sw_on, FakeEvent("89666"), "大鱼乐", "开关", ""))
+    check(
+        all(name in _sw_txt for name, _ in _sw_on.LOTTERY_SWITCHES),
+        f"/钓鱼 大鱼乐 开关 列出全部开关 -> {_sw_txt.splitlines()[1][:40]}",
+    )
+    check(
+        "lottery_enabled" in _sw_txt and "票价" in _sw_txt,
+        "开关清单里带着配置键名（站长照着去编辑器里找）",
+    )
+    # 「开关 <名字> 关」就地改一个开关
+    _sw_txt2 = text_of(await cmd(_sw_on, FakeEvent("89666"), "大鱼乐", "开关", "异色 关"))
+    check(
+        _sw_on.cfg.get("lottery_allow_variant") is False,
+        f"「/钓鱼 大鱼乐 开关 异色 关」把配置改掉了 -> "
+        f"{_sw_on.cfg.get('lottery_allow_variant')}",
+    )
+    check("异色" in _sw_txt2, "改完把新的开关状态回给站长")
+    _sw_txt3 = text_of(await cmd(_sw_on, FakeEvent("89666"), "大鱼乐", "开关", "乱写的 关"))
+    check("没有" in _sw_txt3, f"开关名写错时说清可用项 -> {_sw_txt3.splitlines()[0][:30]}")
+    # 强制奖级：调试用，每次必出那一档
+    _force = make_plugin(dict(_lot_cfg, lottery_force_prize="prize"))
+    _fp2 = mod._default_player("89667")
+    _fp2["gold"] = 10 ** 6
+    await _force._save_player(_fp2)
+    _force_out = text_of(await cmd(_force, FakeEvent("89667"), "大鱼乐", "3", ""))
+    _fp2 = await _force._load_player("89667")
+    check(
+        _force_out.count("中 500 金") == 3,
+        f"lottery_force_prize 让 3 张全部出指定的那一档 -> "
+        f"{_force_out.count('中 500 金')}/3",
+    )
+
+    # --- 票价是可配的（站长一度以为不能配：它一直在「⚙️ 数值」页）---
+    # 这条断言走的是**编辑器真实的保存通道**，锁住「改完立刻生效」这件事。
+    _price_p = make_plugin(_lot_cfg)
+    _ok_p, _msg_p = await _price_p._editor_save_numbers({"lottery_ticket_price": 800})
+    check(
+        _ok_p and _price_p._lottery_ticket_price() == 800,
+        f"票价能从编辑器改掉并立刻生效 -> {_msg_p[:40]}",
+    )
+    _price_p._refresh_config()
+    check(
+        _price_p._lottery_ticket_price() == 800,
+        "刷新配置后票价仍是新的（不是只改了内存里的一份副本）",
+    )
+    _ok_b, _msg_b = await _price_p._editor_save_numbers({"lottery_allow_variant": "关"})
+    check(
+        _ok_b and _price_p.cfg.get("lottery_allow_variant") is False,
+        f"布尔开关也能从编辑器改（「关」这种文本写法也认）-> {_msg_b[:30]}",
+    )
+    _ok_c, _msg_c = await _price_p._editor_save_content(
+        {"tables": {"lottery_prizes": "mine|1|gold||777|自定"}}
+    )
+    check(
+        _ok_c and [r["id"] for r in _price_p._lottery_rows()] == ["mine"],
+        f"整张奖表能通过内容表通道改掉 -> {_msg_c[:30]}",
+    )
+
     # =====================================================================
     print("\n[18] 回复场景全覆盖：每条回复都能配按钮/文案 + 护栏断言（v1.12.0）")
 
@@ -11390,7 +11591,7 @@ async def main():
     _cap_btn: list[str] = []
     _mn_btn = make_plugin()
 
-    async def _fake_send_ok(event, text, rows):
+    async def _fake_send_ok(event, text, rows, **kwargs):
         _cap_btn.append(text)
         return True
 
@@ -11404,7 +11605,7 @@ async def main():
     # 纯文本路径同样带称呼（_send_with_buttons 失败时退回 plain_result）
     _mn_txt = make_plugin()
 
-    async def _fake_send_false(event, text, rows):
+    async def _fake_send_false(event, text, rows, **kwargs):
         return False
 
     _mn_txt._send_with_buttons = _fake_send_false

@@ -3496,6 +3496,75 @@ class CommandsMixin:
         self._lottery_ev_warned = True
         return True
 
+    #: 大鱼乐的「功能开关」：中文名 -> 配置键。站长调试时一眼看清哪些能关。
+    LOTTERY_SWITCHES: tuple[tuple[str, str], ...] = (
+        ("总开关", "lottery_enabled"),
+        ("异色", "lottery_allow_variant"),
+        ("头奖播报", "lottery_announce"),
+        ("连输保底", "lottery_pity_count"),
+        ("每日限购", "lottery_daily_limit"),
+        ("单次上限", "lottery_max_per_call"),
+        ("强制奖级", "lottery_force_prize"),
+    )
+
+    def _lottery_switches_text(self) -> str:
+        """``/钓鱼 大鱼乐 开关`` 的内容：每个开关现在是什么状态 + 怎么改。"""
+        lines = ["🎰 大鱼乐 · 功能开关"]
+        for label, key in self.LOTTERY_SWITCHES:
+            value = self.cfg.get(key)
+            if isinstance(value, bool):
+                shown = "开 ✅" if value else "关 ⛔"
+            else:
+                shown = str(value) if str(value or "").strip() else "未设置"
+            lines.append(f"　{label}：{shown}　（{key}）")
+        lines.append(f"　票价：{_fmt_gold(self._lottery_ticket_price())} 金/张"
+                     f"　（lottery_ticket_price）")
+        lines.append(f"　奖表：{len(self._lottery_rows())} 档　（lottery_prizes）")
+        lines.append("　—　改法：编辑器「⚙️ 数值」页的「大鱼乐」分组；"
+                     "奖表在「🎰 大鱼乐」页改")
+        lines.append("　临时开关：/钓鱼 大鱼乐 开关 总开关 关　"
+                     "（异色 / 头奖播报 同理，填 开/关）")
+        return "\n".join(lines)
+
+    async def _lottery_toggle(self, event, user_id: str, name: str, value: str):
+        """``/钓鱼 大鱼乐 开关 <名字> 开|关`` —— 就地改一个开关（写回配置，立即生效）。"""
+        table = dict(self.LOTTERY_SWITCHES)
+        key = table.get(str(name or "").strip())
+        if key is None:
+            async for _r in self._say_msg(event, "lottery.switches", event.plain_result(
+                    f"🤔 没有「{name}」这个开关\n　可用的："
+                    + "、".join(label for label, _ in self.LOTTERY_SWITCHES)
+                )):
+                yield _r
+            return
+        want = str(value or "").strip().lower()
+        raw = self.cfg.get(key)
+        if isinstance(raw, bool):
+            if want in ("开", "on", "true", "1", "是", "启用"):
+                new_value: Any = True
+            elif want in ("关", "off", "false", "0", "否", "停用"):
+                new_value = False
+            else:
+                async for _r in self._say_msg(event, "lottery.switches", event.plain_result(
+                        f"🤔 「{name}」是开关，请写 开 或 关（收到「{value}」）"
+                    )):
+                    yield _r
+                return
+        else:
+            new_value = _safe_int(value, _safe_int(raw, 0, 0), 0)
+        try:
+            self.config[key] = new_value
+            saver = getattr(self.config, "save_config", None)
+            if callable(saver):
+                saver()
+        except Exception as e:
+            logger.warning(f"大鱼乐开关写回失败：{e}")
+        self._refresh_config()
+        async for _r in self._say_msg(event, "lottery.switches", event.plain_result(
+                f"🎰 大鱼乐「{name}」= {new_value}\n\n{self._lottery_switches_text()}"
+            )):
+            yield _r
+
     def _lottery_buy_tickets(self, player: dict[str, Any], want: int) -> tuple[int, int, int]:
         """扣钱买票（**在锁里调用**）。返回 ``(真正买到的张数, 花掉的金币, 今天剩余张数)``。
 
@@ -3549,6 +3618,13 @@ class CommandsMixin:
             param = str(row.get("param") or "")
             rarity, _, tail = param.partition(":")
             quality, _, variant = tail.partition(":")
+            variant = variant.strip()
+            # 异色（v1.18.52，站长要求「奖品应该有概率得异色，概率和普通钓鱼一样」）：
+            #   参数写了具体 id   -> 固定出这种异色
+            #   参数写了 none     -> 这一档永不出异色
+            #   参数留空          -> **按 variant_chance 正常掷**，和普通钓鱼同一套
+            #                        （_roll_variant 读的就是同一个配置）
+            allow_variant = _cfg_bool(self.cfg, "lottery_allow_variant", True)
             made: list[str] = []
             for _ in range(count):
                 fish_id = LOTTERY.pick_fish_for_prize(rarity or "all")
@@ -3559,9 +3635,14 @@ class CommandsMixin:
                     qmult = _roll_quality_mult(
                         self.cfg.get("quality_weights"), cfg=self.cfg
                     )
+                if variant and variant != "none":
+                    caught_variant: str | None = variant
+                elif variant == "none" or not allow_variant:
+                    caught_variant = None
+                else:
+                    caught_variant = self._roll_variant()     # 与普通钓鱼完全同一套概率
                 catch = _new_instance(
-                    fish_id, qmult, source="lottery",
-                    variant=(variant.strip() or None),
+                    fish_id, qmult, source="lottery", variant=caught_variant,
                 )
                 if catch is None:
                     continue
@@ -3647,6 +3728,34 @@ class CommandsMixin:
         arg = str(a2 or "").strip()
         tail = str(after_first or "").strip()
 
+        # ---- 功能开关（v1.18.52）：站长调试用 ----
+        # 大鱼乐是**独立功能**，所以有一个总开关 + 两个调试开关（见 DEFAULTS 的说明）：
+        #   lottery_enabled       关掉 = 整个玩法连指令一起停（不发按钮、不扣钱）
+        #   lottery_allow_variant 关掉 = 鱼奖永不出异色（方便对概率）
+        #   lottery_force_prize   填奖级 id = 每次必出这一档（**印钞机**，只用来调试演出）
+        if not _cfg_bool(self.cfg, "lottery_enabled", True):
+            async for _r in self._say_msg(event, "lottery.off", event.plain_result(
+                    "🎰 大鱼乐现在是关着的（站长在编辑器里关的）\n"
+                    "　想开就发 /钓鱼 大鱼乐 开关 开，或在编辑器里打开「大鱼乐总开关」"
+                )):
+                yield _r
+            return
+
+        if arg in ("开关", "功能", "switches", "debug"):
+            # 「开关 <名字> 开/关」就地改；只写「开关」= 看现状
+            if tail:
+                switch_name, _, switch_value = tail.partition(" ")
+                async for _r in self._lottery_toggle(
+                    event, user_id, switch_name.strip(), switch_value.strip()
+                ):
+                    yield _r
+                return
+            async for _r in self._say_msg(event, "lottery.switches", event.plain_result(
+                    self._lottery_switches_text()
+                )):
+                yield _r
+            return
+
         # ---- 概率表 / 说明（不花钱、不写档）----
         if arg in ("概率", "几率", "odds", "prob") or tail in ("概率", "几率", "odds"):
             top = self._lottery_jackpot_prize()
@@ -3730,11 +3839,14 @@ class CommandsMixin:
         pity_cap = max(0, _safe_int(self.cfg.get("lottery_pity_count"), 0, 0))
         pity_id = str(self.cfg.get("lottery_pity_prize") or "").strip()
         pity_row = next((r for r in rows if str(r.get("id")) == pity_id), None)
+        # 调试用：强制每次都出这一档（**会让期望失控**，所以要靠护栏喊出来）
+        force_id = str(self.cfg.get("lottery_force_prize") or "").strip()
+        force_row = next((r for r in rows if str(r.get("id")) == force_id), None)
         loses = _safe_int(player.get("lottery_loses"), 0, 0)
         draws: list[dict[str, Any]] = []
         pity_hits = 0
         for _ in range(bought):
-            row = LOTTERY.roll_prize(rows)
+            row = force_row if force_row is not None else LOTTERY.roll_prize(rows)
             if row is None:
                 break
             # 保底按「**开始抽这一张之前**已经连输几张」判定（v1.18.51）：

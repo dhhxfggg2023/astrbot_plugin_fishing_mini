@@ -30,9 +30,10 @@ jackpot|0.001|fish|all:神品|1|神话鱼 · 神品 + 50 万金　🐉 头奖
 ```
 
 * **概率**是相对权重（不必凑够 100，代码按总和归一化）—— 站长想调爆率就改这一列。
-* 类型 ``fish``：参数 ``稀有度[:品质]``。稀有度写 ``all`` = 任意稀有度；
+* 类型 ``fish``：参数 ``稀有度[:品质[:变异id]]``。稀有度写 ``all`` = 任意稀有度；
   品质写 ``all`` / 留空 = 按**自然爆率**抽（不硬塞高个体）；
-  ``all:神品`` = 任意鱼种但个体必是神品。
+  变异段留空 = **按 ``variant_chance`` 正常掷异色**（和普通钓鱼一模一样的概率），
+  写具体 id（例如 ``golden``）= 固定出这种异色，写 ``none`` = 这一档永不出异色。
 * 类型 ``gold``：参数或数量列写金币数都认（``jackpot`` 那档另外加 ``lottery_jackpot_gold``）。
 * 类型 ``item`` / ``bait``：参数是道具 / 鱼饵 id，数量 = 给几个（默认 1）。
 * 类型 ``reward``：参数 ``id:数量,id:数量``（**道具包**，数量省略 = 1）。
@@ -206,13 +207,19 @@ def _rarity_mean_value(rarity_spec: str) -> float:
 def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
     """一条鱼奖的期望面值（估算）。
 
-    口径：``鱼种基础价均值 × 品质典型倍率 × 钓点/个体差异典型倍率``。
+    口径：``鱼种基础价均值 × 品质典型倍率 × 变异期望倍率 × 钓点/个体差异典型倍率``。
+
+    变异也要算：鱼奖**默认按 ``variant_chance`` 正常掷异色**（和普通钓鱼一样），
+    而异色会把价格乘上 1.3~3.2 倍 —— 不算进来的话护栏会低估收益，形同虚设。
+
     这里是**估算**，服务两条用途：①「期望回报 < 票价」那条护栏；
     ② ``/钓鱼 大鱼乐 概率`` 的展示。真实发放走 `_new_instance`，一分钱都不会少给。
     """
-    rarity, _, quality = str(param or "").partition(":")
+    rarity, _, tail = str(param or "").partition(":")
+    quality, _, variant = tail.partition(":")
     rarity = rarity.strip() or "all"
     quality = quality.strip()
+    variant = variant.strip()
     if quality in ("", "all"):
         # 没指定品质 → 按自然爆率抽，期望倍率 = 各档权重的加权平均
         weights = _quality_weights(plugin)
@@ -224,8 +231,61 @@ def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
         ) / total
     else:
         mult = EV_QUALITY_MULT.get(quality, 1.0)
-    per = _rarity_mean_value(rarity) * mult * EV_LOCATION_MULT * EV_VARIANCE
+    variant_mult = _variant_expectation(plugin, variant)
+    per = _rarity_mean_value(rarity) * mult * variant_mult * EV_LOCATION_MULT * EV_VARIANCE
     return per * max(1, count)
+
+
+def _variant_mult_of(item: dict[str, Any]) -> float:
+    """变异定义的「价值倍率」。
+
+    ⚠️ 键名是 ``mult``（见 `_calc._parse_variant_defs` 的说明：输出字段名与
+    `_game_data.VARIANTS` 保持一致）—— 这里顺带认 ``value_mult`` 是为了兼容
+    老配置/手写数据，免得倍率被静默当成 1.0。
+    """
+    for key in ("mult", "value_mult", "value"):
+        if key in item:
+            return max(0.0, _lot_float(item.get(key), 1.0))
+    return 1.0
+
+
+def _variant_expectation(plugin: Any, variant: str) -> float:
+    """这一档鱼奖的**变异期望倍率**（护栏与概率页用）。
+
+    * 参数里写了 ``none`` → 1.0（永不出异色）
+    * 参数里写了具体变异 id → 那个变异的倍率（固定出这一种）
+    * 没写 → 按 ``variant_chance`` 与 ``variant_defs`` 的权重算期望
+      （和 `_roll_variant` 同一套口径，所以「概率和普通钓鱼一样」这句在护栏里也成立）
+    * ``lottery_allow_variant=false`` → 1.0（总开关关掉异色时收益也少一块）
+    """
+    variants = globals().get("VARIANTS") or []
+    if variant == "none":
+        return 1.0
+    if variant:
+        for item in variants:
+            if str(item.get("id")) == variant:
+                return _variant_mult_of(item)
+        return 1.0
+    if not variants:
+        return 1.0
+    try:
+        cfg = getattr(plugin, "cfg", None) or {}
+        if not _cfg_bool(cfg, "lottery_allow_variant", True):     # noqa: F821
+            return 1.0
+        chance = _lot_float(cfg.get("variant_chance"), 0.0)
+    except Exception:                                                    # pragma: no cover
+        chance = 0.0
+    chance = min(max(chance, 0.0), 1.0)
+    if chance <= 0:
+        return 1.0
+    total = sum(max(0.0, _lot_float(v.get("weight"), 0.0)) for v in variants)
+    if total <= 0:
+        return 1.0
+    avg = sum(
+        max(0.0, _lot_float(v.get("weight"), 0.0)) * _variant_mult_of(v)
+        for v in variants
+    ) / total
+    return (1.0 - chance) * 1.0 + chance * avg
 
 
 def prize_payout(
@@ -233,7 +293,7 @@ def prize_payout(
 ) -> float:
     """该奖级的期望面值（估算，用于护栏与概率页）。
 
-    ⚠️ 头奖的**额外金币**也要算进来：不算的话期望值会凭空少一大块，
+    ⚠️ ``jackpot`` 那一档的**额外金币**也要算进来：不算的话期望值会凭空少一大块，
     护栏就形同虚设（「期望 < 票价」必须按真实收益算）。
     """
     kind = str(row.get("kind") or "none")

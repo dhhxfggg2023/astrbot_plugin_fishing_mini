@@ -82,6 +82,8 @@ TEXTS: dict[str, str] = {
     "lottery.result": "{原文}",  # 动态文本（开奖清单 + 汇总）
     "lottery.odds": "{原文}",  # 动态文本（概率表由奖表算出来）
     "lottery.pity": "{原文}",  # 动态文本
+    "lottery.off": "{原文}",  # 动态文本（总开关关着）
+    "lottery.switches": "{原文}",  # 动态文本（功能开关清单）
     "story.result": "{原文}",  # 动态文本
     "orders.list": "{原文}",  # 动态文本
     "location.list": "{原文}",  # 动态文本
@@ -311,6 +313,8 @@ SAMPLE_ORIGINAL: dict[str, str] = {
     "lottery.result": "🎰 大鱼乐 ×1　（-5,000 金）\n1. 神话鱼 · 神品　🐉 头奖　🐉 天陨鹏鱼 🔱神品 · 45,569\n🧮 上奖 1/1 张｜鱼 1 条\n💰 995,000　今日还能买 49 张",
     "lottery.odds": "🎰 大鱼乐 · 奖级与概率\n　0.0013%（约 1/79,141）　👑 神话鱼 · 神品　≈506,726 金\n　65.71%　谢谢惠顾\n　—　票价 5,000 金/张，长期期望约 4,482 金/张（90%）",
     "lottery.pity": "🎗️ 连输 15 张，这一张保底中奖！",
+    "lottery.off": "🎰 大鱼乐现在是关着的（站长在编辑器里关的）",
+    "lottery.switches": "🎰 大鱼乐 · 功能开关\n　总开关：开 ✅　（lottery_enabled）\n　异色：开 ✅　（lottery_allow_variant）",
     "broadcast.catch": "📢 小明 钓到了 🐟鲤鱼！",
     "sell.locked_note": "🔒 另有 2 条锁定的鱼留在背包里（/钓鱼 解锁 1 可以解锁）",
     "cast.achievement": "🎉 初次下水",

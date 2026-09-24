@@ -497,12 +497,25 @@ DEFAULTS: dict[str, Any] = {
     "lottery_jackpot_prize": "jackpot",
     #: 头奖额外送的金币（写 0 = 头奖只给奖品不给钱）
     "lottery_jackpot_gold": 500000,
-    "lottery_ticket_price": 5000,       # 每张票多少金币
+    #: **每张票多少金币**（站长说「价格怎么不能配置」—— 它一直是可配的，但入口不好找，
+    #: 所以 v1.18.52 起在 🎰 大鱼乐 页顶部也写明了它在哪，并给了一键跳转）。
+    "lottery_ticket_price": 5000,
     "lottery_daily_limit": 50,          # 每天最多买几张（0 = 不限）
     "lottery_max_per_call": 30,         # 一次最多连抽多少张（挡消息过长）
     "lottery_pity_count": 15,           # 连输多少张后保底给一张（0 = 不保底）
-    "lottery_pity_prize": "third",      # 保底给哪一行奖（默认三等奖）
+    "lottery_pity_prize": "gold_small",  # 保底给哪一行奖（填奖表的行首 id）
     "lottery_announce": False,          # 中头奖是否在群里播报
+    # ---- 功能开关（v1.18.52）：站长调试用，全部可在编辑器里改 ----
+    #: 大鱼乐**总开关**：关掉就整个玩法停摆（指令只回一句「关着」，不扣钱不发奖）。
+    #: 想临时停一个功能不用改代码，也不用把奖表清空。
+    "lottery_enabled": True,
+    #: 鱼奖能不能出**异色**（默认开）。开着 = 和普通钓鱼用**同一个** ``variant_chance``
+    #: 掷异色（站长要求「概率和普通钓鱼一样」）；关掉 = 鱼奖永远普通个体，方便对概率。
+    "lottery_allow_variant": True,
+    #: **调试用**：填了奖级 id（例如 ``jackpot``）= 每次开奖都强制出这一档。
+    #: ⚠️ 它会让期望回报彻底失控（必中头奖），只适合调试演出/截图，用完记得清空；
+    #: 开着的时候日志与 /钓鱼 大鱼乐 概率 都会红着脸提醒。
+    "lottery_force_prize": "",
     "button_mode": "自动",          # QQ 官方按钮发送形态：自动/markdown/text/关闭
     # 回复开头怎么称呼发送者：关闭 / 昵称 / @（默认「昵称」）。只加在每条指令的
     # 第一条回复上，按钮路径与纯文本路径都会加（见 _interactions._mention_prefix）。
