@@ -2975,22 +2975,34 @@ class CommandsMixin:
                         yield _r
                     return
                 bonus = int(round(_safe_number(effects.get("feed_bonus"), 0.0)))
+                today = self._today_text()
+                cap = _feed_bonus_cap(self.cfg)
+                limit = _feed_bonus_daily_limit(self.cfg)
                 lines = []
                 used = 0
                 for idx in picked:
                     if _safe_int(items.get(item_id), 0, 0) <= 0:
                         break
                     instance = tank[idx - 1]
-                    before = _safe_int(instance.get("feed_bonus"), 0, 0)
-                    if before >= 20:
-                        lines.append(f"　{idx}. 已经培育到上限（+20 次）")
+                    # 两道闸门（v1.18.62）：单鱼加成上限 + **同一条鱼每天几次**
+                    # （站长：「一条鱼能用的加喂养上限的道具应该是有限并且可配置的」）
+                    blocked = _feed_bonus_block(instance, self.cfg, today)
+                    if blocked:
+                        lines.append(f"　{idx}. {blocked}")
                         continue
-                    instance["feed_bonus"] = min(20, before + bonus)
+                    gain = _feed_bonus_gain(instance, bonus, self.cfg)
+                    if gain <= 0:
+                        lines.append(f"　{idx}. 这次没有提升（{_feed_bonus_mode(self.cfg)} 模式：只取最好的一次）")
+                        continue
+                    before = _safe_int(instance.get("feed_bonus"), 0, 0)
+                    instance["feed_bonus"] = min(cap, before + gain)
+                    _feed_bonus_mark(instance, today, _feed_bonus_used(instance, today) + 1)
                     self._note_item_used(player, item_id, 1, items)
                     used += 1
                     lines.append(
                         f"　{idx}. {_instance_line(instance, with_value=False)}"
                         f"　投喂上限 {_feed_cap(instance, self.cfg)} 次"
+                        + (f"（今天第 {_feed_bonus_used(instance, today)}/{limit} 次）" if limit > 0 else "")
                     )
                 if used <= 0:
                     async for _r in self._say_msg(event, "item.breed_failed", event.plain_result(

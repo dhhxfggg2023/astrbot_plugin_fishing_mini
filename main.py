@@ -357,6 +357,16 @@ DEFAULTS: dict[str, Any] = {
     # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复）
     #   **默认 0 = 不限**（v1.18.29 起）；想恢复「一条鱼一天最多 3 颗」就填 3
     "reroll_daily_limit": 0,
+    # 育灵水 / 珍珠梳这类「加投喂上限」的道具（v1.18.62）：
+    #   feed_bonus_daily_limit = **同一条鱼每天最多能用几次**（默认 2）。
+    #     站长报「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
+    #     之前就不能配置导致数值膨胀了」—— 以前只靠 feed_bonus ≤ 20 兜底，
+    #     一条鱼一天能被堆满 20 次上限。填 0 = 不限（回到老行为）。
+    #   feed_bonus_mode = add 每次叠加 / best 只取最好的一次
+    "feed_bonus_daily_limit": 2,
+    "feed_bonus_mode": "add",
+    # 单条鱼的投喂上限加成最多堆到多少（育灵水 +5、珍珠梳 +10 都堆在这一项上）
+    "feed_bonus_cap": 20,
     # 洗髓丹洗出「神品」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
     # 所以只能靠洗髓丹拿到，自然上钩永远不出（quality_weights 最后一位是 0）
     "quality_myth_chance": 0.0025,
@@ -884,6 +894,9 @@ DEFAULTS_VALUE_FIXES: dict[str, tuple[tuple[Any, Any], ...]] = {
     # 登记在这里能让升级路径也覆盖到那批配置。
     "reroll_daily_limit": ((3, DEFAULTS["reroll_daily_limit"]),),
     "reroll_daily_total": ((30, DEFAULTS["reroll_daily_total"]),),
+    # v1.18.62：加了「每条鱼每天最多用几次」的道具上限（默认 2）。老配置里没有这一项，
+    # 走 DEFAULTS 补上即可；这里登记是为了让 DEFAULTS 里那个 2 也写进 schema。
+    "feed_bonus_cap": ((20, DEFAULTS["feed_bonus_cap"]),),
 }
 
 #: 「官方改过的内容行」：`(配置键, 旧整行, 新整行)`，只有配置里那一行**逐字等于旧行**
@@ -3283,6 +3296,19 @@ class FishingPlugin(
         # 编辑器里填了脏值要等到用时才暴露）。0 = 不限，语义与 _calc._reroll_daily_cap 一致。
         cfg["reroll_daily_limit"] = int(
             _clamp(_safe_int(cfg.get("reroll_daily_limit"), 0, 0), 0, 100000)
+        )
+        # v1.18.62：育灵水/珍珠梳这类「加投喂上限」道具的两层限制
+        #   · 同一条鱼每天最多用几次（0 = 不限，回到老行为）
+        #   · 单条鱼的投喂上限加成上限（喂鱼上限 = feed_max_uses + 这个值）
+        cfg["feed_bonus_daily_limit"] = int(
+            _clamp(_safe_int(cfg.get("feed_bonus_daily_limit"), 2, 0), 0, 10000)
+        )
+        cfg["feed_bonus_cap"] = int(
+            _clamp(_safe_int(cfg.get("feed_bonus_cap"), 20, 0), 0, 1000)
+        )
+        cfg["feed_bonus_mode"] = (
+            "best" if str(cfg.get("feed_bonus_mode") or "").strip().lower() in ("best", "max", "只取最好")
+            else "add"
         )
         cfg["offering_daily_limit"] = int(
             _clamp(_safe_int(cfg.get("offering_daily_limit"), 1, 0), 0, 1000)

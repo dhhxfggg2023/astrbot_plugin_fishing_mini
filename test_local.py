@@ -8276,7 +8276,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 143,
+        len(_schema) == 146,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8293,7 +8293,8 @@ async def main():
         f" + v1.18.22 的 luck_weight_step/luck_cap"
         f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode"
         f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）"
-        f" + v1.18.52 的三个开关（总开关/出异色/强制奖级）；"
+        f" + v1.18.52 的三个开关（总开关/出异色/强制奖级）"
+        f" + v1.18.62 的育灵水三项（每条鱼每天几次 / 叠加方式 / 加成上限）；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -8302,7 +8303,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 140, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 143, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -9362,6 +9363,96 @@ async def main():
     check(
         mod._safe_int(p3["aquarium"][0].get("feed_uses"), 0, 0) == 11,
         f"到基础上限后还能喂 -> {p3['aquarium'][0].get('feed_uses')}",
+    )
+
+    # --- v1.18.62：育灵水/珍珠梳的「每条鱼每天几次」闸门（站长报的数值膨胀）---
+    # 站长原话：「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
+    #             之前就不能配置导致数值膨胀了」。
+    plugin_fb = make_plugin(dict(_CFG, feed_bonus_daily_limit=2, feed_bonus_cap=20))
+    ev_fb = FakeEvent("96004")
+    p_fb = await plugin_fb._load_player("96004")
+    p_fb["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_fb["items"]["growth_tonic"] = 9
+    await plugin_fb._save_player(p_fb)
+    _outs_fb = [text_of(await cmd(plugin_fb, ev_fb, "用", "育灵水", "1")) for _ in range(3)]
+    p_fb = await plugin_fb._load_player("96004")
+    _inst_fb = p_fb["aquarium"][0]
+    check(
+        mod._safe_int(_inst_fb.get("feed_bonus"), 0, 0) == 10,
+        f"每天 2 次：育灵水只能用出去 2 次（+5×2=10）-> {_inst_fb.get('feed_bonus')}",
+    )
+    check(
+        mod._safe_int(p_fb["items"].get("growth_tonic"), 0, 0) == 7,
+        f"第 3 次被拦下，道具没白扣 -> 剩 {p_fb['items'].get('growth_tonic')}",
+    )
+    check(
+        "今天已经培育过 2 次" in _outs_fb[2] and "明天" in _outs_fb[2],
+        f"被拦时给出人话原因 -> {_outs_fb[2].strip().splitlines()[-1][:60]}",
+    )
+    # 跨天自动归零（惰性结算，不用定时任务）
+    p_fb["aquarium"][0]["feed_bonus_day"] = "2000-01-01"
+    await plugin_fb._save_player(p_fb)
+    _out_newday = text_of(await cmd(plugin_fb, ev_fb, "用", "育灵水", "1"))
+    p_fb = await plugin_fb._load_player("96004")
+    check(
+        mod._safe_int(p_fb["aquarium"][0].get("feed_bonus"), 0, 0) == 15
+        and "今天已经培育过" not in _out_newday,
+        f"换一天额度自动重置 -> {p_fb['aquarium'][0].get('feed_bonus')}",
+    )
+    # 0 = 不限（回到旧行为，给想放开的人留口子）
+    plugin_free_fb = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_cap=20))
+    p_free = await plugin_free_fb._load_player("96005")
+    p_free["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_free["items"]["growth_tonic"] = 9
+    await plugin_free_fb._save_player(p_free)
+    for _ in range(4):
+        await cmd(plugin_free_fb, FakeEvent("96005"), "用", "育灵水", "1")
+    p_free = await plugin_free_fb._load_player("96005")
+    check(
+        mod._safe_int(p_free["aquarium"][0].get("feed_bonus"), 0, 0) == 20,
+        f"feed_bonus_daily_limit=0 = 不限（一路喂到加成上限 20）-> "
+        f"{p_free['aquarium'][0].get('feed_bonus')}",
+    )
+    # best 模式：只取最好的一次，同档重复不再涨
+    plugin_best = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_mode="best"))
+    p_best = await plugin_best._load_player("96006")
+    p_best["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_best["items"]["growth_tonic"] = 5
+    await plugin_best._save_player(p_best)
+    await cmd(plugin_best, FakeEvent("96006"), "用", "育灵水", "1")
+    _out_best = text_of(await cmd(plugin_best, FakeEvent("96006"), "用", "育灵水", "1"))
+    p_best = await plugin_best._load_player("96006")
+    check(
+        mod._safe_int(p_best["aquarium"][0].get("feed_bonus"), 0, 0) == 5,
+        f"best 模式：第二次不再叠加 -> {p_best['aquarium'][0].get('feed_bonus')}",
+    )
+    check(
+        mod._safe_int(p_best["items"].get("growth_tonic"), 0, 0) == 4,
+        f"best 模式下「没提升」就不扣道具 -> 剩 {p_best['items'].get('growth_tonic')}",
+    )
+    # 加成上限可配（feed_bonus_cap）
+    plugin_cap = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_cap=6))
+    p_cap = await plugin_cap._load_player("96007")
+    p_cap["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_cap["items"]["growth_tonic"] = 5
+    await plugin_cap._save_player(p_cap)
+    await cmd(plugin_cap, FakeEvent("96007"), "用", "育灵水", "1")
+    _out_cap = text_of(await cmd(plugin_cap, FakeEvent("96007"), "用", "育灵水", "1"))
+    p_cap = await plugin_cap._load_player("96007")
+    check(
+        mod._safe_int(p_cap["aquarium"][0].get("feed_bonus"), 0, 0) == 6,
+        f"feed_bonus_cap=6 时最多堆到 6（不是硬编码 20）-> "
+        f"{p_cap['aquarium'][0].get('feed_bonus')}",
+    )
+    check("上限" in _out_cap, f"到加成上限时给出原因 -> {_out_cap.strip().splitlines()[-1][:50]}")
+    # 默认值：每条鱼每天 2 次（这是这次「数值膨胀」的修复口径）
+    check(
+        mod.DEFAULTS["feed_bonus_daily_limit"] == 2
+        and mod.DEFAULTS["feed_bonus_cap"] == 20
+        and mod.DEFAULTS["feed_bonus_mode"] == "add",
+        f"默认 = 每条鱼每天 2 次 / 加成上限 20 / 叠加 -> "
+        f"{mod.DEFAULTS['feed_bonus_daily_limit']}/{mod.DEFAULTS['feed_bonus_cap']}/"
+        f"{mod.DEFAULTS['feed_bonus_mode']}",
     )
 
     # --- 锦鲤玉佩：持续 20 竿的**品质保底**（v1.18.23 改成 quality_floor）---

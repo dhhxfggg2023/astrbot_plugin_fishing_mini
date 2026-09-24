@@ -1484,9 +1484,12 @@ def _compute_value(
 
 
 def _feed_cap(instance: dict[str, Any], cfg: dict[str, Any]) -> int:
-    """这条鱼的投喂上限 = 全局基础值 + 育灵水加成。"""
+    """这条鱼的投喂上限 = 全局基础值 + 育灵水加成（加成再按 feed_bonus_cap 收口）。"""
     base = max(0, _safe_int((cfg or {}).get("feed_max_uses"), 10, 0))
     bonus = max(0, _safe_int(instance.get("feed_bonus"), 0, 0))
+    cap = _feed_bonus_cap(cfg)
+    if cap > 0:
+        bonus = min(bonus, cap)
     return base + bonus
 
 
@@ -1767,6 +1770,74 @@ def _reroll_averse(instance: dict[str, Any], cfg: dict[str, Any], today: str) ->
     cap = _reroll_daily_cap(cfg)
     return cap > 0 and _reroll_used(instance, today) >= cap
 
+
+# ---------------------------------------------------------------------------
+# 育灵水 / 珍珠梳（feed_bonus）：加投喂上限的道具，也要有「每条鱼每天几次」的闸门
+# ---------------------------------------------------------------------------
+#: 读档修复时的硬上限：只防脏数据/溢出，**真正的口径是配置里的 feed_bonus_cap**
+#: （见 _feed_cap / _feed_bonus_cap）。以前这里硬编码 20，站长把 cap 调大也没用。
+FEED_BONUS_HARD_MAX = 10000
+
+
+def _feed_bonus_cap(cfg: dict[str, Any]) -> int:
+    """单条鱼的投喂上限加成最多能堆到多少（``feed_bonus_cap``，默认 20）。"""
+    return max(0, _safe_int((cfg or {}).get("feed_bonus_cap"), 20, 0))
+
+
+def _feed_bonus_daily_limit(cfg: dict[str, Any]) -> int:
+    """**同一条鱼每天**最多能用几次育灵水/珍珠梳（``feed_bonus_daily_limit``）。
+
+    **默认 2**；填 0 = 不限（回到 v1.18.61 以前的行为）。
+    站长原话：「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
+    之前就不能配置导致数值膨胀了」。
+    """
+    return max(0, _safe_int((cfg or {}).get("feed_bonus_daily_limit"), 2, 0))
+
+
+def _feed_bonus_mode(cfg: dict[str, Any]) -> str:
+    """``add`` = 每次叠加（默认）；``best`` = 只取最好的一次，重复用不再涨。"""
+    mode = str((cfg or {}).get("feed_bonus_mode") or "").strip().lower()
+    return "best" if mode in ("best", "max", "只取最好") else "add"
+
+
+def _feed_bonus_used(instance: dict[str, Any], today: str) -> int:
+    """这条鱼**今天**已经被喂了几次「加投喂上限」的道具（跨天自动归零）。"""
+    if str(instance.get("feed_bonus_day") or "") != str(today or ""):
+        return 0
+    return max(0, _safe_int(instance.get("feed_bonus_today"), 0, 0))
+
+
+def _feed_bonus_mark(instance: dict[str, Any], today: str, used: int) -> None:
+    """记下「今天喂到第几次」（跨天自然作废，不用定时任务，同 _reroll_mark）。"""
+    instance["feed_bonus_day"] = str(today or "")
+    instance["feed_bonus_today"] = max(0, int(used))
+
+
+def _feed_bonus_block(instance: dict[str, Any], cfg: dict[str, Any], today: str) -> str:
+    """还能不能再喂：返回 "" = 可以，否则返回一句给人看的原因。"""
+    cap = _feed_bonus_cap(cfg)
+    if cap <= 0:
+        return "这条鱼已经不能再加投喂上限了（feed_bonus_cap = 0）"
+    if _safe_int(instance.get("feed_bonus"), 0, 0) >= cap:
+        return f"已经培育到上限（+{cap} 次）"
+    limit = _feed_bonus_daily_limit(cfg)
+    if limit > 0 and _feed_bonus_used(instance, today) >= limit:
+        return f"今天已经培育过 {limit} 次了，明天再来"
+    return ""
+
+
+def _feed_bonus_gain(instance: dict[str, Any], bonus: int, cfg: dict[str, Any]) -> int:
+    """这一次实际能加多少（受 ``feed_bonus_cap`` 收口；``best`` 模式同档不叠加）。"""
+    add = max(0, int(bonus))
+    before = max(0, _safe_int(instance.get("feed_bonus"), 0, 0))
+    cap = _feed_bonus_cap(cfg)
+    if cap > 0:
+        add = min(add, max(0, cap - before))
+    if _feed_bonus_mode(cfg) == "best":
+        # 只取最好的一次：道具档位比当前加成低（或一样）就不涨，也不扣道具
+        return max(0, add - before)
+    return add
+
 def _repair_instance(raw: Any) -> dict[str, Any] | None:
     """修复一条鱼实例；无法修复返回 None。"""
     if not isinstance(raw, dict):
@@ -1827,11 +1898,15 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "gear_mult": round(gear_mult, 4),
         "attrs": attrs,
         "feed_uses": _safe_int(raw.get("feed_uses"), 0, 0),
-        "feed_bonus": int(_clamp(_safe_int(raw.get("feed_bonus"), 0, 0), 0, 20)),
+        "feed_bonus": int(_clamp(_safe_int(raw.get("feed_bonus"), 0, 0), 0, FEED_BONUS_HARD_MAX)),
         # 洗髓丹的「今天吃了几颗」：跨天自动作废（只记日期 + 次数，不需要定时任务）
         # ⚠️ 同样必须列在白名单里，否则每次读档都把当天次数清零，限制就失效了
         "reroll_day": str(raw.get("reroll_day") or ""),
         "reroll_today": max(0, _safe_int(raw.get("reroll_today"), 0, 0)),
+        # 育灵水/珍珠梳的「今天喂了几次」（v1.18.62）：同样是白名单式重建，
+        # ⚠️ 漏在这里 = 每次读档当天次数清零 -> 「每条鱼每天 N 次」直接失效。
+        "feed_bonus_day": str(raw.get("feed_bonus_day") or ""),
+        "feed_bonus_today": max(0, _safe_int(raw.get("feed_bonus_today"), 0, 0)),
         "live_bonus": live_bonus,
         "locked": bool(raw.get("locked")),
         # ⚠️ 必须列出来：_repair_instance 是白名单式重建，漏掉就等于每次读档把
