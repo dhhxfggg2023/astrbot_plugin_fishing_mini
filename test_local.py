@@ -11524,6 +11524,37 @@ async def main():
     )
     check(not _ok_nc and "再确认一次" in _msg_nc, "缺二次确认就拒绝")
 
+    # --- int 字段的「加减」也要真的加减（v1.18.60 修的真 bug）---
+    # 以前 int 类字段**忽略** mode，一律当「直接设为」：页面选「加减」填 1，
+    # 结果被直接改成 1（站长：「金币的计算怎么算错了」）。
+    _before_int = await _epp._load_player("89701")
+    # ⚠️ 别用 data_version：它由代码在加载时校正（写多少读回来都还是当前版本），
+    #    拿它测「加减」会误报。挑一个普通的 int 字段（体力计时戳 / 鱼竿等级这类）。
+    _int_key = next(
+        k for k, row in _specs.items()
+        if row["kind"] == "int" and k not in ("user_id", "data_version")
+    )
+    _int_old = mod._safe_int(_before_int.get(_int_key), 0, 0)
+    _ok_int, _msg_int = await _epp._editor_save_player_full({
+        "user_id": "89701", "confirm": True,
+        "edits": [{"key": _int_key, "value": 7, "mode": "add"}],
+    })
+    _after_int = await _epp._load_player("89701")
+    check(
+        _ok_int and mod._safe_int(_after_int.get(_int_key), 0, 0) == _int_old + 7,
+        f"int 字段（{_int_key}）选「加减」是加不是覆盖 -> "
+        f"{_int_old} → {_after_int.get(_int_key)}（{_msg_int[:40]}）",
+    )
+    _ok_int2, _ = await _epp._editor_save_player_full({
+        "user_id": "89701", "confirm": True,
+        "edits": [{"key": _int_key, "value": 3, "mode": "set"}],
+    })
+    _after_int2 = await _epp._load_player("89701")
+    check(
+        _ok_int2 and mod._safe_int(_after_int2.get(_int_key), 0, 0) == 3,
+        f"int 字段选「改成」还是直接覆盖 -> {_after_int2.get(_int_key)}",
+    )
+
     # --- 原始 JSON：整份替换，但主键被保护 ---
     _raw_src = dict(await _epp._load_player("89701"))
     _raw_src["gold"] = 777
@@ -11583,21 +11614,29 @@ async def main():
         (await _epp._load_player("89701"))["gold"] == 777,
         "改存档不影响实时数据（要「恢复」才生效）",
     )
-    # --- 两个真 bug 的回归（v1.18.56 顺手修掉的）---
-    # ① `find_snapshot("xxx.json")` 会**先撞上同名的 auto 档**（跨目录按文件名找，
-    #    且 kind 顺序是 auto 在前）——「改存档里的玩家」曾经静默改到自动档上。
-    # ② 往存档写回时拿 "manual/xxx.json" 去 path_of 拼，会写到不存在的目录 / 直接失败。
+    # --- 两个真 bug 的回归（v1.18.56 修的，v1.18.61 补严）---
+    # ① 纯文件名会**撞上同名的自动档**（跨目录按文件名找）——「改存档里的玩家」曾静默改到自动档上。
+    #    v1.18.61：同名时按 kind 优先级挑（manual > daily > auto），**不看排序也不看 mtime**。
+    #    ⚠️ 不要去「造一份完全同名的 auto」：auto 的名字走到秒（``_NN`` 后缀），
+    #       构造不出来，只会得到一份不相干的文件（测试自己会误报）。
+    #       这里改成把**每一条同名候选**都摆出来，逐条验证解析结果不是它们。
     _twin_ts = _snap_path.stat().st_mtime
-    _twins = _epp.backup_store.write_snapshot(
-        "auto", {"89701": _snap_raw}, note="同名兄弟", now=_twin_ts
+    _epp.backup_store.write_snapshot("auto", {"89701": _snap_raw}, note="兄弟档", now=_twin_ts)
+    _same_name = [
+        str(item.get("rel") or "")
+        for item in _epp.backup_store.list_snapshots()
+        if str(item.get("name") or "") == _snap_name
+    ]
+    check(
+        f"manual/{_snap_name}" in _same_name,
+        f"索引里能按纯文件名找到这份手动档 -> {_same_name}",
     )
-    _twin_path = _twins[0]
-    # 解析结果必须指向 **manual/**（而不是撞上的那份 auto）
+    # 解析结果必须指向 **manual/**（而不是任何同名候选，也不是「最新的那份」）
     _resolved = _epp._resolve_snapshot_ref(_snap_name)
     check(
         _resolved == f"manual/{_snap_name}",
-        f"纯文件名解析成 manual/xxx（不去撞同名 auto）-> {_resolved!r}"
-        f"（对照 auto 档：{_twin_path.parent.name}/{_twin_path.name}）",
+        f"纯文件名解析成 manual/xxx（优先手动档、不看新旧）-> {_resolved!r}"
+        f"（同名候选：{_same_name}）",
     )
     _via_path, _via_msg = await _epp._editor_save_player_full({
         "user_id": "89701", "snapshot": _snap_name, "confirm": True,

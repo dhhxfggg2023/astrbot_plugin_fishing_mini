@@ -883,11 +883,27 @@ def apply_player_edits(
             player[key] = value
             ok, detail = True, f"{spec.get('label')}→{value}"
         elif kind == "int":
-            value, why = _coerce_count(edit.get("value"))
+            # ⚠️ v1.18.60 修：以前这里**忽略**了「加减」开关，一律当成「直接设为」——
+            #    站长选了「加减」再填 1，结果金币/数量被直接改成 1（他的原话：
+            #    「金币的计算怎么算错了」）。现在和 count 走同一套：加减就加减。
+            mode = str(edit.get("mode") or ("add" if add else "set")).lower()
+            value, why = _coerce_count(
+                edit.get("value"), allow_negative=(mode in ("add", "delta"))
+            )
             if why:
                 return False, f"{spec.get('label')}：{why}"
-            player[key] = value
-            ok, detail = True, f"{spec.get('label')}→{value}"
+            old = int(player.get(key) or 0)
+            if mode in ("add", "delta"):
+                new = old + value
+                if new < 0:
+                    new = 0
+                if new > COUNT_MAX:
+                    return False, f"{spec.get('label')} 最多 {COUNT_MAX}"
+                player[key] = new
+                ok, detail = True, f"{spec.get('label')} {old}→{new}"
+            else:
+                player[key] = value
+                ok, detail = True, f"{spec.get('label')}→{value}"
         else:                                     # text / 未登记
             text, why = _coerce_text(edit.get("value"))
             if why:

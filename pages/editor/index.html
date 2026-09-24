@@ -461,6 +461,18 @@ table.grid.pd-card tbody td .pd-calc {
 }
 table.grid.pd-card tbody tr:hover td .pd-calc,
 table.grid.pd-card tbody tr.is-dirty td .pd-calc { color: var(--fg); }
+/* 改动方式标签（数字 / 文字 / 下拉选择 / 文字表 / JSON）：让「这一格怎么填」一眼可见 */
+.pd-tag {
+  flex: 0 0 auto;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.pd-quick { margin-top: 2px; }
 /* 🐟 逐条改鱼：控件同样定宽，否则「品质 / 异色」这两个下拉会把整行撑到离谱 */
 table.grid.pd-fish td .cell-input { width: auto; }
 table.grid.pd-fish td select.cell-input { min-width: 96px; max-width: 168px; }
@@ -3739,7 +3751,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.60";
+  var PAGE_VERSION = "v1.18.61";
 
   /* ===========================================================================
      5. 状态
@@ -5686,17 +5698,19 @@ table.grid td.actions .btn { vertical-align: middle; }
     var cur = Number(current === undefined || current === null ? 0 : current);
     if (!isFinite(cur)) cur = 0;
     var text = String(raw === undefined || raw === null ? "" : raw).trim();
-    var head = "当前 " + fmtNum(cur);
-    if (text === "") return head + "（框里填个数字，填 0 = 清零）";
+    var head = "现在 " + fmtNum(cur);
+    if (text === "") return head + "　→　框里填个数（填 0 = 清零）";
     var n = Number(text);
-    if (!isFinite(n)) return head + " → 「" + text + "」不是数字，改不了";
-    if (!allowDecimal && Math.floor(n) !== n) return head + " → " + n + " 不是整数（这一项只收整数）";
+    if (!isFinite(n)) return head + "　→　「" + text + "」不是数字，改不了";
+    if (!allowDecimal && Math.floor(n) !== n) return head + "　→　" + n + " 不是整数（这一项只收整数）";
     var next = mode === "add" ? cur + n : n;
+    var how = "改成";
     if (mode === "add") {
       if (n < 0 && next < 0) next = 0;                 // 减到 0 为止，不会变负
-      return head + (n >= 0 ? " ＋ " : " − ") + fmtNum(Math.abs(n)) + " → " + fmtNum(next);
+      how = n >= 0 ? "加 " + fmtNum(n) : "减 " + fmtNum(Math.abs(n));
     }
-    return head + " → " + fmtNum(next) + (next === cur ? "（没变）" : "");
+    // 把**结果放最前面**（站长要看的就是「改完是多少」），算式跟在后面
+    return "改后 = " + fmtNum(next) + "（" + head + "，" + how + "）";
   }
 
   /** 把某个字段的算式预览写进它那一行（敲字时用，避免整页重绘丢焦点）。 */
@@ -5957,17 +5971,38 @@ table.grid td.actions .btn { vertical-align: middle; }
     var mark = dirty ? ' <span class="hint" style="color:var(--warn)">●</span>' : "";
     var kind = item.kind;
     var now = pdCurrentText(gtitle, item);
-    // 行内控件的统一包装：输入框和下拉之间留出间距（v1.18.57 前是直接拼在一起，挤成一条缝）
-    function line(inner) {
-      return { control: '<div class="pd-line">' + inner + "</div>", mark: mark, now: now };
+    /* 一行控件（v1.18.60）：开头一个**改动方式标签**，后面跟控件，间距统一留出来。
+       站长两次反馈「哪里输入数值」——所以每一种可改字段开头都要写清怎么填。 */
+    function line(tag, inner) {
+      return {
+        control: '<div class="pd-line">' + (tag ? '<span class="pd-tag">' + esc(tag) + "</span>" : "") +
+          inner + "</div>",
+        mark: mark, now: now,
+      };
+    }
+    /** ±1 / ±10 快改按钮（不用打字就能改）。 */
+    function quickRow() {
+      return '<div class="pd-line pd-quick"><span class="hint faint">点一下直接改：</span>' +
+        '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+        '" data-mult="-1" title="减一倍（先在左边框里填个倍数，就按那个数减）">− 1</button>' +
+        '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+        '" data-mult="1" title="加一倍（先在左边框里填个倍数，就按那个数加）">＋ 1</button>' +
+        '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+        '" data-mult="-10" title="减十倍">− 10</button>' +
+        '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+        '" data-mult="10" title="加十倍">＋ 10</button></div>';
     }
     if (kind === "readonly") {
-      return { control: '<span class="faint">' + esc(String(item.value === undefined ? "—" : item.value)) + "</span>", mark: "", now: now };
+      return {
+        control: '<span class="faint">' + esc(String(item.value === undefined ? "—" : item.value)) +
+          ' <span class="hint">（这一项不能改）</span></span>',
+        mark: "", now: now,
+      };
     }
     if (kind === "fish_list") {
       return {
-        control: '<span class="hint faint">见下面那张「' + esc(item.label) + "」表（" +
-          ((item.value || []).length) + " 条）</span>", mark: mark, now: now,
+        control: '<span class="hint">在下面的「' + esc(item.label) +
+          "」表里逐条改（可加一条 / 删一条 / 整缸清空）</span>", mark: mark, now: now,
       };
     }
     if (kind === "map" || kind === "str_list" || kind === "map_int") {
@@ -5975,16 +6010,17 @@ table.grid td.actions .btn { vertical-align: middle; }
       if (kind === "str_list") {
         hint = (item.value || []).map(function (x) { return pdHumanValue(item.enum, x); }).join("、") || "（空）";
       }
-      var addRow = '<div class="pd-add"><span class="hint">加一项：</span>' +
+      var addRow = '<div class="pd-add"><span class="hint">或者只改一项：</span>' +
         '<select class="cell-input" data-pd2item="' + esc(dk) + '">' + pdItemOptions(item.enum) + "</select>" +
         '<select class="cell-input" data-pd2mode="' + esc(dk) + '">' +
         '<option value="add">加上</option><option value="remove">去掉</option></select></div>';
       var tableHint = "整表写法：逗号分隔的「id:数量」";
       if (!Object.keys(item.value && typeof item.value === "object" ? item.value : {}).length) {
-        tableHint += "；现在是空的 —— 直接在最上面那个框里写「worm:10, bread:5」也能塞进去";
+        tableHint += "；现在是空的 —— 在最上面那个框里写「worm:10, bread:5」也能塞进去";
       }
       return {
-        control: '<div class="pd-line"><span class="hint">' + (item.kind === "map_int" ? "数字表" : "文字表") + "</span>" +
+        control: '<div class="pd-line"><span class="pd-tag">' +
+          (item.kind === "map_int" ? "数字表" : "文字表") + "</span>" +
           '<input class="cell-input mono" type="text"' + fire +
           ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(hint || "（空）") + '" /></div>' +
           '<div class="hint faint">' + tableHint + "</div>" + addRow,
@@ -5993,64 +6029,53 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     if (kind === "json") {
       return {
-        control: '<textarea class="cell-input is-multiline" rows="2"' + fire + ">" +
-          esc(pdDraft(gtitle, item)) + "</textarea>",
+        control: '<div class="pd-line"><span class="pd-tag">JSON</span>' +
+          '<textarea class="cell-input is-multiline" rows="2"' + fire + ">" +
+          esc(pdDraft(gtitle, item)) + "</textarea></div>",
         mark: mark, now: "",
       };
     }
     if (kind === "count" || kind === "int") {
-      /* 站长（v1.18.58/59 反馈）：「只有加上和减去按钮，哪里输入数值呢」
+      /* 站长（v1.18.58/59/60 反馈）：「只有加上和减去按钮，哪里输入数值呢」
          「没有修改前后的预览，也没有方便的修改方式」。
-         所以这一格给三层，从最省事到最灵活：
-           ① ＋ / −  按钮：点一下就改（默认 ±1，倍数可调）—— 不用打字
-           ② 数字输入框 + 「改成 / 加减」：想填精确值就打字
-           ③ 算式预览：填完立刻看到「当前 X → Y」（敲字时实时更新） */
+         这一格给三层，从最省事到最灵活：
+           ① ＋1 / −1 / ±10：点一下直接改，不用打字（倍数可用左边的框自定义）
+           ② 「改成 / 加减」+ 数字输入框：想填精确值就打字
+           ③ 结果预览：填完立刻看到「→ 会变成 Y」（敲字时实时更新） */
       var text = pdDraft(gtitle, item);
       var preview = pdCalcText(item.value, text, "set", false);
       return {
-        control: '<div class="pd-line pd-quick">' +
-          '<span class="hint">快改</span>' +
-          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
-          '" data-mult="-1" title="减一倍（默认 1；先在上面填个倍数就能按倍数减）">−1</button>' +
-          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
-          '" data-mult="1" title="加一倍（默认 1；先在上面填个倍数就能按倍数加）">＋1</button>' +
-          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
-          '" data-mult="-10" title="减十倍">−10</button>' +
-          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
-          '" data-mult="10" title="加十倍">＋10</button>' +
-          "</div>" +
-          '<div class="pd-line">' +
+        control: '<div class="pd-line"><span class="pd-tag">数字</span>' +
           '<select class="cell-input" data-act="pd2:add" data-pd2add="' + esc(dk) + '" title="改成：填一个新的数值直接覆盖；加减：填要加多少（填负数就是减，减到 0 为止）">' +
           '<option value="set">改成</option><option value="add">加减</option></select>' +
-          '<span class="hint">数字</span>' +
           '<input class="cell-input mono" type="number" step="1"' + fire +
-          ' value="' + esc(text) + '" aria-label="' + esc(item.label) + '：在这里填数字" />' +
-          '<button type="button" class="btn btn-sm" data-act="pd2:calc" data-key="' + esc(dk) + '">算一下</button>' +
-          "</div>" +
-          '<div class="hint faint pd-calc" data-calc="' + esc(dk) + '">' + esc(preview) + "</div>",
+          ' value="' + esc(text) + '" aria-label="' + esc(item.label) + '：在这里填数字" /></div>' +
+          '<div class="hint pd-calc" data-calc="' + esc(dk) + '">' + esc(preview) + "</div>" +
+          quickRow(),
         mark: mark, now: now,
       };
     }
     if (kind === "ratio") {
-      /* 比例类（手气强度、行情加成…）同样明写「数字」，也带算式预览 —— 
+      /* 比例类（手气强度、行情加成…）同样明写「数字」，也带结果预览 —— 
          它们和计数类长得一样，不能一个有一个没有（站长刚被这个坑过）。 */
       var rtext = pdDraft(gtitle, item);
       var rpreview = pdCalcText(item.value, rtext, "set", true);
       return {
-        control: '<div class="pd-line"><span class="hint">数字</span>' +
+        control: '<div class="pd-line"><span class="pd-tag">数字</span>' +
+          '<span class="hint faint">可填小数</span>' +
           '<input class="cell-input mono" type="number" step="0.01"' + fire +
-          ' value="' + esc(rtext) + '" aria-label="' + esc(item.label) + '：在这里填数字" />' +
-          '<span class="hint faint">小数也可以</span></div>' +
-          '<div class="hint faint pd-calc" data-calc="' + esc(dk) + '">' + esc(rpreview) + "</div>",
+          ' value="' + esc(rtext) + '" aria-label="' + esc(item.label) + '：在这里填数字" /></div>' +
+          '<div class="hint pd-calc" data-calc="' + esc(dk) + '">' + esc(rpreview) + "</div>",
         mark: mark, now: now,
       };
     }
-    // text：有 enum 就下拉（显示中文），否则输入框（同样明写「文字」——不然只是个空框，
-    // 站长刚抱怨过「哪里输入」，别让文字字段重蹈覆辙）
+    // text：有 enum 就下拉（显示中文），否则输入框（同样写清「下拉选择」/「文字」——
+    // 不然只是个框，站长刚抱怨过「哪里输入」，别让文字字段重蹈覆辙）
     if (item.enum) {
-      return line('<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>");
+      return line("下拉选择",
+        '<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>");
     }
-    return line('<span class="hint">文字</span>' +
+    return line("文字",
       '<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) +
       '" placeholder="填新的内容" aria-label="' + esc(item.label) + '：在这里填文字" />');
   }

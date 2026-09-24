@@ -1026,7 +1026,17 @@ class EditorApiMixin:
     def _resolve_snapshot_ref(self, value: Any) -> str:
         """把页面给的快照标识解析成 store 能唯一认出来的 ``kind/name``。
 
-        优先级：已经带目录的相对路径 > 在索引里按文件名查到的 rel > 原样。
+        优先级：
+
+        1. 已经带目录的相对路径（``manual/xxx.json``）—— 直接信它；
+        2. 在索引里**按文件名精确**查到的 rel；
+        3. **同名时优先手动档**（``manual/`` > ``daily/`` > ``auto/``）。
+
+        ⚠️ 第 3 条是必须的（v1.18.61 定死）：表单给的是**纯文件名**，而手动档与自动档
+        撞名是常事（时间戳到分钟），``list_snapshots()`` 又是「新到旧」——
+        自动档通常更新、排在前面，于是「改存档里的玩家」会静默改到**自动档**上。
+        v1.18.56 只解决了自动档恰好同名的情形（它一旦带 ``_01`` 后缀就绕过去了），
+        这里改成按 kind 优先级挑，不再看排序、也不看 mtime。
         """
         text_value = self._snapshot_file_name(value)
         if not text_value:
@@ -1037,11 +1047,22 @@ class EditorApiMixin:
         lister = getattr(store, "list_snapshots", None)
         if callable(lister):
             try:
-                for item in lister():
-                    if str(item.get("name") or "") == text_value:
-                        return str(item.get("rel") or text_value)
+                matches = [
+                    item for item in lister()
+                    if str(item.get("name") or "") == text_value
+                ]
             except Exception as e:                               # pragma: no cover
                 _log_debug(f"快照索引查询失败（按纯文件名兜底）：{e}")
+                matches = []
+            if matches:
+                # 手动 > 每日 > 按时 > 其它；同 kind 里保持索引给出的顺序（新到旧）。
+                # ⚠️ 直接用字符串，不依赖 _backup 的常量（模块可能加载不全，别在运行时炸）。
+                pref = {"manual": 0, "daily": 1, "auto": 2}
+                best = min(
+                    matches,
+                    key=lambda item: pref.get(str(item.get("kind") or ""), 9),
+                )
+                return str(best.get("rel") or text_value)
         return text_value
 
     async def _editor_player_detail_full(
