@@ -6087,6 +6087,13 @@ table.grid td.actions .btn { vertical-align: middle; }
     var html = "";
     html += '<section class="card">';
     html += '<div class="card-head"><h2>🧰 ' + esc(tab.title) + "</h2>" +
+      /* 版本对账也放这一页（v1.18.61）：站长抱怨「只有金币好改 / 算错了」，
+         多半是浏览器缓存了旧页面 —— 一眼就能看出插件和页面是不是同一版。 */
+      '<span class="stat-chip" title="插件版本来自 metadata.yaml；页面版本 = 这个 index.html。不一致 = 浏览器缓存了旧页面，按 Ctrl+F5 强刷">' +
+      "插件 <b>" + esc(text(state.pluginVersion) || "?") + "</b>｜页面 <b>" + PAGE_VERSION + "</b>" +
+      (text(state.pluginVersion) && text(state.pluginVersion) !== PAGE_VERSION
+        ? ' <span style="color:var(--warn)">⚠️ 按 Ctrl+F5 强刷</span>' : " ✅") +
+      "</span>" +
       '<span class="hint">' + esc(tab.hint) + "</span>" +
       '<span class="spacer"></span>' +
       (st.dirty

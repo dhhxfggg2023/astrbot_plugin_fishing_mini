@@ -1908,6 +1908,11 @@ async function configKeysCoverage() {
     "数字 / 文字表 / 下拉选择 三种字段都带改动方式标签（不只金币能改）");
   check(pdHtml.indexOf('data-act="pd2:bump"') > 0 && pdHtml.indexOf('data-pd2item="基础|baits"') > 0,
     "数字字段有快改按钮、计数表字段有「只改一项」入口");
+  /* v1.18.61：玩家数据页也做版本对账（「只有金币好改 / 算错了」多半是缓存了旧页面） */
+  T.state.pluginVersion = T.PAGE_VERSION;
+  check(T.renderPlayerDataTab(pdTab).indexOf("插件 <b>" + T.PAGE_VERSION + "</b>") > 0,
+    "玩家数据页顶部显示插件 / 页面版本（不一致会提示 Ctrl+F5）");
+  T.state.pluginVersion = "";
   check(/class="table-wrap is-stack pd-plain/.test(pdHtml) && pdHtml.indexOf('class="mini-head"') > 0,
     "卡片模式 + 分组小标题 + 不再套内部滚动");
   check(pdHtml.indexOf('data-act="pd2:bump" data-key="基础|gold" data-mult="-1"') > 0 &&
