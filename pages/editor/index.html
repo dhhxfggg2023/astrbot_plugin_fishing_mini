@@ -2627,6 +2627,8 @@ table.grid td.actions .btn { vertical-align: middle; }
       });
     }
     if (status.players !== undefined) state.players = num(status.players, 0);
+    // 插件版本（v1.18.55）：玩家页把它和页面版本并排显示，用来一眼识别「浏览器缓存了旧页面」
+    if (status.plugin_version !== undefined) state.pluginVersion = text(status.plugin_version);
     if (status.next_auto_backup !== undefined) state.nextAutoBackup = text(status.next_auto_backup);
     if (Array.isArray(status.user_edited_keys)) state.userEditedKeys = status.user_edited_keys.map(text);
     if (status.autobackup) state.autoBackup = autobackupFromStatus(status);
@@ -3488,7 +3490,12 @@ table.grid td.actions .btn { vertical-align: middle; }
       id: "buttons",
       label: "🔘 按钮（原始文本）",
       title: "回复按钮",
-      hint: "button_defs 的原始文本编辑入口（场景写 cast/pull/bag/location/story，点击后发送必须写本插件指令（/钓鱼 …），样式写 default（灰）或 primary（蓝））",
+      hint: "button_defs 的原始文本编辑入口。场景 = 回复场景 id（共 190+ 个，日常用「💬 回复」页更省事）：" +
+        "cast/pull/bag/location 是老场景（子场景会继承它们）、**page.prev / page.next = 分页的「上一页 / 下一页」**、" +
+        "item.again = 道具用完后的「再次使用」。点击后发送一般写本插件指令（/钓鱼 …）；" +
+        "**这三个动态场景可以写占位符**：{指令}=当前界面的翻页指令（如 /钓鱼 背包）、{页}/{当前页}/{总页}、" +
+        "{道具}/{参数}（再次使用）—— 代码在合适的时机按当前页码填好再发出去，" +
+        "所以**不用也不该写死成某一条固定命令**（写死了换个界面就跳错地方）。样式写 default（灰）/ primary（蓝）。",
       keyFields: ["scene", "label", "data"],
       sortOptions: [["default", "默认顺序"], ["scene", "按场景"], ["labelAsc", "按文案"]],
       columns: [
@@ -3500,7 +3507,17 @@ table.grid td.actions .btn { vertical-align: middle; }
       makeRow: function () {
         return { scene: "cast", label: "新按钮", data: "/钓鱼 帮助", style: "default" };
       },
-      notice: "这是 button_defs 的原始文本入口（日常改用「💬 回复」页的场景卡片更省事：那里有预览、占位符提示和按钮排序）。场景：cast=抛竿结果的下方、pull=咬钩要拉线时、bag=背包、location=钓点、story=随机插曲（文案里可写 {label} 和 {n}）。同一场景的多行就是多个按钮，顺序即显示顺序；每行摆几个由代码决定（cast/bag/location/pull 每行 3 个，story 每个选项一行）。文案超过 10 字会被 QQ 截断；写了插件不认识的指令（死按钮）会被自动跳过。"
+      notice: "这是 button_defs 的原始文本入口（日常改用「💬 回复」页的场景卡片更省事：那里有预览、占位符提示和按钮排序）。" +
+        "**场景键**：老的四组 cast（抛竿结果）/pull（咬钩要拉线）/bag（背包）/location（钓点）仍然有效 —— " +
+        "没单独配置的子场景会继承它们；story=随机插曲（文案里可写 {label} 和 {n}）；" +
+        "另有 190+ 个细分场景（cast.hit / bag.empty / aquarium.full…），完整清单在「💬 回复」页。" +
+        "<br />**两排动态按钮**（「上一页 / 下一页」「再次使用」）也在这张表里：" +
+        "page.prev / page.next 的指令通常写模板 <span class=\"mono\">{指令} {页}</span>（{指令} = 当前界面的翻页指令、{页} = 目标页），" +
+        "item.again 写 <span class=\"mono\">/钓鱼 用 {道具} {参数}</span>。" +
+        "**代码会在用的时候把占位符换成真值**，所以不要把它们写死成固定命令（写死之后在背包页点「下一页」会跳到钓点页去）。" +
+        "<br />同一场景的多行就是多个按钮，顺序即显示顺序；每行摆几个由代码或「每行几个」设置决定。" +
+        "文案超过 10 字会被 QQ 截断；指令不是本插件认识的（死按钮）或场景键写错的行会被**跳过**，" +
+        "保存在插件日志里能看到跳了几行 —— 保存后页面上也会提示实际生效了多少个。"
     },
     {
       id: "numbers",
@@ -3630,6 +3647,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     snapshotPlayersError: "",
     goldEdit: null,             // { user_id, value } 正在改的金币
     goldConfirm: null,          // { user_id, value, mode } 二次确认中
+    pluginVersion: "",          // 插件版本（来自 editor_status，用于和页面版本对账）
     // ---- 改玩家数据（v1.18.53）：金币之外的实时数据也能增/减/改 ----
     // { user_id, name, mode2:"live"|"snapshot", snapshot, mode:"add"|"set",
     //   loaded, error, sections, clearArm }
@@ -5135,17 +5153,34 @@ table.grid td.actions .btn { vertical-align: middle; }
 
     html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
       "金币可以在列表里直接改；<b>背包/缸里的鱼</b>是只读的（估值由三维算出来，手改会对不上）。" +
-      "点每行的 <b>🧰 改数据</b> 还能增减<b>累计钓获 / 体力 / 鱼饵 / 道具 / 杂物 / 变异计数 / 称号 / 当前钓点</b>。" +
+      "<b>点每行的「🧰 改数据」</b>还能增减<b>累计钓获 / 体力 / 鱼饵 / 道具 / 杂物 / 变异计数 / 称号 / 当前钓点</b>" +
+      "（点完下面会展开一块面板：选「加减」或「直接设为」，填好按「✔ 提交修改」）。" +
       "改<b>实时玩家</b>前插件会自动存一份档（auto/，按「按时存档保留份数」轮转）；" +
       "改<b>存档里</b>的玩家不会动在线数据，要等「恢复」那份存档之后才生效。金币范围 0 ~ " +
       esc(fmtNum(state.playersGoldMax)) + "。<br />右上角「🔍 找回旧数据」是唯一的例外：" +
       "它只把<b>旧作用域里当前库没有的玩家</b>补进来（导入前自动存档，已有的玩家不动，旧数据不删）。" +
       "</div></div>";
+    /* 版本对账的醒目提示（v1.18.55）：插件与页面版本不一致 = 浏览器缓存了旧页面，
+       这正是「点了没反应 / 报错看不懂」最常见的原因，所以放在最上面说清楚。 */
+    if (text(state.pluginVersion) && text(state.pluginVersion) !== "v1.18.55") {
+      html += '<div class="notice"><span class="notice-icon">🔄</span><div>' +
+        "插件是 <b>" + esc(text(state.pluginVersion)) + "</b>，而这个页面是 <b>v1.18.55</b> —— " +
+        "版本不一致时页面可能不认识插件的新功能（点按钮没反应、报错看不懂多半就是这个）。" +
+        '<div style="margin-top:4px">按 <b>Ctrl + F5</b>（Mac：⌘ + Shift + R）强制刷新一次即可。</div>' +
+        "</div></div>";
+    }
 
     html += '<div class="toolbar">';
     html += '<button class="btn btn-sm' + (live ? " btn-primary" : "") + '" data-act="p:mode" data-mode="live">🟢 实时玩家</button>';
     html += '<button class="btn btn-sm' + (!live ? " btn-primary" : "") + '" data-act="p:mode" data-mode="snapshot">💾 存档内玩家</button>';
     html += '<span class="divider"></span>';
+    /* 版本对账（v1.18.55）：插件版本 vs 页面版本。
+       「点了没反应」最常见的原因就是浏览器缓存了旧页面 —— 这里一眼能看出来。 */
+    var _pv = text(state.pluginVersion);
+    html += '<span class="stat-chip" title="插件版本来自 metadata.yaml；页面版本 = 这个 index.html 的版本。两者不一致说明浏览器缓存了旧页面（Ctrl+F5 强制刷新）">' +
+      "插件 <b>" + esc(_pv || "?") + "</b>｜页面 <b>v1.18.55</b>" +
+      (_pv && _pv !== "v1.18.55" ? ' <span style="color:var(--warn)">⚠️ 不一致：按 Ctrl+F5 强刷</span>' : " ✅") +
+      "</span>";
     if (live) {
       html += '<label class="field search"><span class="field-icon">🔍</span>' +
         '<input type="search" id="playerSearch" placeholder="搜索玩家 ID 或昵称（回车）" value="' + esc(state.playersQuery) + '" /></label>';

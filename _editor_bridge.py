@@ -1967,6 +1967,11 @@ class EditorBridgeMixin(EditorApiMixin):
             "legacy": getattr(self, "_editor_legacy_cache", None),
             # 数值页要用：站长自己改过的键（升级时不会被新版默认值覆盖）
             "user_edited_keys": self._editor_user_edited_keys(),
+            # 版本号（v1.18.54）：页面把它显示在顶部。
+            # 用途很实际：站长报「改了没反应」时，一眼就能看出**插件与页面是不是同一版**
+            # （浏览器缓存了旧 index.html 时，页面就会比插件旧 —— 那种情况下页面不认识
+            #   插件的新动作，报错也会很难看懂）。
+            "plugin_version": self._editor_plugin_version(),
             "transport": "plugin-api",
         }
         try:
@@ -1981,6 +1986,24 @@ class EditorBridgeMixin(EditorApiMixin):
                 },
                 ensure_ascii=False,
             )
+
+    def _editor_plugin_version(self) -> str:
+        """插件版本号（读 metadata.yaml；读不到就空串）。
+
+        页面把「页面版本 vs 插件版本」并排显示 —— 浏览器缓存了旧页面时，
+        站长能立刻看出来，不用猜「为什么点了没反应」。
+        """
+        try:
+            path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "metadata.yaml"
+            )
+            with open(path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.strip().startswith("version:"):
+                        return line.split(":", 1)[1].strip()
+        except Exception as e:  # pragma: no cover
+            _log_debug(f"读插件版本号失败：{e}")
+        return ""
 
     def _editor_next_auto_text(self, items: list[dict[str, Any]]) -> str:
         """下一次自动存档的大致时间（给人看的字符串，估不出来就空串）。"""

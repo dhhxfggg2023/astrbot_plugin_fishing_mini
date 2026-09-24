@@ -1961,6 +1961,17 @@ async function configKeysCoverage() {
     true);
   check(rowHtml.indexOf('data-act="p:gold"') > 0 && rowHtml.indexOf('data-act="p:data"') > 0,
     "玩家列表每行都有「✏️ 改金币」和「🧰 改数据」两个按钮");
+  /* v1.18.54：玩家页把「插件版本 vs 页面版本」并排显示 ——
+     「点了没反应」最常见的原因是浏览器缓存了旧页面，这里一眼能看出来。 */
+  T.state.pluginVersion = "v1.18.55";
+  const verHtml = T.renderPlayersTab(T.TAB_BY_ID.players);
+  check(verHtml.indexOf("插件 <b>v1.18.55</b>") > 0 && verHtml.indexOf("页面 <b>v1.18.55</b>") > 0,
+    "玩家页显示插件版本与页面版本（一致时打勾）");
+  T.state.pluginVersion = "v1.18.40";
+  const verHtml2 = T.renderPlayersTab(T.TAB_BY_ID.players);
+  check(verHtml2.indexOf("Ctrl+F5") > 0 && verHtml2.indexOf("不一致") > 0,
+    "两版不一致时明确提示「按 Ctrl+F5 强制刷新」");
+  T.state.pluginVersion = "";
   T.state.dataEdit = null;
 
   /* 请求失败时**必须把原因写在面板上**（v1.18.53）：以前 openPlayerData 没兜住

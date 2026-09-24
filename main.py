@@ -3167,6 +3167,12 @@ class FishingPlugin(
 
         任何一项配置写坏都不会导致加载失败——全部有兜底。
         """
+        # ⚠️ 每次重新解析配置都**清空告警去重表**（v1.18.54）：站长改完配置保存时
+        #    插件会走一遍 `_refresh_config`，如果去重表不清，他刚修好的问题、
+        #    或者刚写坏的行，都不会再出现在日志里 —— 排查时只能看到「本项只提示一次」
+        #    却不知道是哪一行。清空之后「保存 -> 看日志」是可靠的自查回路。
+        _TUNABLE_WARNED.clear()
+        _CONTENT_WARNED.clear()
         self._merge_content_defaults()   # 旧配置先补齐新版内容，再解析
         cfg: dict[str, Any] = {}
         for key, default in DEFAULTS.items():

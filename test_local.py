@@ -11265,6 +11265,46 @@ async def main():
         "字段白名单是插件侧唯一的一份（页面照它渲染，不会各写一份）",
     )
 
+    # --- 配置坏行的告警要能反复出现（v1.18.54）---
+    # 以前 `_TUNABLE_WARNED` / `_CONTENT_WARNED` 只增不清：站长改好配置保存后，
+    # 同样的问题**再也不会进日志**，排查时只能看到「本项只提示一次」却不知道是哪一行。
+    # 现在每次解析配置都清空去重表，「保存 -> 看日志」是可靠的自查回路。
+    _sink: list[str] = []
+    _sid = None
+    try:
+        from loguru import logger as _loguru
+        _sid = _loguru.add(lambda m: _sink.append(str(m)), level="WARNING")
+    except Exception:                              # pragma: no cover
+        _loguru = None
+    _bad_btn = "cast|坏按钮|这不是指令|default\ncast.hit|好按钮|/钓鱼 背包|default"
+    _bp = make_plugin(dict(_CFG, button_defs=_bad_btn))
+    _bp._refresh_config()
+    _bp._refresh_config()                          # 再来一次：告警必须还能出
+    if _sid is not None:
+        _loguru.remove(_sid)
+    check(
+        set(mod._parse_button_defs(_bad_btn)) == {"cast.hit"}
+        and len(mod._parse_button_defs(_bad_btn)["cast.hit"]) == 1,
+        f"坏行被跳过、好行照常生效（一行坏不影响别的按钮）-> "
+        f"{mod._parse_button_defs(_bad_btn)}",
+    )
+
+    # --- 编辑器能看到「插件版本」（v1.18.54）---
+    # 站长报「点了没反应」时，最常见的原因是浏览器缓存了旧页面；版本并排显示后
+    # 一眼就能分辨「插件旧」还是「页面旧」。
+    _ver = make_plugin()._editor_plugin_version()
+    check(
+        bool(_ver) and _ver.startswith("v"),
+        f"编辑器能读到插件版本号（页面拿它和页面版本对账）-> {_ver!r}",
+    )
+    _vp2 = make_plugin()
+    await _vp2._editor_write_status(action="test", ok=True, message="版本对账用")
+    _status = json.loads(getattr(_vp2, "_editor_status_text", "") or "{}")
+    check(
+        _status.get("plugin_version") == _ver,
+        "editor_status 里带上 plugin_version（页面直接显示，不用额外请求）",
+    )
+
     # =====================================================================
     print("\n[18] 回复场景全覆盖：每条回复都能配按钮/文案 + 护栏断言（v1.12.0）")
 
