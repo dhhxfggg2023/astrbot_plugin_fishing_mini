@@ -173,6 +173,10 @@ const hookNames = [
   // v1.18.53：改玩家实时数据的面板（字段名单由插件下发，页面只渲染）
   "renderPlayerDataPanel", "playerDataEditsFromPage", "openPlayerData", "submitPlayerData",
   "renderPlayerRow", "playersCommand",
+  // v1.18.56：玩家存档大编辑器（全字段 + 逐条改鱼 + 原始 JSON）
+  "renderPlayerDataTab", "pdState", "pdPlayerOptions", "pdFindField", "pdDraft", "pdSetDraft",
+  "pdFieldControl", "pdFishTable", "pdFishRow", "pdEnumOptions", "loadPlayerFull",
+  "submitPlayerFull", "collectPlayerEdits", "collectFishDrafts", "collectNewFish",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -208,7 +212,7 @@ setTimeout(runAssertions, 120);
 function runAssertions() {
   console.log("\n[1] 启动状态与演示数据");
   check(T.ENV.online === false, "离线预览模式被识别（sdk 为 null）");
-  check(Object.keys(T.TAB_BY_ID).length === 19, "标签页数量 = 19（14 内容表（含大鱼乐）+ 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
+  check(Object.keys(T.TAB_BY_ID).length === 20, "标签页数量 = 20（14 内容表（含大鱼乐）+ 玩家 + 玩家数据 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     Object.keys(T.TAB_BY_ID).join(","));
   check((T.state.data.fish || []).length === 18, "演示鱼池 18 条", (T.state.data.fish || []).length);
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个（离线演示数据，与线上 19 个无关）", (T.state.data.locations || []).length);
@@ -402,8 +406,8 @@ function runAssertions() {
   T.renderTabs();
   const tabsHtml = document.getElementById("tabs").innerHTML;
   check(tabsHtml.indexOf("has-dirty") < 0, "标签栏 HTML 里没有任何 has-dirty 类");
-  check(tabsHtml.split("tab-count").length - 1 === 18,
-    "19 个标签入口都有条目数徽标（14 内容表（含大鱼乐）+ 玩家 + 命令组 + 💬 回复 + 🔎 全部配置键）",
+  check(tabsHtml.split("tab-count").length - 1 === 19,
+    "20 个标签入口都有条目数徽标（14 内容表（含大鱼乐）+ 玩家 + 玩家数据 + 命令组 + 💬 回复 + 🔎 全部配置键）",
     tabsHtml.split("tab-count").length - 1);
   check(tabsHtml.indexOf('data-tab="replies"') > 0, "标签栏里有「💬 回复」入口");
   check(T.TAB_BY_ID.buttons.label.indexOf("原始文本") > 0,
@@ -511,6 +515,11 @@ function runAssertions() {
           "「💬 回复」渲染出卡片视图 + 二级切换", out.length + " 字符");
         check(out.indexOf("rp-side") >= 0 && out.indexOf("👁️ 预览") >= 0,
           "「💬 回复」右侧有常驻预览面板");
+      } else if (t.kind === "playerdata") {
+        // v1.18.56：玩家数据大编辑器（还没选玩家时应该给出引导，不是空白）
+        const out = T.renderPlayerDataTab(t);
+        check(out.indexOf("玩家存档编辑器") >= 0 && out.indexOf("先在上面选一个玩家") >= 0,
+          "「🧰 玩家数据」没选玩家时给引导（不是白屏）", out.length + " 字符");
       } else if (t.kind === "keys") {
         const out = T.renderKeysTab(t);
         check(out.indexOf("<table") >= 0 && out.indexOf("全部配置键") >= 0,
@@ -2030,6 +2039,121 @@ async function configKeysCoverage() {
       subThrew ? String(subThrew.message) : JSON.stringify(sub && sub.message));
     captured.playersFail = null;
     L.state.dataEdit = null;
+  }
+
+  /* ---- v1.18.56：玩家存档大编辑器（全字段 + 逐条改鱼 + 原始 JSON）----
+     字段清单由插件下发（player_full_get 的 groups + enums），页面只渲染。 */
+  {
+    const st = T.pdState();
+    st.user_id = "10001";
+    st.name = "钓鱼佬";
+    st.loaded = true;
+    st.error = "";
+    st.enums = {
+      fish: ["carp", "koi", "kun"], baits: ["worm", "abyss_bait"], items: ["jade_lantern"],
+      rods: ["bamboo", "void_rod"], locations: ["novice", "lake"], titles: ["tycoon"],
+      variants: ["golden", "prismatic"], achievements: ["catch_10"], weather: ["sunny"],
+      collectibles: ["seaweed"], quality: ["凡品", "良品", "精品", "珍品", "绝品", "神品"],
+    };
+    st.groups = [
+      { title: "基础", items: [
+        { key: "user_id", label: "玩家 ID", kind: "readonly", desc: "主键", value: "10001" },
+        { key: "gold", label: "金币", kind: "count", desc: "主货币", value: 1000 },
+        { key: "lottery_loses", label: "连输", kind: "count", desc: "", value: 0 },
+        { key: "luck_charges", label: "手气储备", kind: "ratio", desc: "", value: 0 },
+        { key: "current_location", label: "当前钓点", kind: "text", desc: "", value: "novice", enum: "locations" },
+      ] },
+      { title: "资产", items: [
+        { key: "baits", label: "鱼饵", kind: "map", desc: "", value: { worm: 5 }, enum: "baits" },
+        { key: "rods", label: "鱼竿", kind: "str_list", desc: "", value: ["bamboo"], enum: "rods" },
+        { key: "story", label: "连载进度", kind: "json", desc: "", value: { arc: "", ep: 0 } },
+        { key: "inventory", label: "背包（鱼）", kind: "fish_list", desc: "",
+          value: [{ fish_id: "carp", quality: "精品", variant: "", value: 120,
+                    attrs: { meat: 60, spirit: 55, sheen: 50 }, feed_uses: 1, locked: false }] },
+      ] },
+    ];
+    st.drafts = {};
+    st.fishEdit = {};
+    st.dirty = 0;
+    st.raw_json = '{\n "gold": 1000\n}';
+    st.rawOpen = false;
+
+    const bigHtml = T.renderPlayerDataTab(T.TAB_BY_ID.playerdata);
+    check(bigHtml.indexOf("玩家存档编辑器") > 0 && bigHtml.indexOf("基础（") > 0,
+      "大编辑器渲染出分组与字段", bigHtml.length + " 字符");
+    check(bigHtml.indexOf('data-pd2="基础|gold"') > 0
+      && bigHtml.indexOf('data-pd2add="基础|gold"') > 0,
+      "计数类字段给「输入框 + 设为/加减」两个控件");
+    check(bigHtml.indexOf('data-pd2="基础|current_location"') > 0
+      && bigHtml.indexOf('<option value="lake"') > 0,
+      "有枚举的文本字段渲染成下拉（钓点）");
+    check(bigHtml.indexOf('data-pd2="资产|baits"') > 0
+      && bigHtml.indexOf('data-pd2item="资产|baits"') > 0,
+      "计数表给「整表输入 + 加/删一项」");
+    check(bigHtml.indexOf('data-pd2="资产|story"') > 0 && bigHtml.indexOf("<textarea") > 0,
+      "JSON 字段渲染成可换行的文本域");
+    check(bigHtml.indexOf("原始 JSON（高级）") > 0 && bigHtml.indexOf("展开整份存档 JSON") > 0,
+      "有「原始 JSON」高级折叠区（默认收起）");
+    check(bigHtml.indexOf("🐟") > 0 && bigHtml.indexOf('data-fish="inventory|0"') > 0,
+      "鱼单独成表，每条鱼一行、控件都带 data-fish");
+    check(bigHtml.indexOf('data-new="inventory"') > 0 && bigHtml.indexOf("＋ 加一条") > 0,
+      "鱼表最后一行是「新增一条」（鱼种/品质/异色/三维）");
+    check(bigHtml.indexOf("改前自动存一份档") > 0 && bigHtml.indexOf("整批校验") > 0,
+      "页面上写明安全口径（整批校验 + 改前自动存档）");
+    // readonly 字段不给输入框
+    const roItem = T.pdFindField("基础", "user_id");
+    check(roItem && T.pdFieldControl("基础", roItem).control.indexOf("<input") < 0,
+      "只读字段（玩家 ID）不给输入框");
+
+    // 草稿：改了才计入 dirty，改回原值就清掉
+    T.pdSetDraft("基础", "gold", "2000");
+    check(T.pdState().dirty === 1, "改一个字段 -> dirty=1", T.pdState().dirty);
+    check(T.renderPlayerDataTab(T.TAB_BY_ID.playerdata).indexOf("1 处未保存") > 0,
+      "页面上显示「N 处未保存」");
+    T.pdSetDraft("基础", "gold", "1000");
+    check(T.pdState().dirty === 0, "改回原值 -> dirty 归零（不会白提交）");
+    // 折进 fishEdit 的草稿也算 dirty
+    T.pdState().fishEdit = { "inventory|0": { quality: "神品", recalc: true } };
+    check(T.renderPlayerDataTab(T.TAB_BY_ID.playerdata).indexOf("1 处未保存") > 0,
+      "改鱼也算未保存");
+    T.pdState().fishEdit = {};
+
+    // 收集：草稿 -> edits（页面与插件之间的契约）
+    T.pdSetDraft("基础", "gold", "2000");
+    T.pdSetDraft("基础", "current_location", "lake");
+    T.pdSetDraft("资产|".replace("|", ""), "story", '{"arc":"a","ep":2}');
+    T.pdState().fishEdit = { "inventory|0": { quality: "神品", recalc: true } };
+    const savedQSA2 = documentStub.querySelectorAll;
+    documentStub.querySelectorAll = function (sel) {
+      const s = String(sel);
+      if (s.indexOf("[data-pd2item]") >= 0) return [];
+      return [];
+    };
+    const collected = T.collectPlayerEdits();
+    documentStub.querySelectorAll = savedQSA2;
+    const byKey = {};
+    collected.forEach(function (e) { byKey[e.key] = e; });
+    check(byKey["gold"] && byKey["gold"].value === 2000 && byKey["gold"].mode === "set",
+      "计数草稿收集成 {key,value,mode}", JSON.stringify(byKey["gold"]));
+    check(byKey["current_location"] && byKey["current_location"].value === "lake",
+      "文本/枚举草稿照原样提交");
+    check(byKey["story"] && byKey["story"].value === '{"arc":"a","ep":2}',
+      "JSON 草稿按字符串提交（插件侧解析）");
+    check(byKey["inventory"] && byKey["inventory"].op === "edit"
+      && byKey["inventory"].index === 0 && byKey["inventory"].value.quality === "神品",
+      "鱼的草稿收集成 {key,op:edit,index,value}", JSON.stringify(byKey["inventory"]));
+
+    // 保存要二次确认（写的是真实存档）
+    T.pdState().dirty = 3;
+    check(T.renderPlayerDataTab(T.TAB_BY_ID.playerdata).indexOf('data-act="pd2:save"') > 0,
+      "有「保存修改」按钮");
+    T.pdState().confirm = true;
+    check(T.renderPlayerDataTab(T.TAB_BY_ID.playerdata).indexOf("确认写入（先自动存档）") > 0,
+      "点保存先出二次确认条");
+    T.pdState().confirm = false;
+    T.pdState().drafts = {};
+    T.pdState().fishEdit = {};
+    T.pdState().dirty = 0;
   }
 
   /* 配置面板里「只读」的键仍然只有那 7 个：不能因为加了新功能就多出来

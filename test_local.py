@@ -11306,6 +11306,285 @@ async def main():
     )
 
     # =====================================================================
+    print("\n[10ah] 玩家存档编辑器：全字段 + 逐条改鱼 + 原始 JSON（v1.18.56）")
+    # 站长要的是「能改玩家的所有数据，单独弄一个界面」，并且定了三条：
+    #   鱼能逐条改（鱼种/品质/异色/三维/估值，可增可删）、留原始 JSON 高级区、整批提交。
+    _ep = mod.EDITOR_PLAYER
+    _epp = make_plugin()
+    _epl = mod._default_player("89701")
+    _epl["gold"] = 1000
+    _epl["baits"] = {"worm": 5}
+    _epl["inventory"] = [mod._new_instance("carp", 1.5)]
+    await _epp._save_player(_epl)
+
+    # --- 字段清单：覆盖存档里的每一个键（一个都不能漏）---
+    _specs = {row["key"]: row for row in _ep.field_specs()}
+    check(
+        len(_specs) >= 60,
+        f"字段清单有 {len(_specs)} 个字段（覆盖存档里的全部键，不是只挑几个）",
+    )
+    _default_keys = set(mod._default_player("x").keys())
+    _missing = sorted(_default_keys - set(_specs))
+    check(
+        not _missing,
+        f"默认存档里的每个键都在清单里（漏了：{_missing or '无'}）",
+    )
+    check(
+        _specs["user_id"]["kind"] == "readonly" and _specs["gold"]["kind"] == "count"
+        and _specs["inventory"]["kind"] == "fish_list"
+        and _specs["baits"]["kind"] == "map"
+        and _specs["rods"]["kind"] == "str_list"
+        and _specs["story"]["kind"] == "json",
+        "每类字段的控件类型都标对了（只读/计数/鱼表/计数表/列表/JSON）",
+    )
+    check(
+        all(row.get("group") for row in _specs.values())
+        and len({row["group"] for row in _specs.values()}) >= 8,
+        f"字段分成 {len({row['group'] for row in _specs.values()})} 组（页面上就是分区）",
+    )
+
+    # --- 枚举表：页面拿它做下拉，后端拿它校验 ---
+    _enum = _ep.enum_tables(_epp)
+    check(
+        len(_enum["fish"]) >= 200 and len(_enum["baits"]) >= 8
+        and len(_enum["items"]) >= 10 and len(_enum["rods"]) == 8
+        and len(_enum["locations"]) == 19 and len(_enum["titles"]) >= 5
+        and len(_enum["variants"]) >= 5 and len(_enum["achievements"]) >= 40,
+        f"枚举表齐全 -> 鱼 {len(_enum['fish'])}｜鱼饵 {len(_enum['baits'])}｜"
+        f"道具 {len(_enum['items'])}｜竿 {len(_enum['rods'])}｜钓点 {len(_enum['locations'])}｜"
+        f"称号 {len(_enum['titles'])}｜异色 {len(_enum['variants'])}｜成就 {len(_enum['achievements'])}",
+    )
+    check(
+        _enum["quality"] == list(mod.QUALITY_ORDER),
+        f"个体品质档来自配置 -> {_enum['quality']}",
+    )
+
+    # --- 读：接口给的分组 + 原始 JSON ---
+    _full = json_of(await _epp.editor_api_players(
+        {"action": "player_full_get", "user_id": "89701"}
+    ))
+    check(
+        _full.get("status") == "ok" and len(_full.get("groups") or []) >= 8,
+        f"player_full_get 给出 {len(_full.get('groups') or [])} 个分组",
+    )
+    _flat = {i["key"]: i for g in _full["groups"] for i in g["items"]}
+    check(
+        _flat["gold"]["value"] == 1000 and _flat["inventory"]["kind"] == "fish_list",
+        f"当前值读对了（金币 {_flat['gold']['value']}）",
+    )
+    check(
+        json.loads(_full["raw_json"])["gold"] == 1000,
+        "原始 JSON 是能解析的整份存档",
+    )
+    # 存档里有、清单里没登记的键也不能丢（落到「其它字段」兜底桶）
+    _epl2 = mod._default_player("89702")
+    _epl2["未来新字段"] = {"a": 1}
+    await _epp._save_player(_epl2)
+    _full2 = json_of(await _epp.editor_api_players(
+        {"action": "player_full_get", "user_id": "89702"}
+    ))
+    _other = [i for g in _full2["groups"] if g["title"] == "其它字段" for i in g["items"]]
+    check(
+        any(i["key"] == "未来新字段" for i in _other),
+        f"没登记过的键也照常显示（兜底桶「其它字段」）-> {[i['key'] for i in _other]}",
+    )
+
+    # --- 写：一整批（计数 / 计数表 / 列表 / 鱼 / 关联字段）---
+    _ok_full, _msg_full = await _epp._editor_save_player_full({
+        "user_id": "89701", "confirm": True,
+        "edits": [
+            {"key": "gold", "value": 250000},
+            {"key": "total_caught", "value": 10, "mode": "add"},
+            {"key": "stamina", "value": 77},
+            {"key": "baits", "name": "abyss_bait", "value": 30, "mode": "add"},
+            {"key": "items", "name": "jade_lantern", "value": 2},
+            {"key": "rods", "item": "void_rod", "mode": "add"},
+            {"key": "equipped_rod", "value": "void_rod"},
+            {"key": "locations", "full": "novice,lake,dragon_palace"},
+            {"key": "current_location", "value": "dragon_palace"},
+            {"key": "achievements", "item": "catch_10"},
+            {"key": "luck_charges", "value": 0.25},
+            {"key": "buff_casts_left", "value": 15},
+            {"key": "buff_quality", "value": 0.35},
+            {"key": "inventory", "op": "edit", "index": 0,
+             "value": {"fish_id": "kun", "quality": "绝品", "variant": "prismatic",
+                       "attrs": {"meat": 95, "spirit": 88, "sheen": 90}, "recalc": True}},
+            {"key": "aquarium", "op": "add",
+             "value": {"fish_id": "dragon_koi", "quality": "神品", "attrs": "99,99,99"}},
+        ],
+    })
+    _epl = await _epp._load_player("89701")
+    check(
+        _ok_full and _epl["gold"] == 250000 and _epl["total_caught"] == 10
+        and _epl["stamina"] == 77 and _epl["baits"]["abyss_bait"] == 30
+        and _epl["items"]["jade_lantern"] == 2 and "void_rod" in _epl["rods"]
+        and _epl["equipped_rod"] == "void_rod"
+        and _epl["current_location"] == "dragon_palace"
+        and _epl["achievements"] == ["catch_10"]
+        and abs(mod._safe_number(_epl["buff_quality"], 0) - 0.35) < 1e-9,
+        f"一次提交十几项全部生效 -> {_msg_full[:70]}",
+    )
+    _fish0 = _epl["inventory"][0]
+    check(
+        _fish0["fish_id"] == "kun" and _fish0["quality"] == "绝品"
+        and _fish0.get("variant") == "prismatic"
+        and _fish0["attrs"] == {"meat": 95, "spirit": 88, "sheen": 90},
+        f"逐条改鱼：鱼种/品质/异色/三维都改到了 -> "
+        f"{_fish0['fish_id']}/{_fish0['quality']}/{_fish0.get('variant')}",
+    )
+    check(
+        _fish0["value"] > 10000,
+        f"估值按**新的**三维+品质重算过（不是随机三维那会儿的旧值）-> {_fish0['value']}",
+    )
+    _new_fish = _epl["aquarium"][0]
+    check(
+        _new_fish["fish_id"] == "dragon_koi" and _new_fish["quality"] == "神品"
+        and _new_fish["attrs"] == {"meat": 99, "spirit": 99, "sheen": 99},
+        f"新增一条鱼也能带品质与三维 -> {_new_fish['fish_id']}/{_new_fish['quality']}",
+    )
+    check(
+        _new_fish["value"] == mod.CALC._compute_value(
+            mod.CALC._fish_value(mod.FISH_BY_ID["dragon_koi"]),
+            _new_fish["attrs"], _new_fish["quality_mult"],
+            _new_fish["value_variance"], _new_fish["gear_mult"],
+        ),
+        "新增鱼的估值 == 按它现在的三维/品质算出来的值（一元不差）",
+    )
+    check(
+        _epl["total_caught"] == 10 and _epl["inventory"],
+        "改玩家的资产没有连带清空别的字段（整份存档照常可读）",
+    )
+
+    # --- 坏输入：整批拒绝、一个字都不改 ---
+    _before_full = await _epp._load_player("89701")
+    _bad_full = [
+        [{"key": "gold", "value": 10 ** 12}],
+        [{"key": "inventory", "op": "edit", "index": 0, "value": {"fish_id": "不存在的鱼"}}],
+        [{"key": "inventory", "op": "edit", "index": 0, "value": {"variant": "不存在异色"}}],
+        [{"key": "rods", "item": "不存在的竿"}],
+        [{"key": "user_id", "value": "别人"}],
+        [{"key": "inventory", "op": "remove", "index": 99}],
+        [{"key": "market", "value": "{不是 JSON"}],
+        [{"key": "data_version", "value": "abc"}],
+        [{"key": "current_location", "value": "不存在的地方"}],
+        [{"key": "other_new_key", "value": "x" * 500}],
+    ]
+    _bad_ok = True
+    for _case in _bad_full:
+        _ok_c, _msg_c = await _epp._editor_save_player_full(
+            {"user_id": "89701", "confirm": True, "edits": _case}
+        )
+        if _ok_c:
+            _bad_ok = False
+            check(False, f"坏输入应当被拒 -> {_case} 竟然通过了")
+    if _bad_ok:
+        check(True, f"{len(_bad_full)} 种坏输入全部被拒（含不存在的鱼/异色/鱼竿/钓点）")
+    check(
+        (await _epp._load_player("89701")) == _before_full,
+        "被拒的批次一个字都没改",
+    )
+    _ok_nc, _msg_nc = await _epp._editor_save_player_full(
+        {"user_id": "89701", "edits": [{"key": "gold", "value": 1}]}
+    )
+    check(not _ok_nc and "再确认一次" in _msg_nc, "缺二次确认就拒绝")
+
+    # --- 原始 JSON：整份替换，但主键被保护 ---
+    _raw_src = dict(await _epp._load_player("89701"))
+    _raw_src["gold"] = 777
+    _raw_src["user_id"] = "想改主键"
+    _ok_raw, _msg_raw = await _epp._editor_save_player_full({
+        "user_id": "89701", "confirm": True,
+        "edits": [{"raw": json.dumps(_raw_src, ensure_ascii=False)}],
+    })
+    _after_raw = await _epp._load_player("89701")
+    check(
+        _ok_raw and _after_raw["gold"] == 777 and _after_raw["user_id"] == "89701",
+        f"原始 JSON 整份替换生效，user_id 被保护 -> {_msg_raw[:40]}",
+    )
+    _ok_bad_raw, _msg_bad_raw = await _epp._editor_save_player_full({
+        "user_id": "89701", "confirm": True, "edits": [{"raw": "{坏的 JSON"}],
+    })
+    check(
+        not _ok_bad_raw and "解析失败" in _msg_bad_raw,
+        f"坏 JSON 被拒并说清原因 -> {_msg_bad_raw[:36]}",
+    )
+
+    # --- 存档内玩家也能用同一个界面改 ---
+    # ⚠️ 自己新建一份**专用**快照再改（不能用 _snapshot("manual")：它会 dump 全部玩家，
+    #    而测试环境里前面几十个用例留下的玩家未必都读得出来 —— 89701 可能不在里面）。
+    # ⚠️ KV 里存的是**字符串**（信封 JSON 原样文本），而 write_snapshot 只认 dict：
+    #    直接喂字符串会把玩家**静默丢掉**（快照 0 人）。这里先自己解析成 dict。
+    _snap_raw = json.loads(
+        await _epp.get_kv_data(_epp._kv_key("89701"), None)
+    )
+    check(
+        isinstance(_snap_raw, dict) and _snap_raw.get("user_id") == "89701",
+        f"KV 里的玩家数据能解析成信封 dict（{len(_snap_raw)} 个键）",
+    )
+    _snap_path, _snap_payload = _epp.backup_store.write_snapshot(
+        "manual", {"89701": _snap_raw}, note="玩家编辑器测试"
+    )
+    check(
+        "89701" in (_snap_payload.get("players") or {}),
+        f"新建的专用快照里确实有这个玩家（{len(_snap_payload.get('players') or {})} 人）",
+    )
+    _snap_name = _snap_path.name
+    _ok_snap, _msg_snap = await _epp._editor_save_player_full({
+        "user_id": "89701", "snapshot": _snap_name, "confirm": True,
+        "edits": [{"key": "gold", "value": 424242}],
+    })
+    _snap_view = json_of(await _epp.editor_api_players(
+        {"action": "player_full_get", "user_id": "89701", "snapshot": _snap_name}
+    ))
+    _snap_gold = [
+        i for g in _snap_view.get("groups", []) for i in g["items"] if i["key"] == "gold"
+    ][0] if _snap_view.get("groups") else {"value": None}
+    check(
+        _ok_snap and _snap_gold["value"] == 424242,
+        f"改**存档里**的玩家走同一套白名单 -> {_msg_snap[:44]}",
+    )
+    check(
+        (await _epp._load_player("89701"))["gold"] == 777,
+        "改存档不影响实时数据（要「恢复」才生效）",
+    )
+    # --- 两个真 bug 的回归（v1.18.56 顺手修掉的）---
+    # ① `find_snapshot("xxx.json")` 会**先撞上同名的 auto 档**（跨目录按文件名找，
+    #    且 kind 顺序是 auto 在前）——「改存档里的玩家」曾经静默改到自动档上。
+    # ② 往存档写回时拿 "manual/xxx.json" 去 path_of 拼，会写到不存在的目录 / 直接失败。
+    _twin_ts = _snap_path.stat().st_mtime
+    _twins = _epp.backup_store.write_snapshot(
+        "auto", {"89701": _snap_raw}, note="同名兄弟", now=_twin_ts
+    )
+    _twin_path = _twins[0]
+    # 解析结果必须指向 **manual/**（而不是撞上的那份 auto）
+    _resolved = _epp._resolve_snapshot_ref(_snap_name)
+    check(
+        _resolved == f"manual/{_snap_name}",
+        f"纯文件名解析成 manual/xxx（不去撞同名 auto）-> {_resolved!r}"
+        f"（对照 auto 档：{_twin_path.parent.name}/{_twin_path.name}）",
+    )
+    _via_path, _via_msg = await _epp._editor_save_player_full({
+        "user_id": "89701", "snapshot": _snap_name, "confirm": True,
+        "edits": [{"key": "gold", "value": 555555}],
+    })
+    _via_snap = _epp.backup_store.load_snapshot(f"manual/{_snap_name}")
+    _via_gold = _epp._unwrap_player_dict(
+        ((_via_snap or {}).get("players") or {}).get("89701") or {}
+    )
+    check(
+        _via_path and _via_gold and _via_gold.get("gold") == 555555,
+        f"只给纯文件名时改的也是**手动档**（不是同名自动档）-> {_via_msg[:44]}",
+    )
+    check(
+        _epp._resolve_snapshot_ref(f"manual/{_snap_name}") == f"manual/{_snap_name}",
+        "已经带目录的相对路径原样保留",
+    )
+    check(
+        _epp._snapshot_file_name(f"{_snap_name}（1 名玩家）") == _snap_name,
+        "「给人看的说明」（带玩家数）也能取出纯文件名",
+    )
+
+    # =====================================================================
     print("\n[18] 回复场景全覆盖：每条回复都能配按钮/文案 + 护栏断言（v1.12.0）")
 
     # --- (1) 场景表 ↔ 文案表 一一对应：少一个就说明有人新增回复忘了登记 ---

@@ -3564,6 +3564,13 @@ table.grid td.actions .btn { vertical-align: middle; }
       hint: "查看在线玩家，或改某份存档里的玩家金币"
     },
     {
+      id: "playerdata",
+      label: "🧰 玩家数据",
+      title: "玩家存档编辑器",
+      kind: "playerdata",
+      hint: "改玩家的**全部数据**：金币/资产/装备/体力/手气/每日额度/订单/图鉴/鱼（可逐条改）/原始 JSON"
+    },
+    {
       id: "aliases",
       label: "⌨️ 命令",
       title: "命令别名",
@@ -3648,6 +3655,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     goldEdit: null,             // { user_id, value } 正在改的金币
     goldConfirm: null,          // { user_id, value, mode } 二次确认中
     pluginVersion: "",          // 插件版本（来自 editor_status，用于和页面版本对账）
+    // ---- 🧰 玩家数据：独立的大编辑器（v1.18.56）----
+    playerData: null,
     // ---- 改玩家数据（v1.18.53）：金币之外的实时数据也能增/减/改 ----
     // { user_id, name, mode2:"live"|"snapshot", snapshot, mode:"add"|"set",
     //   loaded, error, sections, clearArm }
@@ -5521,6 +5530,565 @@ table.grid td.actions .btn { vertical-align: middle; }
     return { edits: edits, error: bad, mode: mode };
   }
 
+  /* ===========================================================================
+     10b-b. 🧰 玩家数据：独立的大编辑器（v1.18.56）
+
+     与「👤 玩家」页的区别：那个页是列表 + 快捷改金币；这个页是**一个玩家的全部数据**。
+     字段清单**由插件下发**（player_full_get 的 groups + enums），页面只负责渲染 ——
+     插件以后加字段，这里自动多一行/多一列，不用改两处。
+
+     三种编辑形态：
+       · 普通字段：一行一个输入框（计数 / 比例 / 文本 / 下拉枚举 / JSON）
+       · 计数表与列表：加一项 / 减一项 / 整表改成逗号分隔；（鱼饵、道具、杂物、变异、鱼竿、钓点、称号、成就）
+       · 鱼：每条一行的表格，鱼种/品质/异色/三维/投喂/锁定都能改，可加一条、删一条、整缸清空
+     还有一个「原始 JSON」折叠区：能看整份存档，也能整份贴回去。
+     =========================================================================== */
+  function pdState() {
+    if (!state.playerData) {
+      state.playerData = {
+        query: "", user_id: "", name: "", raw_json: "", rawOpen: false,
+        loaded: false, busy: false, error: "", groups: [], enums: {},
+        drafts: {},        // "groupKey|fieldKey" -> 字符串（输入框里的草稿）
+        dirty: 0,          // 草稿条数（用来提示「有未保存的修改」）
+        confirm: false,    // 二次确认
+        lastResult: "",
+        fishEdit: {},      // "list|index" -> 该条鱼的草稿对象（局部覆盖）
+      };
+    }
+    return state.playerData;
+  }
+
+  /** 只重绘「未保存 N 处」与保存按钮，避免每敲一个字就整页重绘（会丢焦点）。 */
+  function renderPlayerDataDirty() {
+    var st = pdState();
+    var chip = document.querySelector(".card-head .stat-chip.pd-dirty");
+    if (chip) {
+      chip.textContent = st.dirty ? "● " + st.dirty + " 处未保存" : "";
+      chip.style.display = st.dirty ? "" : "none";
+    }
+    var btns = document.querySelectorAll('[data-act="pd2:save"]');
+    Array.prototype.slice.call(btns).forEach(function (b) { b.disabled = !st.dirty; });
+  }
+
+  /** 一次性的确认条（返回 true = 用户点了确定）。 */
+  function confirmStrip(text) {
+    try {
+      return window.confirm(String(text || "确定吗？"));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 读一个玩家的全部数据（插件下发的分组 + 枚举）。任何失败都写进面板，不静默。 */
+  async function loadPlayerFull(userId) {
+    var st = pdState();
+    st.user_id = text(userId);
+    st.loaded = false;
+    st.error = "";
+    st.drafts = {};
+    st.fishEdit = {};
+    st.dirty = 0;
+    st.confirm = false;
+    render();
+    if (!ENV.online) {
+      st.loaded = true;
+      st.error = "离线预览：读不到玩家数据（在插件里打开页面才有）";
+      render();
+      return;
+    }
+    var res;
+    try {
+      res = await playersCommand({ action: "player_full_get", user_id: st.user_id });
+    } catch (e) {
+      st.loaded = true;
+      st.error = "读取失败：" + describeError(e, "players");
+      render();
+      return;
+    }
+    var body = (res && res.detail) || null;
+    if (!(res && res.accepted) || !body || !body.groups) {
+      st.loaded = true;
+      st.error = (res && res.message) || "读取失败（插件返回的数据不完整）";
+      render();
+      return;
+    }
+    st.loaded = true;
+    st.name = text(body.name);
+    st.groups = body.groups || [];
+    st.enums = body.enums || {};
+    st.raw_json = text(body.raw_json);
+    st.error = "";
+    render();
+  }
+
+  /** 收集输入框里的草稿 -> 插件的 edits 列表。 */
+  function collectPlayerEdits() {
+    var st = pdState();
+    var edits = [];
+    Object.keys(st.drafts).forEach(function (dk) {
+      var parts = dk.split("|");
+      var gtitle = parts[0];
+      var key = parts.slice(1).join("|");
+      var item = pdFindField(gtitle, key);
+      if (!item) return;
+      var raw = st.drafts[dk];
+      var value = raw;
+      if (item.kind === "count" || item.kind === "int") {
+        var n = Number(raw);
+        if (raw !== "" && (!isFinite(n) || Math.floor(n) !== Math.floor(n))) return;
+        value = raw === "" ? 0 : Number(raw);
+      } else if (item.kind === "ratio") {
+        value = Number(raw);
+      } else if (item.kind === "json") {
+        value = raw;                       // 插件侧会解析
+      } else if (item.kind === "map" || item.kind === "map_int") {
+        // 逗号分隔的整表；空的 name:count 会被插件侧忽略
+        var table = {};
+        String(raw).split(",").forEach(function (chunk) {
+          var t = chunk.trim();
+          if (!t) return;
+          var idx = t.lastIndexOf(":");
+          if (idx > 0) {
+            var name = t.slice(0, idx).trim();
+            var cnt = Number(t.slice(idx + 1).trim());
+            if (name && isFinite(cnt)) table[name] = cnt;
+          } else {
+            table[t] = 1;
+          }
+        });
+        edits.push({ key: key, full: table });
+        return;
+      } else if (item.kind === "str_list") {
+        var list = String(raw).split(",").map(function (x) { return x.trim(); })
+          .filter(function (x) { return !!x; });
+        edits.push({ key: key, full: list });
+        return;
+      }
+      var modeSel = document.querySelector('[data-pd2add="' + dk.replace(/"/g, '\\"') + '"]');
+      var mode = modeSel ? String(modeSel.value || "set") : "set";
+      edits.push({ key: key, value: value, mode: mode });
+    });
+    // 计数表 / 列表的「加一项 / 删一项」
+    Array.prototype.slice.call(document.querySelectorAll("[data-pd2item]")).forEach(function (input) {
+      var dk = String(input.getAttribute("data-pd2item") || "");
+      var item2 = String(input.value || "").trim();
+      if (!item2) return;
+      var modeBox = document.querySelector('[data-pd2mode="' + dk.replace(/"/g, '\\"') + '"]');
+      var mode2 = modeBox ? String(modeBox.value || "add") : "add";
+      var key2 = dk.split("|").slice(1).join("|");
+      edits.push({ key: key2, item: item2, mode: mode2 });
+    });
+    // 鱼的改动
+    Object.keys(st.fishEdit).forEach(function (ek) {
+      var idx = ek.lastIndexOf("|");
+      var listKey = ek.slice(0, idx);
+      var index = Number(ek.slice(idx + 1));
+      edits.push({ key: listKey, op: "edit", index: index, value: st.fishEdit[ek] });
+    });
+    return edits;
+  }
+
+  /** 鱼表格里改过的输入 -> 草稿（提交前调用）。 */
+  function collectFishDrafts() {
+    var st = pdState();
+    Array.prototype.slice.call(document.querySelectorAll("[data-fish]")).forEach(function (input) {
+      var ek = String(input.getAttribute("data-fish") || "");
+      var key = String(input.getAttribute("data-key") || "");
+      if (!ek || !key) return;
+      var val = input.type === "checkbox" ? !!input.checked : String(input.value || "").trim();
+      if (input.type !== "checkbox" && val === "") return;
+      var slot = st.fishEdit[ek] || (st.fishEdit[ek] = {});
+      if (key === "meat" || key === "spirit" || key === "sheen") {
+        var attrs = slot.attrs && typeof slot.attrs === "object" ? slot.attrs : {};
+        var n = Number(val);
+        if (isFinite(n)) attrs[key] = Math.max(1, Math.min(100, Math.round(n)));
+        slot.attrs = attrs;
+      } else {
+        slot[key] = val;
+      }
+      slot.recalc = true;      // 改了三维/品质就按新值重算估值
+    });
+    st.dirty = Object.keys(st.drafts).length + Object.keys(st.fishEdit).length;
+  }
+
+  /** 新增那条鱼：把一行输入收成一个对象。 */
+  function collectNewFish(listKey) {
+    var out = { attrs: {} };
+    Array.prototype.slice.call(document.querySelectorAll('[data-new="' + listKey + '"]')).forEach(function (input) {
+      var key = String(input.getAttribute("data-key") || "");
+      var val = String(input.value || "").trim();
+      if (key === "meat" || key === "spirit" || key === "sheen") {
+        if (val !== "" && isFinite(Number(val))) out.attrs[key] = Number(val);
+        return;
+      }
+      if (val) out[key] = val;
+    });
+    if (!Object.keys(out.attrs).length) delete out.attrs;
+    return out;
+  }
+
+  /** 提交（插件侧还会要 confirm + 改前自动存档）。 */
+  async function submitPlayerFull(edits) {
+    var st = pdState();
+    if (!st.user_id) return { ok: false, message: "还没选玩家" };
+    if (!ENV.online) return { ok: false, message: "离线预览：不会真正改玩家数据" };
+    var res;
+    try {
+      res = await playersCommand({
+        action: "player_full_set", user_id: st.user_id, edits: edits, confirm: true,
+      });
+    } catch (e) {
+      var why = "提交失败：" + describeError(e, "players");
+      st.lastResult = why;
+      toast("err", "修改没成功", why);
+      render();
+      return { ok: false, message: why };
+    }
+    if (res && res.accepted) {
+      st.lastResult = (res.message || "已写入").slice(0, 400);
+      toast("ok", "已写入玩家数据", st.lastResult.slice(0, 160));
+      await loadPlayerFull(st.user_id);
+      fetchPlayers(false).then(function () { render(); });
+    } else {
+      st.lastResult = (res && res.message) || "未知原因";
+      toast("err", "修改没成功", st.lastResult.slice(0, 160));
+      render();
+    }
+    return { ok: !!(res && res.accepted), message: (res && res.message) || "" };
+  }
+
+  /** 玩家下拉选项（来自实时玩家列表；也允许手填 ID）。 */
+  function pdPlayerOptions() {
+    var rows = (state.playersList || []).slice(0, 400);
+    return rows.map(function (r) {
+      return { id: text(r.user_id), name: text(r.name), gold: num(r.gold, 0) };
+    });
+  }
+
+  function pdFindField(groupTitle, key) {
+    var groups = pdState().groups || [];
+    for (var i = 0; i < groups.length; i++) {
+      if (groupTitle && groups[i].title !== groupTitle) continue;
+      var items = groups[i].items || [];
+      for (var j = 0; j < items.length; j++) {
+        if (items[j].key === key) return items[j];
+      }
+    }
+    return null;
+  }
+
+  /** 草稿值（没改过就显示插件给的原值）。 */
+  function pdDraft(gtitle, item) {
+    var st = pdState();
+    var dk = gtitle + "|" + item.key;
+    if (Object.prototype.hasOwnProperty.call(st.drafts, dk)) return st.drafts[dk];
+    var v = item.value;
+    if (v === null || v === undefined) return "";
+    if (typeof v === "object") return JSON.stringify(v, null, 1);
+    return String(v);
+  }
+
+  function pdSetDraft(gtitle, key, value) {
+    var st = pdState();
+    var dk = gtitle + "|" + key;
+    var item = pdFindField(gtitle, key);
+    var orig = item ? item.value : undefined;
+    var nowText = orig === null || orig === undefined ? ""
+      : (typeof orig === "object" ? JSON.stringify(orig, null, 1) : String(orig));
+    if (String(value) === nowText) delete st.drafts[dk];
+    else st.drafts[dk] = String(value);
+    st.dirty = Object.keys(st.drafts).length + pdFishDirtyCount();
+    st.confirm = false;
+  }
+
+  function pdFishDirtyCount() {
+    var st = pdState();
+    return Object.keys(st.fishEdit || {}).length;
+  }
+
+  function pdEnumOptions(enumKey, current) {
+    var list = (pdState().enums || {})[enumKey] || [];
+    var html = '<option value="">（不设）</option>';
+    var found = false;
+    list.forEach(function (id) {
+      var sel = String(current) === String(id);
+      if (sel) found = true;
+      html += '<option value="' + esc(id) + '"' + (sel ? " selected" : "") + ">" + esc(id) + "</option>";
+    });
+    if (current && !found) {
+      html += '<option value="' + esc(current) + '" selected>' + esc(current) + "（当前值，不在枚举表里）</option>";
+    }
+    return html;
+  }
+
+  /* ---- 鱼：一条鱼一行，可改鱼种/品质/异色/三维/投喂/锁定 ---- */
+  function pdFishRow(listKey, index, fish) {
+    var st = pdState();
+    var ek = listKey + "|" + index;
+    var d = st.fishEdit[ek] || {};
+    function val(key, fallback) {
+      return Object.prototype.hasOwnProperty.call(d, key) ? d[key] : (fish[key] === undefined ? fallback : fish[key]);
+    }
+    var attrs = val("attrs", fish.attrs) || {};
+    if (typeof attrs === "string") attrs = { meat: attrs };
+    var quality = fish.quality || "";
+    var variant = fish.variant || "";
+    var rows = "";
+    rows += "<tr>" +
+      '<td data-label="鱼种"><select class="cell-input" data-fish="' + esc(ek) + '" data-key="fish_id">' +
+      pdEnumOptions("fish", fish.fish_id) + "</select></td>" +
+      '<td data-label="个体品质"><select class="cell-input" data-fish="' + esc(ek) + '" data-key="quality">' +
+      '<option value="">（不改）</option>' +
+      ((pdState().enums || {}).quality || []).map(function (q) {
+        return '<option value="' + esc(q) + '"' + (String(val("quality", quality)) === q ? " selected" : "") + ">" + esc(q) + "</option>";
+      }).join("") + "</select></td>" +
+      '<td data-label="异色"><select class="cell-input" data-fish="' + esc(ek) + '" data-key="variant">' +
+      '<option value=""' + (String(val("variant", variant)) === "" ? " selected" : "") + ">无</option>" +
+      ((pdState().enums || {}).variants || []).map(function (v) {
+        return '<option value="' + esc(v) + '"' + (String(val("variant", variant)) === v ? " selected" : "") + ">" + esc(v) + "</option>";
+      }).join("") + "</select></td>" +
+      '<td data-label="肉质"><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" ' +
+      'data-fish="' + esc(ek) + '" data-key="meat" value="' + esc(attrs.meat === undefined ? "" : attrs.meat) + '" /></td>' +
+      '<td data-label="灵性"><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" ' +
+      'data-fish="' + esc(ek) + '" data-key="spirit" value="' + esc(attrs.spirit === undefined ? "" : attrs.spirit) + '" /></td>' +
+      '<td data-label="光泽"><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" ' +
+      'data-fish="' + esc(ek) + '" data-key="sheen" value="' + esc(attrs.sheen === undefined ? "" : attrs.sheen) + '" /></td>' +
+      '<td data-label="投喂"><input class="cell-input mono" style="width:64px" type="number" min="0" ' +
+      'data-fish="' + esc(ek) + '" data-key="feed_uses" value="' + esc(val("feed_uses", fish.feed_uses || 0)) + '" /></td>' +
+      '<td data-label="锁定"><input type="checkbox" data-fish="' + esc(ek) + '" data-key="locked"' +
+      (val("locked", !!fish.locked) ? " checked" : "") + " /></td>" +
+      '<td class="num" data-label="估值">' + esc(fmtNum(fish.value || 0)) +
+      (Object.keys(d).length ? ' <span class="hint faint">（保存后重算）</span>' : "") + "</td>" +
+      '<td data-label="操作"><button class="btn btn-sm btn-danger" data-act="pd2:fishDel" data-list="' +
+      esc(listKey) + '" data-index="' + index + '">🗑 删</button></td>' +
+      "</tr>";
+    return rows;
+  }
+
+  function pdFishTable(listKey, label, list) {
+    var html = '<div class="table-wrap" style="margin-bottom:8px"><table class="grid" style="min-width:900px"><thead><tr>' +
+      "<th>" + esc(label) + "（" + list.length + " 条）</th><th>个体品质</th><th>异色</th>" +
+      "<th>肉质</th><th>灵性</th><th>光泽</th><th>投喂</th><th>锁定</th><th>估值</th><th>操作</th>" +
+      "</tr></thead><tbody>";
+    if (!list.length) {
+      html += '<tr><td colspan="10" class="faint">（是空的）</td></tr>';
+    }
+    list.forEach(function (fish, index) {
+      html += pdFishRow(listKey, index, fish || {});
+    });
+    // 新增一条：鱼种 + 品质 + 三维（其余按代码的默认值造）
+    html += '<tr><td data-label="新增">' +
+      '<select class="cell-input" data-new="' + esc(listKey) + '" data-key="fish_id">' +
+      pdEnumOptions("fish", "") + "</select></td>" +
+      '<td data-label="品质"><select class="cell-input" data-new="' + esc(listKey) + '" data-key="quality">' +
+      ((pdState().enums || {}).quality || []).map(function (q) {
+        return '<option value="' + esc(q) + '">' + esc(q) + "</option>";
+      }).join("") + "</select></td>" +
+      '<td data-label="异色"><select class="cell-input" data-new="' + esc(listKey) + '" data-key="variant">' +
+      '<option value="">无</option>' +
+      ((pdState().enums || {}).variants || []).map(function (v) {
+        return '<option value="' + esc(v) + '">' + esc(v) + "</option>";
+      }).join("") + "</select></td>" +
+      '<td><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" data-new="' +
+      esc(listKey) + '" data-key="meat" placeholder="肉" /></td>' +
+      '<td><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" data-new="' +
+      esc(listKey) + '" data-key="spirit" placeholder="灵" /></td>' +
+      '<td><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" data-new="' +
+      esc(listKey) + '" data-key="sheen" placeholder="光" /></td>' +
+      "<td></td><td></td>" +
+      '<td data-label=""><button class="btn btn-sm btn-primary" data-act="pd2:fishAdd" data-list="' +
+      esc(listKey) + '">＋ 加一条</button></td>' +
+      '<td data-label=""><button class="btn btn-sm btn-danger" data-act="pd2:fishClear" data-list="' +
+      esc(listKey) + '">清空</button></td></tr>';
+    html += "</tbody></table></div>";
+    return html;
+  }
+
+  /** 一个普通字段的输出控件（按 kind 选控件）。 */
+  function pdFieldControl(gtitle, item) {
+    var st = pdState();
+    var dk = gtitle + "|" + item.key;
+    var fire = ' data-pd2="' + esc(dk) + '"';
+    var dirty = Object.prototype.hasOwnProperty.call(st.drafts, dk);
+    var mark = dirty ? ' <span class="hint" style="color:var(--warn)">●</span>' : "";
+    var kind = item.kind;
+    if (kind === "readonly") {
+      return { control: '<span class="faint mono">' + esc(String(item.value === undefined ? "—" : item.value)) + "</span>", mark: "" };
+    }
+    if (kind === "fish_list") {
+      return {
+        control: '<span class="hint faint">见下面那张表（' +
+          ((item.value || []).length) + " 条）</span>", mark: mark,
+      };
+    }
+    if (kind === "map" || kind === "str_list" || kind === "map_int") {
+      var cur = item.value;
+      var shown = "";
+      if (kind === "map" || kind === "map_int") {
+        shown = Object.keys(cur || {}).map(function (k) { return k + ":" + cur[k]; }).join(", ");
+      } else {
+        shown = (cur || []).join(", ");
+      }
+      return {
+        control: '<input class="cell-input mono" style="min-width:260px" type="text"' + fire +
+          ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(shown || "（空）") + '" />' +
+          '<div class="hint faint">逗号分隔；也可只写一项来增/删：' +
+          '<input class="cell-input mono" style="width:150px" type="text" data-pd2item="' + esc(dk) + '" placeholder="name" />' +
+          '<select class="cell-input" style="width:96px" data-pd2mode="' + esc(dk) + '">' +
+          '<option value="add">加一项</option><option value="remove">删一项</option></select></div>',
+        mark: mark,
+      };
+    }
+    if (kind === "json") {
+      return {
+        control: '<textarea class="cell-input is-multiline" rows="3" style="min-width:320px"' + fire + ">" +
+          esc(pdDraft(gtitle, item)) + "</textarea>",
+        mark: mark,
+      };
+    }
+    if (kind === "count" || kind === "int") {
+      return {
+        control: '<input class="cell-input mono" style="width:150px" type="number" step="1"' + fire +
+          ' value="' + esc(pdDraft(gtitle, item)) + '" />' +
+          '<select class="cell-input" style="width:96px" data-pd2add="' + esc(dk) + '">' +
+          '<option value="set">设为</option><option value="add">加减</option></select>',
+        mark: mark,
+      };
+    }
+    if (kind === "ratio") {
+      return {
+        control: '<input class="cell-input mono" style="width:130px" type="number" step="0.01"' + fire +
+          ' value="' + esc(pdDraft(gtitle, item)) + '" />',
+        mark: mark,
+      };
+    }
+    // text：有 enum 就下拉，否则输入框
+    if (item.enum) {
+      return {
+        control: '<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>",
+        mark: mark,
+      };
+    }
+    return {
+      control: '<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) + '" />',
+      mark: mark,
+    };
+  }
+
+  function renderPlayerDataTab(tab) {
+    var st = pdState();
+    // 现算「未保存」条数（草稿 + 改过的鱼）：不缓存，免得某条路径忘了刷新它
+    st.dirty = Object.keys(st.drafts).length + pdFishDirtyCount();
+    var html = "";
+    html += '<section class="card">';
+    html += '<div class="card-head"><h2>🧰 ' + esc(tab.title) + "</h2>" +
+      '<span class="hint">' + esc(tab.hint) + "</span>" +
+      '<span class="spacer"></span>' +
+      (st.dirty
+        ? '<span class="stat-chip pd-dirty" style="color:var(--warn)">● ' + st.dirty + " 处未保存</span>"
+        : '<span class="stat-chip pd-dirty" style="display:none"></span>') +
+      '<button class="btn btn-sm btn-primary" data-act="pd2:save"' + (st.dirty ? "" : " disabled") +
+      ">✔ 保存修改</button>" +
+      '<button class="btn btn-sm" data-act="pd2:reload">↻ 重读</button></div>';
+
+    // 选玩家
+    html += '<div class="toolbar">';
+    var opts = pdPlayerOptions();
+    html += '<label class="field"><span class="field-icon">👤</span><select data-act="pd2:pick">';
+    html += '<option value="">（选一个玩家）</option>';
+    opts.forEach(function (o) {
+      html += '<option value="' + esc(o.id) + '"' + (st.user_id === o.id ? " selected" : "") + ">" +
+        esc(o.id + (o.name ? "（" + o.name + "）" : "") + "　" + fmtNum(o.gold) + " 金") + "</option>";
+    });
+    html += "</select></label>";
+    html += '<label class="field"><span class="field-icon">✍️</span>' +
+      '<input type="text" id="pdUserId" placeholder="也可以直接填玩家 ID" value="' + esc(st.user_id) + '" /></label>';
+    html += '<button class="btn btn-sm btn-primary" data-act="pd2:load">📥 读取这个玩家的全部数据</button>';
+    if (st.name) {
+      html += '<span class="stat-chip">当前：<b>' + esc(st.name) + "</b>（" + esc(st.user_id) + "）</span>";
+    }
+    html += "</div>";
+
+    html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
+      "这里改的是**这个玩家的全部数据**（65 个字段 + 每条鱼）。保存时会：①整批校验（有一项不合法就一个字都不改）" +
+      "②**改前自动存一份档** ③在玩家锁里落盘。鱼的三维/品质改了会**按新值重算估值**（可升可降）。" +
+      "</div></div>";
+
+    if (st.error) {
+      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(st.error) +
+        '<div class="hint faint">读不到就改不了。常见原因：插件比页面旧（重启 AstrBot）、玩家 ID 不在当前作用域。</div>' +
+        "</div></div>";
+    }
+    if (st.lastResult) {
+      html += '<div class="notice"><span class="notice-icon">📋</span><div>' + esc(st.lastResult) + "</div></div>";
+    }
+    if (!st.user_id) {
+      html += '<div class="empty"><span class="empty-icon">🧰</span><div class="empty-title">先在上面选一个玩家</div>' +
+        '<div class="empty-sub">读取之后这里会出现全部字段：基础 / 资产 / 装备 / 状态 / 手气 / 每日额度 / 订单 / 连载 / 世界 / 缓存</div></div>';
+      html += "</section>";
+      return html;
+    }
+    if (!st.loaded) {
+      html += '<div class="empty"><span class="empty-icon">⏳</span><div class="empty-title">正在读取…</div></div>';
+      html += "</section>";
+      return html;
+    }
+
+    // 二次确认条
+    if (st.confirm) {
+      html += '<div class="notice" style="border-color:var(--warn)"><span class="notice-icon">⚠️</span><div>' +
+        "要提交 <b>" + st.dirty + "</b> 处修改到玩家 <b>" + esc(st.user_id) + "</b> 的**真实存档**。" +
+        '<div style="margin-top:6px">' +
+        '<button class="btn btn-sm btn-danger" data-act="pd2:saveYes">✔ 确认写入（先自动存档）</button>' +
+        '<button class="btn btn-sm" data-act="pd2:saveNo">✖ 取消</button></div></div></div>';
+    }
+
+    // 鱼在最后单独成块，所以先渲染普通分组，把 fish_list 收集起来
+    var fishBlocks = [];
+    (st.groups || []).forEach(function (group) {
+      var items = group.items || [];
+      var normal = items.filter(function (i) { return i.kind !== "fish_list"; });
+      var fishes = items.filter(function (i) { return i.kind === "fish_list"; });
+      if (normal.length) {
+        html += '<h3 class="mini-head">' + esc(group.title) + "（" + normal.length + " 项）</h3>";
+        html += '<div class="table-wrap"><table class="grid" style="min-width:760px"><thead><tr>' +
+          "<th style=\"width:210px\">项目</th><th>当前 / 修改</th><th>说明</th></tr></thead><tbody>";
+        normal.forEach(function (item) {
+          var ctl = pdFieldControl(group.title, item);
+          html += "<tr>" +
+            '<td data-label="项目">' + esc(item.label) +
+            ' <span class="faint mono">' + esc(item.key) + "</span>" + ctl.mark + "</td>" +
+            '<td data-label="值">' + ctl.control + "</td>" +
+            '<td class="faint" data-label="说明">' + esc(item.desc || "") + "</td>" +
+            "</tr>";
+        });
+        html += "</tbody></table></div>";
+      }
+      fishes.forEach(function (item) {
+        fishBlocks.push({ title: group.title + " · " + item.label, key: item.key, list: item.value || [] });
+      });
+    });
+
+    // 原始 JSON 高级区
+    html += '<h3 class="mini-head">🧬 原始 JSON（高级）</h3>';
+    html += '<div class="toolbar"><button class="btn btn-sm" data-act="pd2:rawToggle">' +
+      (st.rawOpen ? "▲ 收起" : "▼ 展开整份存档 JSON") + "</button>" +
+      '<span class="hint">先「展开」再改；贴回去时**整份替换**（user_id 会被保护，改不掉）。' +
+      "写坏了会整批拒绝，不会落盘。</span></div>";
+    if (st.rawOpen) {
+      html += '<textarea class="cell-input is-multiline" id="pdRawJson" rows="14" style="width:100%;font-family:monospace">' +
+        esc(st.raw_json || "") + "</textarea>";
+    }
+
+    fishBlocks.forEach(function (block) {
+      html += '<h3 class="mini-head">🐟 ' + esc(block.title) + "</h3>";
+      html += pdFishTable(block.key, block.title, block.list);
+    });
+
+    html += "</section>";
+    return html;
+  }
+
   function renderPlayerRow(r, live) {
     var uid = r.user_id;
     var editing = state.goldEdit && state.goldEdit.user_id === uid;
@@ -7392,6 +7960,8 @@ table.grid td.actions .btn { vertical-align: middle; }
       panel.innerHTML = banner + renderSnapshotsTab(tab);
     } else if (tab.kind === "players") {
       panel.innerHTML = banner + renderPlayersTab(tab);
+    } else if (tab.kind === "playerdata") {
+      panel.innerHTML = banner + renderPlayerDataTab(tab);
     } else if (tab.kind === "replies") {
       panel.innerHTML = banner + renderRepliesTab(tab);
     } else if (tab.kind === "keys") {
@@ -8172,6 +8742,83 @@ table.grid td.actions .btn { vertical-align: middle; }
         break;
       }
 
+      /* ---- 🧰 玩家数据（v1.18.56）---- */
+      case "pd2:pick": {
+        var picked = "";
+        var sel = document.querySelector('[data-act="pd2:pick"]');
+        if (sel) picked = String(sel.value || "");
+        if (picked) {
+          var st0 = pdState();
+          st0.user_id = picked;
+          loadPlayerFull(picked);
+        }
+        break;
+      }
+      case "pd2:load": {
+        var box = document.getElementById("pdUserId");
+        var uid = box ? String(box.value || "").trim() : "";
+        if (!uid) { toast("warn", "先选或填一个玩家 ID", ""); break; }
+        var st1 = pdState();
+        st1.user_id = uid;
+        loadPlayerFull(uid);
+        break;
+      }
+      case "pd2:reload": {
+        var st2 = pdState();
+        if (!st2.user_id) break;
+        loadPlayerFull(st2.user_id);
+        break;
+      }
+      case "pd2:rawToggle": {
+        var st3 = pdState();
+        var area = document.getElementById("pdRawJson");
+        if (st3.rawOpen && area) st3.raw_json = String(area.value || "");   // 收起前先留住改动
+        st3.rawOpen = !st3.rawOpen;
+        render();
+        break;
+      }
+      case "pd2:fishDel": {
+        var delList = el.getAttribute("data-list");
+        var delIndex = Number(el.getAttribute("data-index"));
+        collectFishDrafts();
+        submitPlayerFull([{ key: delList, op: "remove", index: delIndex }]);
+        break;
+      }
+      case "pd2:fishClear": {
+        var clrList = el.getAttribute("data-list");
+        if (!confirmStrip("确定清空 " + clrList + " 里所有鱼？")) break;
+        submitPlayerFull([{ key: clrList, op: "clear" }]);
+        break;
+      }
+      case "pd2:fishAdd": {
+        var addList = el.getAttribute("data-list");
+        var addVal = collectNewFish(addList);
+        if (!addVal) break;
+        if (!addVal.fish_id) { toast("err", "要选一个鱼种", "新增那条鱼最左边的下拉"); break; }
+        submitPlayerFull([{ key: addList, op: "add", value: addVal }]);
+        break;
+      }
+      case "pd2:save": {
+        var st4 = pdState();
+        if (!st4.user_id || !st4.dirty) break;
+        st4.confirm = true;
+        render();
+        break;
+      }
+      case "pd2:saveNo": {
+        pdState().confirm = false;
+        render();
+        break;
+      }
+      case "pd2:saveYes": {
+        var st5 = pdState();
+        st5.confirm = false;
+        var edits = collectPlayerEdits();
+        if (!edits.length) { toast("warn", "没有要提交的修改", ""); render(); break; }
+        submitPlayerFull(edits);
+        break;
+      }
+
       /* ---- 💬 回复：视图切换 / 聚焦 / 预览 ---- */
       case "rp:view":
         state.replies.view = el.getAttribute("data-view") === "overview" ? "overview" : "cards";
@@ -8627,6 +9274,26 @@ table.grid td.actions .btn { vertical-align: middle; }
     if (ev.target && ev.target.id === "playerSearch") {
       // 玩家页：回车才去后端查（避免每敲一个字都发一次请求）
       return;
+    }
+    /* 🧰 玩家数据（v1.18.56）：把输入记进草稿 —— 只记账，不发请求；
+       点「✔ 保存修改」时再整批提交（站长要的「改好几处一起提交」）。 */
+    if (ev.target && ev.target.getAttribute && ev.target.getAttribute("data-pd2")) {
+      var dk = String(ev.target.getAttribute("data-pd2"));
+      var gt = dk.split("|")[0];
+      var fk = dk.split("|").slice(1).join("|");
+      pdSetDraft(gt, fk, ev.target.value);
+      renderPlayerDataDirty();
+      return;
+    }
+    if (ev.target && ev.target.id === "pdRawJson") {
+      var st9 = pdState();
+      st9.raw_json = String(ev.target.value || "");
+      st9.dirty = Math.max(1, Object.keys(st9.drafts).length + pdFishDirtyCount());
+      renderPlayerDataDirty();
+      return;
+    }
+    if (ev.target && ev.target.id === "pdUserId") {
+      return;                               // 玩家 ID 输入框：点「读取」才生效
     }
     if (ev.target && ev.target.id === "searchBox") {
       state.query = ev.target.value;

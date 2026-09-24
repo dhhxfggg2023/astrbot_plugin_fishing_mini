@@ -86,6 +86,8 @@ PLAYER_ACTIONS: tuple[str, ...] = (
     "list", "snapshot_list", "set_gold", "snapshot_gold",
     # v1.18.53：玩家实时数据的通用编辑（金币之外的增/减/改）
     "player_get", "player_set", "player_add", "snapshot_player_set",
+    # v1.18.56：玩家存档编辑器（全字段 + 逐条改鱼 + 原始 JSON）
+    "player_full_get", "player_full_set",
 )
 
 #: 玩家数据的**可编辑字段白名单**：字段 -> (中文名, 类型, 说明)。
@@ -952,6 +954,17 @@ class EditorApiMixin:
             payload = {"status": "ok", "ok": True, "transport": "plugin-api"}
             payload.update(data if isinstance(data, dict) else {})
             return payload
+        if action == "player_full_get":
+            # 玩家存档编辑器（v1.18.56）：读全部数据（分组 + 枚举 + 原始 JSON）
+            ok, data = await self._editor_player_detail_full(
+                str(body.get("user_id") or body.get("uid") or ""),
+                snapshot=str(body.get("snapshot") or ""),
+            )
+            if not ok:
+                return self._editor_api_error(str(data))
+            payload = {"status": "ok", "ok": True, "transport": "plugin-api"}
+            payload.update(data if isinstance(data, dict) else {})
+            return payload
         if action not in PLAYER_ACTIONS:
             return self._editor_api_error(
                 "不认识的玩家动作「" + action + "」（可用："
@@ -965,6 +978,251 @@ class EditorApiMixin:
         return self._editor_api_ok(message, ok=True)
 
     # ------------------------------------------- 玩家实时数据（v1.18.53 通用编辑）
+    def _editor_player_module(self) -> Any:
+        """玩家存档编辑器模块（v1.18.56）；拿不到就退回 None（老行为照常）。"""
+        for name in ("astrbot_fishing_editor_player", "_editor_player"):
+            module = sys.modules.get(name)
+            if module is not None:
+                return module
+        return globals().get("EDITOR_PLAYER")
+
+    @staticmethod
+    def _snapshot_file_name(text_value: Any) -> str:
+        """从「给人看的快照说明」里取出**带目录的相对路径**。
+
+        `_snapshot()` 返回的是 ``2026-09-24_1923_07.json（1 名玩家）`` 这种说明
+        （带玩家数、有时还带备注），而 store 要的是文件名。
+
+        ⚠️ **必须带上 ``manual/`` 这样的目录**（v1.18.56 修的真 bug）：
+        ``find_snapshot("xxx.json")`` 是先按纯文件名去 **auto/ 找**的，
+        而自动档和时间戳撞名是常事（都以分钟为粒度）——
+        于是「改存档里的玩家」会**静默改到同名的那份自动档**上。
+        前端传进来的通常已经是 ``manual/xxx.json``（快照列表里的 rel 字段），
+        这里原样保留；只有拿到「纯文件名」时才由调用方补目录。
+        """
+        raw = str(text_value or "").strip().strip("（）()")
+        if not raw:
+            return ""
+        import re
+        # 先看有没有「目录/文件名.json」形态
+        match = re.search(r"[^\s（）()]*?[\w.\-]+\.json", raw)
+        if match:
+            return match.group(0).lstrip("/")
+        return raw
+
+    def _resolve_snapshot_ref(self, value: Any) -> str:
+        """把页面给的快照标识解析成 store 能唯一认出来的 ``kind/name``。
+
+        优先级：已经带目录的相对路径 > 在索引里按文件名查到的 rel > 原样。
+        """
+        text_value = self._snapshot_file_name(value)
+        if not text_value:
+            return ""
+        if "/" in text_value:
+            return text_value
+        store = getattr(self, "backup_store", None)
+        lister = getattr(store, "list_snapshots", None)
+        if callable(lister):
+            try:
+                for item in lister():
+                    if str(item.get("name") or "") == text_value:
+                        return str(item.get("rel") or text_value)
+            except Exception as e:                               # pragma: no cover
+                _log_debug(f"快照索引查询失败（按纯文件名兜底）：{e}")
+        return text_value
+
+    async def _editor_player_detail_full(
+        self, user_id: str, *, snapshot: str = ""
+    ) -> tuple[bool, str | dict[str, Any]]:
+        """读一个玩家的**全部数据**（分组 + 枚举 + 原始 JSON）。
+
+        ``snapshot`` 非空时读那份存档里的玩家（只读文件，不动实时数据）。
+        """
+        uid = str(user_id or "").strip()
+        if not uid:
+            return False, "缺少 user_id"
+        snapshot = self._resolve_snapshot_ref(snapshot)
+        module = self._editor_player_module()
+        if module is None:
+            return False, "玩家编辑器模块没加载（_editor_player.py 缺失？）"
+        player = None
+        if snapshot:
+            store = getattr(self, "backup_store", None)
+            if store is None:
+                return False, "存档模块不可用"
+            try:
+                snap = store.load_snapshot(snapshot)
+            except Exception as e:
+                return False, f"读存档「{snapshot}」失败：{e}"
+            players = (snap or {}).get("players")
+            raw = (players or {}).get(uid)
+            if raw is None:
+                return False, f"存档「{snapshot}」里没有玩家 {uid}"
+            player = self._unwrap_player_dict(raw)
+        else:
+            try:
+                raw = await self.get_kv_data(self._kv_key(uid), None)
+            except Exception as e:
+                return False, f"读玩家 {uid} 失败：{e}"
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    return False, f"玩家 {uid} 的数据不是合法 JSON"
+            player = self._unwrap_player_dict(raw)
+        if not isinstance(player, dict):
+            return False, f"找不到玩家 {uid}（让他先在群里发一条消息再改）"
+        payload = module.section_payload(self, player)
+        payload["user_id"] = uid
+        payload["name"] = str(player.get("last_name") or "")
+        payload["from_snapshot"] = bool(snapshot)
+        return True, payload
+
+    @staticmethod
+    def _unwrap_player_dict(raw: Any) -> dict[str, Any] | None:
+        """拆信封拿玩家字典（拿不到就返回 None）。
+
+        ⚠️ KV 里存的**可能是字符串**（信封 JSON 的原样文本，取决于 AstrBot 的
+        序列化路径）：`write_snapshot` / `unwrap_player` 都只认 dict，
+        直接喂字符串会让这个玩家被**静默丢掉**（快照少人、编辑器说「存档里没有这个玩家」）。
+        所以这里先统一 json.loads 一遍。
+        """
+        value = raw
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return None
+        module = globals().get("BACKUP_MODULE")
+        player = value
+        try:
+            if module is not None:
+                player, _env = module.unwrap_player(value)
+        except Exception:
+            player = value
+        return player if isinstance(player, dict) else None
+
+    async def _editor_save_player_full(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """保存玩家**全部数据**的编辑（v1.18.56）。
+
+        与改金币同一套安全口径：白名单 + 枚举/范围校验 + 二次确认 + **改前自动存档**
+        + 玩家锁 + 立刻落盘；而且**先在深拷贝上试算**，任何一项不过就一个字都不改。
+        """
+        module = self._editor_player_module()
+        if module is None:
+            return False, "玩家编辑器模块没加载（_editor_player.py 缺失？）"
+        user_id = str(payload.get("user_id") or payload.get("uid") or "").strip()
+        if not user_id:
+            return False, "缺少 user_id（改哪个玩家）"
+        if payload.get("confirm") is not True:
+            return False, "改玩家数据会影响真实存档：请在页面上再确认一次（confirm=true）"
+        edits = payload.get("edits")
+        if not isinstance(edits, list) or not edits:
+            return False, "没有要改的字段（edits 是空的）"
+        snapshot = self._resolve_snapshot_ref(payload.get("snapshot"))
+        known = {str(x) for x in await self._player_ids()}
+        if not snapshot and user_id not in known:
+            return False, f"找不到玩家 {user_id}（让他先在群里发一条消息再改）"
+
+        if snapshot:
+            # 改的是**存档文件**：先整份读出来、在内存里改好、再原子写回
+            store = getattr(self, "backup_store", None)
+            if store is None:
+                return False, "存档模块不可用（_backup.py 是否缺失？）"
+            try:
+                snap = store.load_snapshot(snapshot)
+            except Exception as e:
+                return False, f"读存档「{snapshot}」失败：{e}"
+            if not isinstance(snap, dict):
+                return False, f"存档「{snapshot}」格式不对"
+            players = snap.get("players")
+            if not isinstance(players, dict) or user_id not in players:
+                return False, f"存档「{snapshot}」里没有玩家 {user_id}"
+            original_raw = players.get(user_id)
+            player = self._unwrap_player_dict(original_raw)
+            if player is None:
+                return False, f"存档「{snapshot}」里玩家 {user_id} 的数据不是对象"
+            ok, detail = module.apply_player_edits(self, player, edits)
+            if not ok:
+                return False, detail
+            backup_module = globals().get("BACKUP_MODULE")
+            enveloped = isinstance(original_raw, dict) and player is not original_raw
+            if backup_module is not None and enveloped:
+                try:
+                    players[user_id] = backup_module.wrap_player(
+                        user_id, player, int(snap.get("data_version") or 1)
+                    )
+                except Exception:                            # pragma: no cover
+                    players[user_id] = player
+            else:
+                players[user_id] = player
+            try:
+                # ⚠️ 用 load_snapshot 回来的**真实路径**（snap["path"]）写回：
+                #    不能拿 "manual/xxx.json" 去 path_of 拼（它会把整串当成一个文件名，
+                #    于是写到 backups/manual/manual/xxx.json 这种不存在的目录）。
+                path = pathlib.Path(str(snap.get("path") or ""))
+                if not path.is_file():
+                    path = store.path_of(str(snap.get("kind") or "manual"),
+                                         pathlib.Path(snapshot).name)
+                snap["count"] = len(players)
+                atomic = getattr(backup_module, "_atomic_write_text", None)
+                text = json.dumps(snap, ensure_ascii=False, indent=1)
+                if callable(atomic):
+                    atomic(path, text)
+                else:                                        # pragma: no cover
+                    path.write_text(text, encoding="utf-8")
+                rebuild = getattr(store, "rebuild_index", None)
+                if callable(rebuild):
+                    rebuild()
+            except Exception as e:
+                return False, f"写回存档「{snapshot}」失败：{e}"
+            return True, (
+                f"已改存档「{snapshot}」里玩家 {user_id} 的数据：{detail}"
+                f"（要「恢复」这份存档才生效）"
+            )
+
+        # 实时玩家：自动存档 -> 锁 -> 深拷贝试算 -> 落盘
+        message = ""
+        snapshotter = getattr(self, "_snapshot", None)
+        if callable(snapshotter):
+            try:
+                message = await snapshotter(
+                    "auto", note=f"改玩家数据前自动存档（{user_id}：{str(edits)[:40]}）"
+                )
+            except Exception as e:
+                return False, f"改数据前的自动存档失败，已放弃本次修改：{e}"
+
+        lock_for = getattr(self, "_lock_for", None)
+        lock = lock_for(user_id) if callable(lock_for) else None
+        if lock is None:  # pragma: no cover
+            class _NoLock:
+                async def __aenter__(self):
+                    return None
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            lock = _NoLock()
+        async with lock:
+            player = await self._load_player(user_id)
+            trial = module.clone_player(player)
+            ok, detail = module.apply_player_edits(self, trial, edits)
+            if not ok:
+                return False, detail
+            player.clear()
+            player.update(trial)
+            saved = await self._save_player(player)
+        if not saved:
+            return False, f"玩家 {user_id} 的数据没写成功（看插件日志）"
+        setter = getattr(self, "_set_status", None)
+        if callable(setter):
+            try:
+                setter(f"页面改玩家数据：{user_id} {detail[:60]}")
+            except Exception:  # pragma: no cover
+                pass
+        tail = f"（改前已自动存档：{message}）" if message else ""
+        return True, f"已改玩家 {user_id}：{detail}{tail}"
+
     def _player_field_view(self, player: dict[str, Any]) -> dict[str, Any]:
         """把玩家的可编辑字段整理成页面要的结构（只读，绝不改数据）。
 
@@ -1256,13 +1514,11 @@ class EditorApiMixin:
         if raw is None:
             return False, f"存档「{name}」里没有玩家 {user_id}"
         module = globals().get("BACKUP_MODULE")
-        player, enveloped = raw, False
-        try:
-            if module is not None:
-                player, enveloped = module.unwrap_player(raw)
-        except Exception:
-            player = raw
-        if not isinstance(player, dict):
+        # ⚠️ 用统一的拆包（能认「字符串形态的信封」）：直接喂 unwrap_player 的话，
+        #    字符串会被判成脏数据，报「玩家数据不是对象」。
+        player = self._unwrap_player_dict(raw)
+        enveloped = isinstance(raw, dict) and player is not raw
+        if player is None:
             return False, f"存档「{name}」里玩家 {user_id} 的数据不是对象"
         ok, detail = self._apply_player_edits(player, payload.get("edits"), add=add)
         if not ok:                                          # pragma: no cover
@@ -1519,6 +1775,8 @@ class EditorBridgeMixin(EditorApiMixin):
             # 玩家页（v1.18.53）：金币之外的实时数据也能增/减/改
             "player_set": self._editor_set_player_data,
             "snapshot_player_set": self._editor_set_snapshot_player,
+            # 玩家存档编辑器（v1.18.56）：全字段 + 逐条改鱼 + 原始 JSON
+            "player_full_set": self._editor_save_player_full,
             # 旧作用域找回（作者名改过之后老存档会落在别的 scope 里）
             "legacy_scan": self._editor_legacy_scan,
             "legacy_import": self._editor_legacy_import,
