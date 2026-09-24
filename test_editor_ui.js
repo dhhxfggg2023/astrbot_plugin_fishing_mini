@@ -1878,6 +1878,12 @@ async function configKeysCoverage() {
   check(pdHtml.indexOf("蚯蚓") > 0 && pdHtml.indexOf("data-pd2item") > 0,
     "计数表/枚举都用中文名显示（不再只写 worm 这种 id）");
   check(pdHtml.indexOf("12,800") > 0, "「现在是多少」显示真实值（千分位）");
+  /* v1.18.58：站长反馈「改数据不好改啊，怎么是一堆的挤在一起」——
+     控件必须各自成行、表头列宽收敛、分组不要再套内部滚动（那会让它变成一个小窗口）。 */
+  check(pdHtml.indexOf('class="pd-line"') > 0 && pdHtml.indexOf("grid stack pd-grid wrap-cells") > 0,
+    "字段控件包在 pd-line 里、表格用收敛列宽的 pd-grid（不再挤成一条缝）");
+  check(/class="table-wrap is-stack pd-plain/.test(pdHtml) && pdHtml.indexOf('class="mini-head"') > 0,
+    "窄面板下自动变「一个字段一张卡」，组表也不再套内部滚动");
   // 逐条改鱼：鱼种/品质/异色下拉里只能是中文，而且**不能**是 [object Object]
   const fishRowHtml = T.pdFishRow("inventory", 0, pds.groups[0].items[4].value[0]);
   check(fishRowHtml.indexOf("[object Object]") < 0,

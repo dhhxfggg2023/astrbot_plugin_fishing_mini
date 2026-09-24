@@ -339,6 +339,51 @@ body {
 .card-head .hint { color: var(--muted); font-size: 12px; font-weight: 400; }
 .card-head .spacer { margin-left: auto; }
 
+/* ---------- 🧰 玩家数据页（v1.18.57）----------
+   站长反馈：「改数据不好改啊，怎么是一堆的挤在一起」。原因有两个：
+   ① 表格第一列固定 190px + 第二列 200px，剩下的宽度全挤在「改成」一列里；
+   ② .cell-input 是 width:100%（给整格编辑用的），但这里的控件是行内的，
+      于是把所在列撑到最大 —— 下拉一长就顶到隔壁列上。
+   所以这里给玩家数据页单独一套：列宽收窄、控件定宽、提示排在大输入框右边。 */
+.mini-head {
+  margin: var(--sp-4) 0 var(--sp-2);
+  font-size: 12.5px;
+  font-weight: 620;
+  color: var(--muted);
+  letter-spacing: .3px;
+}
+.mini-head:first-of-type { margin-top: var(--sp-3); }
+
+table.grid.pd-grid { min-width: 0; width: 100%; }
+table.grid.pd-grid tbody td { vertical-align: top; padding: 7px 10px; }
+table.grid.pd-grid thead th { padding: 7px 10px; }
+table.grid.pd-grid td.pd-now { color: var(--muted); max-width: 280px; }
+table.grid.pd-grid td.pd-ctl { min-width: 300px; }
+table.grid.pd-grid td.pd-ctl .cell-input { width: auto; }
+.pd-ctl input[type="number"].cell-input { width: 128px; }
+.pd-ctl input[type="text"].cell-input { width: 240px; }
+.pd-ctl select.cell-input { width: auto; min-width: 140px; max-width: 280px; }
+.pd-ctl textarea.cell-input { width: 100%; min-width: 240px; }
+/* 一行控件：输入框 + 一个「改成 / 加减」下拉，中间留出间距（不再挤成一条缝） */
+.pd-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pd-line > * { flex: 0 0 auto; }
+.pd-ctl .hint, .pd-ctl .faint.hint { display: block; margin-top: 4px; }
+.pd-ctl .pd-line .hint { display: inline; margin-top: 0; }
+/* 这一段里每个分组只有几行，再套一层「最高 360px 的内部滚动」会让它变成一个很小的
+   窗口、看着就是「一堆挤在一起」——整页滚动更舒服（分组的表不高，不需要内部滚动）。 */
+.pd-plain { max-height: none; overflow: visible; }
+.pd-plain + .mini-head { margin-top: var(--sp-4); }
+.pd-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+/* 🐟 逐条改鱼：控件同样定宽，否则「品质 / 异色」这两个下拉会把整行撑到离谱 */
+table.grid.pd-fish td .cell-input { width: auto; }
+table.grid.pd-fish td select.cell-input { min-width: 96px; max-width: 168px; }
+table.grid.pd-fish td input[type="number"].cell-input { width: 62px; min-width: 62px; }
+/* 「一个字段一张卡」模式下（窄面板）让控件占满整行 —— 卡片模式下宽度够，没必要挤着 */
+table.grid.stack.pd-grid tbody td.pd-ctl { flex: 1 1 auto; }
+table.grid.stack.pd-grid tbody td.pd-ctl input[type="text"].cell-input,
+table.grid.stack.pd-grid tbody td.pd-ctl textarea.cell-input { width: 100%; }
+table.grid.stack.pd-grid tbody td.pd-now { max-width: none; }
+
 /* ---------- 工具栏 ---------- */
 .toolbar {
   display: flex;
@@ -3612,7 +3657,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.57";
+  var PAGE_VERSION = "v1.18.58";
 
   /* ===========================================================================
      5. 状态
@@ -5651,7 +5696,7 @@ table.grid td.actions .btn { vertical-align: middle; }
   }
 
   function pdFishTable(listKey, label, list) {
-    var html = '<div class="table-wrap" style="margin-bottom:8px"><table class="grid" style="min-width:900px"><thead><tr>' +
+    var html = '<div class="table-wrap pd-plain" style="margin-bottom:8px"><table class="grid pd-fish" style="min-width:900px"><thead><tr>' +
       "<th>" + esc(label) + "（" + list.length + " 条）</th><th>个体品质</th><th>异色</th>" +
       "<th>肉质</th><th>灵性</th><th>光泽</th><th>投喂</th><th>锁定</th><th>估值</th><th>操作</th>" +
       "</tr></thead><tbody>";
@@ -5755,6 +5800,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     var mark = dirty ? ' <span class="hint" style="color:var(--warn)">●</span>' : "";
     var kind = item.kind;
     var now = pdCurrentText(gtitle, item);
+    // 行内控件的统一包装：输入框和下拉之间留出间距（v1.18.57 前是直接拼在一起，挤成一条缝）
+    function line(inner) {
+      return { control: '<div class="pd-line">' + inner + "</div>", mark: mark, now: now };
+    }
     if (kind === "readonly") {
       return { control: '<span class="faint">' + esc(String(item.value === undefined ? "—" : item.value)) + "</span>", mark: "", now: now };
     }
@@ -5769,12 +5818,12 @@ table.grid td.actions .btn { vertical-align: middle; }
       if (kind === "str_list") {
         hint = (item.value || []).map(function (x) { return pdHumanValue(item.enum, x); }).join("、") || "（空）";
       }
-      var addRow = '<div class="hint">加一项：<select class="cell-input" style="width:180px" data-pd2item="' +
-        esc(dk) + '">' + pdItemOptions(item.enum) + "</select>" +
-        '<select class="cell-input" style="width:92px" data-pd2mode="' + esc(dk) + '">' +
+      var addRow = '<div class="pd-add"><span class="hint">加一项：</span>' +
+        '<select class="cell-input" data-pd2item="' + esc(dk) + '">' + pdItemOptions(item.enum) + "</select>" +
+        '<select class="cell-input" data-pd2mode="' + esc(dk) + '">' +
         '<option value="add">加上</option><option value="remove">去掉</option></select></div>';
       return {
-        control: '<input class="cell-input mono" style="min-width:280px" type="text"' + fire +
+        control: '<input class="cell-input mono" type="text"' + fire +
           ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(hint || "（空）") + '" />' +
           '<div class="hint faint">整表写法：逗号分隔的「id:数量」（改动会整表覆盖）</div>' + addRow,
         mark: mark, now: now,
@@ -5782,38 +5831,27 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     if (kind === "json") {
       return {
-        control: '<textarea class="cell-input is-multiline" rows="3" style="min-width:320px"' + fire + ">" +
+        control: '<textarea class="cell-input is-multiline" rows="2"' + fire + ">" +
           esc(pdDraft(gtitle, item)) + "</textarea>",
         mark: mark, now: "",
       };
     }
     if (kind === "count" || kind === "int") {
-      return {
-        control: '<input class="cell-input mono" style="width:150px" type="number" step="1"' + fire +
-          ' value="' + esc(pdDraft(gtitle, item)) + '" />' +
-          '<select class="cell-input" style="width:96px" data-pd2add="' + esc(dk) + '">' +
-          '<option value="set">改成</option><option value="add">加减</option></select>',
-        mark: mark, now: now,
-      };
+      // 「改成 / 加减」放**前面**：这样所有输入框左对齐成一列，扫一眼就能上下对着看
+      return line('<select class="cell-input" data-pd2add="' + esc(dk) + '">' +
+        '<option value="set">改成</option><option value="add">加减</option></select>' +
+        '<input class="cell-input mono" type="number" step="1"' + fire +
+        ' value="' + esc(pdDraft(gtitle, item)) + '" />');
     }
     if (kind === "ratio") {
-      return {
-        control: '<input class="cell-input mono" style="width:130px" type="number" step="0.01"' + fire +
-          ' value="' + esc(pdDraft(gtitle, item)) + '" />',
-        mark: mark, now: now,
-      };
+      return line('<input class="cell-input mono" type="number" step="0.01"' + fire +
+        ' value="' + esc(pdDraft(gtitle, item)) + '" />');
     }
     // text：有 enum 就下拉（显示中文），否则输入框
     if (item.enum) {
-      return {
-        control: '<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>",
-        mark: mark, now: now,
-      };
+      return line('<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>");
     }
-    return {
-      control: '<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) + '" />',
-      mark: mark, now: now,
-    };
+    return line('<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) + '" />');
   }
 
   function renderPlayerDataTab(tab) {
@@ -5863,9 +5901,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     html += "</div>";
 
+    // 安全口径：一句话说清就够，不要把整块屏幕变成一堵字墙
     html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
-      "这里改的是**这个玩家的全部数据**（65 个字段 + 每条鱼）。保存时会：①整批校验（有一项不合法就一个字都不改）" +
-      "②**改前自动存一份档** ③在玩家锁里落盘。鱼的三维/品质改了会**按新值重算估值**（可升可降）。" +
+      "保存时会<b>整批校验</b>（有一项不合法就一个字都不改）→ <b>改前自动存一份档</b> → 在玩家锁里落盘；" +
+      "鱼的三维 / 品质改了会按新值<b>重算估值</b>（可升可降）。" +
       (!pdLive
         ? '<div style="margin-top:4px">现在改的是 <b>存档文件</b>「' + esc(text(st.snapshot) || "（没选）") +
           "」里的玩家 —— 要<b>恢复这份存档</b>才会在游戏里生效（实时数据一行都不动）。</div>"
@@ -5916,17 +5955,19 @@ table.grid td.actions .btn { vertical-align: middle; }
       var fishes = items.filter(function (i) { return i.kind === "fish_list"; });
       if (normal.length) {
         html += '<h3 class="mini-head">' + esc(group.title) + "（" + normal.length + " 项）</h3>";
-        html += '<div class="table-wrap"><table class="grid" style="min-width:860px"><thead><tr>' +
-          "<th style=\"width:190px\">项目</th><th style=\"width:200px\">现在是多少</th>" +
-          "<th>改成</th><th>说明</th></tr></thead><tbody>";
+        /* is-stack + stack：窄面板（插件页经常只有 700~1100px）下自动变成
+           「一个字段一张卡、每项一行」—— 这正是「挤在一起」的根治办法。 */
+        html += '<div class="table-wrap is-stack pd-plain"><table class="grid stack pd-grid wrap-cells"><thead><tr>' +
+          '<th style="width:170px">项目</th><th style="width:190px">现在是多少</th>' +
+          '<th style="width:320px">改成</th><th>说明</th></tr></thead><tbody>';
         normal.forEach(function (item) {
           var ctl = pdFieldControl(group.title, item);
           html += "<tr>" +
             '<td data-label="项目">' + esc(item.label) + ctl.mark + "</td>" +
-            '<td data-label="现在是多少">' + (ctl.now
-              ? '<span class="faint">' + esc(ctl.now) + "</span>"
-              : '<span class="faint">（见右侧编辑框）</span>') + "</td>" +
-            '<td data-label="改成">' + ctl.control + "</td>" +
+            '<td class="pd-now" data-label="现在是多少">' + (ctl.now
+              ? '<span class="cut">' + esc(ctl.now) + "</span>"
+              : '<span class="faint">（见右侧）</span>') + "</td>" +
+            '<td class="pd-ctl" data-label="改成">' + ctl.control + "</td>" +
             '<td class="faint" data-label="说明">' + esc(item.desc || "") + "</td>" +
             "</tr>";
         });
