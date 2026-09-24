@@ -42,6 +42,7 @@ AstrBot 的插件页面（``pages/<目录名>/index.html``）拿到的是很窄�
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import pathlib
@@ -82,8 +83,42 @@ PLAYER_LIST_LIMIT = 500
 PLAYER_SCAN_LIMIT = 2000
 #: 玩家页支持的动作（页面侧必须与这里一致）
 PLAYER_ACTIONS: tuple[str, ...] = (
-    "list", "snapshot_list", "set_gold", "snapshot_gold"
+    "list", "snapshot_list", "set_gold", "snapshot_gold",
+    # v1.18.53：玩家实时数据的通用编辑（金币之外的增/减/改）
+    "player_get", "player_set", "player_add", "snapshot_player_set",
 )
+
+#: 玩家数据的**可编辑字段白名单**：字段 -> (中文名, 类型, 说明)。
+#: 类型：``count`` = 非负整数（可增可减，减到 0 为止）；``text`` = 短文本；
+#: ``map`` = ``名字:数量`` 的计数器表（鱼饵 / 道具）；``json`` = 结构化列表（谨慎）。
+#: ⚠️ **只列玩家自己的数据**：配置（鱼池/道具定义）不在这里，那是内容表的事。
+PLAYER_FIELDS: dict[str, tuple[str, str, str]] = {
+    "gold": ("金币", "count", "主货币；上限 10 亿（防手滑写出天文数字）"),
+    "total_caught": ("累计钓获", "count", "总钓鱼条数（等级按它算）"),
+    "total_sold": ("累计卖出", "count", "卖过多少条鱼"),
+    "total_fed": ("累计投喂", "count", "投喂过多少次"),
+    "total_orders": ("累计交单", "count", "完成过多少个订单"),
+    "perfect_pulls": ("完美拉线", "count", "拉线评价「完美」的次数（成就用）"),
+    "clutch_wins": ("惊险拉线", "count", "拉线评价「偏差」但拉上来的次数（成就用）"),
+    "stamina": ("体力", "count", "当前体力；-1 = 还没初始化（下次结算补满）"),
+    "lottery_total": ("大鱼乐累计张数", "count", "买过多少张彩票"),
+    "lottery_loses": ("大鱼乐连输", "count", "连输几张（到 pity_count 就保底）"),
+    "title": ("佩戴称号", "text", "称号 id（空 = 不戴）"),
+    "current_location": ("当前钓点", "text", "钓点 id（例如 novice / dragon_palace）"),
+    "equipped_rod": ("当前鱼竿", "text", "鱼竿 id（例如 bamboo / void_rod）"),
+    "equipped_bait": ("当前鱼饵", "text", "鱼饵 id；空串 = 自动挂最好的，none = 空钩"),
+}
+
+#: 这些字段是**计数表**（``名字:数量`` 逗号分隔），支持「加/减某几项」
+PLAYER_MAP_FIELDS: dict[str, tuple[str, str]] = {
+    "baits": ("鱼饵数量", "鱼饵 id 来自鱼饵表（bread / worm / abyss_bait …）"),
+    "items": ("道具数量", "道具 id 来自道具表（feed_basic / hot_soup / jade_lantern …）"),
+    "collectibles": ("杂物收集", "杂物 id 来自杂物表（seaweed / treasure_chest …）"),
+    "variants": ("变异计数", "变异 id 来自变异表（golden / rainbow …）"),
+}
+
+#: 计数类字段的单项上限（玩家数据写坏了对谁都没好处）
+PLAYER_COUNT_MAX = 1_000_000_000
 
 #: 内容表白名单：键 -> 期望的配置值类型
 CONTENT_TABLES: dict[str, type] = {
@@ -907,6 +942,16 @@ class EditorApiMixin:
             return await self._editor_player_payload(str(body.get("query") or ""))
         if action == "snapshot_list":
             return await self._editor_snapshot_player_payload(str(body.get("name") or ""))
+        if action == "player_get":
+            # 读一个玩家的可编辑数据（只读）：给页面渲染「改数据」面板
+            ok, data = await self._editor_player_detail(
+                str(body.get("user_id") or body.get("uid") or "")
+            )
+            if not ok:
+                return self._editor_api_error(str(data))
+            payload = {"status": "ok", "ok": True, "transport": "plugin-api"}
+            payload.update(data if isinstance(data, dict) else {})
+            return payload
         if action not in PLAYER_ACTIONS:
             return self._editor_api_error(
                 "不认识的玩家动作「" + action + "」（可用："
@@ -918,6 +963,337 @@ class EditorApiMixin:
         if not ok:
             return self._editor_api_error(message)
         return self._editor_api_ok(message, ok=True)
+
+    # ------------------------------------------- 玩家实时数据（v1.18.53 通用编辑）
+    def _player_field_view(self, player: dict[str, Any]) -> dict[str, Any]:
+        """把玩家的可编辑字段整理成页面要的结构（只读，绝不改数据）。
+
+        返回 ``{"sections": [...], "level": n}``：每一节是一组字段，
+        每项带着中文名、说明、类型与当前值 —— 页面照着渲染，不需要自己知道字段名单
+        （页面与插件的字段口径永远一致：**白名单只有这一份**，在 PLAYER_FIELDS 里）。
+        """
+        sections: list[dict[str, Any]] = []
+        counters: list[dict[str, Any]] = []
+        for key, (label, _kind, desc) in PLAYER_FIELDS.items():
+            value = player.get(key)
+            if key == "stamina" and value in (None, ""):
+                value = -1
+            counters.append({
+                "key": key, "label": label, "desc": desc,
+                "value": value if isinstance(value, (int, float, str)) else "",
+            })
+        sections.append({"title": "数值与状态", "kind": "fields", "items": counters})
+
+        maps: list[dict[str, Any]] = []
+        for key, (label, desc) in PLAYER_MAP_FIELDS.items():
+            raw = player.get(key)
+            entries: list[dict[str, Any]] = []
+            if isinstance(raw, dict):
+                for name, count in sorted(raw.items(), key=lambda kv: str(kv[0])):
+                    entries.append({"name": str(name), "count": _player_int(count, 0)})
+            maps.append({"key": key, "label": label, "desc": desc, "entries": entries})
+        sections.append({"title": "计数表（鱼饵 / 道具 / 杂物 / 变异）", "kind": "maps", "items": maps})
+
+        inventory = player.get("inventory") or []
+        aquarium = player.get("aquarium") or []
+        sections.append({
+            "title": "鱼（只读明细 + 可整体清空）",
+            "kind": "fish",
+            "items": [
+                {"key": "inventory", "label": "背包", "count": len(inventory)},
+                {"key": "aquarium", "label": "水族馆", "count": len(aquarium)},
+            ],
+        })
+        return {
+            "sections": sections,
+            "level": _player_level_of(player),
+            "field_max": PLAYER_COUNT_MAX,
+        }
+
+    async def _editor_player_detail(self, user_id: str) -> tuple[bool, str | dict[str, Any]]:
+        """读一个玩家的可编辑数据（只读；不改数据、不产生副作用）。"""
+        uid = str(user_id or "").strip()
+        if not uid:
+            return False, "player_get 需要 user_id"
+        try:
+            raw = await self.get_kv_data(self._kv_key(uid), None)
+        except Exception as e:
+            return False, f"读玩家 {uid} 失败：{e}"
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return False, f"玩家 {uid} 的数据不是合法 JSON"
+        module = globals().get("BACKUP_MODULE")
+        player = raw
+        try:
+            if module is not None:
+                player, _env = module.unwrap_player(raw)
+        except Exception:
+            player = raw
+        if not isinstance(player, dict):
+            return False, f"找不到玩家 {uid}（让他先在群里发一条消息再改）"
+        view = self._player_field_view(player)
+        view.update({"user_id": uid, "name": str(player.get("last_name") or "")})
+        return True, view
+
+    @staticmethod
+    def _coerce_player_count(
+        value: Any, *, allow_negative: bool = False
+    ) -> tuple[int | None, str]:
+        """计数类字段：整数（容错收下 ``1.2e3`` 这种写法）。
+
+        ``allow_negative=False``（直接设值）时拒收负数 —— 「把金币设成 -5」一定是手滑；
+        ``allow_negative=True``（增减模式）时收下负数，它就是「扣多少」。
+        """
+        if isinstance(value, bool) or value is None:
+            return None, "要写一个整数"
+        try:
+            number = float(str(value).strip())
+        except (TypeError, ValueError):
+            return None, f"「{value}」不是数字"
+        if number != number or number in (float("inf"), float("-inf")):
+            return None, f"「{value}」不是有效数字"
+        if number < 0 and not allow_negative:
+            return None, "不能是负数（想减少就写「-N」并在页面上选「减少」）"
+        if abs(number) > PLAYER_COUNT_MAX:
+            return None, f"绝对值最多 {PLAYER_COUNT_MAX}（防止手滑写出天文数字）"
+        return int(number), ""
+
+    def _apply_player_edits(
+        self, player: dict[str, Any], edits: Any, *, add: bool
+    ) -> tuple[bool, str]:
+        """把页面来的编辑应用到玩家字典上（**纯内存**，调用方负责存档）。
+
+        ``add=True`` = 增减模式：正数是加、负数是减（减到 0 为止，不会变负）；
+        ``add=False`` = 直接设成这个值。
+
+        支持的编辑形态（``edits`` 是一个列表，按顺序应用）：
+        * ``{"field": "gold", "value": 1000}`` —— 单字段
+        * ``{"map": "baits", "key": "worm", "value": 20}`` —— 计数表里的一项
+        * ``{"map": "items", "clear": true}`` / ``{"clear": "inventory"}`` —— 清一项表
+        """
+        if not isinstance(edits, list) or not edits:
+            return False, "没有要改的字段（edits 是空的）"
+        if len(edits) > 200:
+            return False, f"一次最多改 200 项（收到 {len(edits)} 项）"
+        done: list[str] = []
+        for edit in edits:
+            if not isinstance(edit, dict):
+                return False, "每一项编辑都要是一个对象"
+            # --- 清空某个计数表 / 鱼列表 ---
+            clear = edit.get("clear")
+            if clear is not None:
+                target = str(clear).strip()
+                if target in PLAYER_MAP_FIELDS:
+                    player[target] = {}
+                    done.append(f"清空{PLAYER_MAP_FIELDS[target][0]}")
+                    continue
+                if target in ("inventory", "aquarium"):
+                    player[target] = []
+                    done.append("清空" + ("背包" if target == "inventory" else "水族馆"))
+                    continue
+                return False, f"不能清空「{target}」（只有计数表和背包/水族馆能清）"
+            # --- 计数表里的一项 ---
+            map_key = str(edit.get("map") or "").strip()
+            if map_key:
+                if map_key not in PLAYER_MAP_FIELDS:
+                    return False, (
+                        f"不认识的计数表「{map_key}」（可用："
+                        + "、".join(PLAYER_MAP_FIELDS) + "）"
+                    )
+                name = str(edit.get("key") or "").strip()
+                if not name:
+                    return False, f"改「{PLAYER_MAP_FIELDS[map_key][0]}」要写 key（哪一项）"
+                amount, why = self._coerce_player_count(
+                    edit.get("value"), allow_negative=add
+                )
+                if why:
+                    return False, f"{PLAYER_MAP_FIELDS[map_key][0]}（{name}）：{why}"
+                table = player.get(map_key)
+                if not isinstance(table, dict):
+                    table = {}
+                    player[map_key] = table
+                old = _player_int(table.get(name), 0)
+                new = max(0, old + amount) if add else amount
+                if new <= 0:
+                    table.pop(name, None)
+                else:
+                    table[name] = new
+                done.append(f"{PLAYER_MAP_FIELDS[map_key][0]} {name} {old}→{new}")
+                continue
+            # --- 单字段 ---
+            field = str(edit.get("field") or "").strip()
+            if not field:
+                return False, "每一项编辑都要写 field（或 map / clear）"
+            if field not in PLAYER_FIELDS:
+                return False, (
+                    f"「{field}」不是可改的玩家字段（可用："
+                    + "、".join(PLAYER_FIELDS) + "）"
+                )
+            label, kind, _desc = PLAYER_FIELDS[field]
+            if kind == "text":
+                value = str(edit.get("value") or "").strip()
+                if len(value) > 64:
+                    return False, f"{label} 太长了（最多 64 字）"
+                player[field] = value
+                done.append(f"{label} → {value or '（空）'}")
+                continue
+            amount, why = self._coerce_player_count(
+                edit.get("value"), allow_negative=add
+            )
+            if why:
+                return False, f"{label}：{why}"
+            old = _player_int(player.get(field), 0)
+            # 体力是特例：-1 表示「还没初始化」，不能当成 0 去加减
+            if field == "stamina" and old < 0 and add:
+                old = 0
+            new = max(0, old + amount) if add else amount
+            limit = PLAYER_GOLD_MAX if field == "gold" else PLAYER_COUNT_MAX
+            if new > limit:
+                return False, f"{label} 最多 {limit}（想给更多就分批，或调高上限）"
+            player[field] = new
+            done.append(f"{label} {old}→{new}")
+        return True, "；".join(done) if done else "没有实际改动"
+
+    async def _editor_set_player_data(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """改**实时玩家**的数据（金币之外的字段也能改；改前自动存档）。
+
+        安全口径和改金币完全一致：白名单字段 + 范围校验 + 二次确认 + **改前自动存档**
+        + 玩家锁 + 立刻落盘。失败一律不改（先校验完再动数据）。
+        """
+        user_id = str(payload.get("user_id") or payload.get("uid") or "").strip()
+        if not user_id:
+            return False, "player_set 需要 user_id（改哪个玩家）"
+        mode = str(payload.get("mode") or "set").strip().lower()
+        add = mode in ("add", "delta", "增减", "增", "加")
+        if payload.get("confirm") is not True:
+            return False, "改玩家数据会影响真实存档：请在页面上再确认一次（confirm=true）"
+        known = {str(x) for x in await self._player_ids()}
+        if user_id not in known:
+            return False, f"找不到玩家 {user_id}（让他先在群里发一条消息再改）"
+
+        # 先干跑一遍：把坏输入挡在「自动存档」之前，免得白存一份档
+        probe: dict[str, Any] = {}
+        ok, detail = self._apply_player_edits(probe, payload.get("edits"), add=add)
+        if not ok:
+            return False, detail
+
+        # 干跑是在一个**空字典**上做的，所以「减到 0 为止」「金币上限」这类**依赖当前值**
+        # 的校验必须在真玩家数据上再走一遍 —— 否则「给 9 亿金币的号加 5 亿」会绕过上限。
+        message = ""
+        snapshotter = getattr(self, "_snapshot", None)
+        if callable(snapshotter):
+            try:
+                message = await snapshotter(
+                    "auto", note=f"改玩家数据前自动存档（{user_id}：{detail[:40]}）"
+                )
+            except Exception as e:
+                return False, f"改数据前的自动存档失败，已放弃本次修改：{e}"
+
+        lock_for = getattr(self, "_lock_for", None)
+        lock = lock_for(user_id) if callable(lock_for) else None
+        if lock is None:  # pragma: no cover
+            class _NoLock:
+                async def __aenter__(self):
+                    return None
+
+                async def __aexit__(self, *exc: Any) -> bool:
+                    return False
+
+            lock = _NoLock()
+        async with lock:
+            player = await self._load_player(user_id)
+            # 先在一个深拷贝上试算：任何一条校验不过就整批不改（数据保持原样）
+            trial = copy.deepcopy(player)
+            ok, detail = self._apply_player_edits(trial, payload.get("edits"), add=add)
+            if not ok:
+                return False, detail
+            player.clear()
+            player.update(trial)
+            saved = await self._save_player(player)
+        if not saved:
+            return False, f"玩家 {user_id} 的数据没写成功（看插件日志）"
+        setter = getattr(self, "_set_status", None)
+        if callable(setter):
+            try:
+                setter(f"页面改玩家数据：{user_id} {detail[:60]}")
+            except Exception:  # pragma: no cover
+                pass
+        tail = f"（改前已自动存档：{message}）" if message else ""
+        return True, f"已改玩家 {user_id}：{detail}{tail}"
+
+    async def _editor_set_snapshot_player(
+        self, payload: dict[str, Any]
+    ) -> tuple[bool, str]:
+        """改**某份存档里**某个玩家的数据（改完要「恢复」这份存档才生效）。"""
+        store = getattr(self, "backup_store", None)
+        if store is None:
+            return False, "存档模块不可用（_backup.py 是否缺失？）"
+        if payload.get("confirm") is not True:
+            return False, "改存档内容需要再确认一次（confirm=true）"
+        name = str(payload.get("name") or "").strip()
+        user_id = str(payload.get("user_id") or payload.get("uid") or "").strip()
+        if not name or not user_id:
+            return False, "snapshot_player_set 需要 name（哪份存档）和 user_id（哪个玩家）"
+        mode = str(payload.get("mode") or "set").strip().lower()
+        add = mode in ("add", "delta", "增减", "增", "加")
+        probe: dict[str, Any] = {}
+        ok, detail = self._apply_player_edits(probe, payload.get("edits"), add=add)
+        if not ok:
+            return False, detail
+
+        try:
+            snap = store.load_snapshot(name)
+        except Exception as e:
+            return False, f"读存档「{name}」失败：{e}"
+        if not isinstance(snap, dict):
+            return False, f"存档「{name}」格式不对（不是对象）"
+        players = snap.get("players")
+        if not isinstance(players, dict):
+            return False, f"存档「{name}」里没有 players（这不是玩家存档？）"
+        raw = players.get(user_id)
+        if raw is None:
+            return False, f"存档「{name}」里没有玩家 {user_id}"
+        module = globals().get("BACKUP_MODULE")
+        player, enveloped = raw, False
+        try:
+            if module is not None:
+                player, enveloped = module.unwrap_player(raw)
+        except Exception:
+            player = raw
+        if not isinstance(player, dict):
+            return False, f"存档「{name}」里玩家 {user_id} 的数据不是对象"
+        ok, detail = self._apply_player_edits(player, payload.get("edits"), add=add)
+        if not ok:                                          # pragma: no cover
+            return False, detail
+        if module is not None:
+            try:
+                players[user_id] = module.wrap_player(player) if enveloped else player
+            except Exception:
+                players[user_id] = player
+        else:
+            players[user_id] = player
+        # 原子写回**同一份**快照（保留 kind/created_at/note 等元信息，
+        # 只换 players 里这一个玩家）—— 不能走 write_snapshot，那会另存一份新档。
+        try:
+            path = store.path_of(str(snap.get("kind") or "manual"), name)
+            snap["count"] = len(players)
+            atomic = getattr(module, "_atomic_write_text", None) if module else None
+            text = json.dumps(snap, ensure_ascii=False, indent=1)
+            if callable(atomic):
+                atomic(path, text)
+            else:                                            # pragma: no cover
+                path.write_text(text, encoding="utf-8")
+            rebuild = getattr(store, "rebuild_index", None)
+            if callable(rebuild):
+                rebuild()
+        except Exception as e:
+            return False, f"写回存档「{name}」失败：{e}"
+        return True, (
+            f"已改存档「{name}」里玩家 {user_id} 的数据：{detail}"
+            f"（要「恢复」这份存档才会生效）"
+        )
 
     async def _editor_set_player_gold(self, payload: dict[str, Any]) -> tuple[bool, str]:
         """改实时玩家的金币（改前自动存一份 auto 档；范围校验 + 二次确认）。"""
@@ -1140,6 +1516,9 @@ class EditorBridgeMixin(EditorApiMixin):
             # 玩家页：改实时玩家金币 / 改某份存档里的玩家金币
             "set_gold": self._editor_set_player_gold,
             "snapshot_gold": self._editor_set_snapshot_gold,
+            # 玩家页（v1.18.53）：金币之外的实时数据也能增/减/改
+            "player_set": self._editor_set_player_data,
+            "snapshot_player_set": self._editor_set_snapshot_player,
             # 旧作用域找回（作者名改过之后老存档会落在别的 scope 里）
             "legacy_scan": self._editor_legacy_scan,
             "legacy_import": self._editor_legacy_import,

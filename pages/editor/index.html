@@ -3630,6 +3630,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     snapshotPlayersError: "",
     goldEdit: null,             // { user_id, value } 正在改的金币
     goldConfirm: null,          // { user_id, value, mode } 二次确认中
+    // ---- 改玩家数据（v1.18.53）：金币之外的实时数据也能增/减/改 ----
+    // { user_id, name, mode2:"live"|"snapshot", snapshot, mode:"add"|"set",
+    //   loaded, error, sections, clearArm }
+    dataEdit: null,
     legacy: null,               // 「找回旧数据」的扫描结果（插件回写，没扫过是 null）
     legacyMsg: "",              // 上一次扫描/导入的结果说明
     legacyBusy: false,          // 正在扫或正在导入（按钮转圈，防连点）
@@ -4990,6 +4994,56 @@ table.grid td.actions .btn { vertical-align: middle; }
   }
 
   /** 改金币（实时玩家 / 存档内玩家）。confirm 由调用方在二次确认后传 true。 */
+  /**
+   * 读一个玩家的**可编辑数据**（v1.18.53）：字段名单由插件下发（sections），
+   * 页面只负责渲染 —— 插件以后加字段，页面自动多一行，不用改两次。
+   */
+  async function openPlayerData(userId) {
+    if (!ENV.online) {
+      if (state.dataEdit) {
+        state.dataEdit.loaded = true;
+        state.dataEdit.error = "离线预览：读不到玩家数据（在插件里打开页面才有）";
+        render();
+      }
+      return;
+    }
+    var res = await playersCommand({ action: "player_get", user_id: text(userId) });
+    if (!state.dataEdit || state.dataEdit.user_id !== userId) return;   // 期间换了人
+    if (res && res.accepted && res.detail) {
+      var body = res.detail;
+      state.dataEdit.loaded = true;
+      state.dataEdit.error = "";
+      state.dataEdit.sections = body.sections || [];
+      state.dataEdit.name = body.name || state.dataEdit.name;
+    } else {
+      state.dataEdit.loaded = true;
+      state.dataEdit.error = (res && res.message) || "读取失败";
+    }
+    render();
+  }
+
+  /** 提交「改玩家数据」：走 player_set / snapshot_player_set（插件侧还要 confirm 与自动存档）。 */
+  async function submitPlayerData(edits) {
+    var d = state.dataEdit;
+    if (!d) return { ok: false, message: "面板已经关了" };
+    if (!ENV.online) return { ok: false, message: "离线预览：不会真正改玩家数据" };
+    var body = d.mode2 === "snapshot"
+      ? { action: "snapshot_player_set", name: text(d.snapshot), user_id: text(d.user_id),
+          mode: d.mode, edits: edits, confirm: true }
+      : { action: "player_set", user_id: text(d.user_id), mode: d.mode,
+          edits: edits, confirm: true };
+    var res = await playersCommand(body);
+    if (res && res.accepted) {
+      toast("ok", "已修改", (res.message || "").slice(0, 200));
+      await openPlayerData(d.user_id);                     // 重新读一遍，页面立刻显示新值
+      if (d.mode2 === "live") fetchPlayers(false).then(function () { render(); });
+      else if (d.snapshot) fetchSnapshotPlayers(d.snapshot, false).then(function () { render(); });
+    } else {
+      toast("err", "修改没成功", (res && res.message) || "未知原因");
+    }
+    return { ok: !!(res && res.accepted), message: (res && res.message) || "" };
+  }
+
   async function savePlayerGold(mode, userId, gold, snapshotName) {
     if (!ENV.online) {
       return { ok: false, message: "离线预览：不会真正改玩家数据" };
@@ -5062,7 +5116,9 @@ table.grid td.actions .btn { vertical-align: middle; }
       '<span class="hint">' + esc(tab.hint) + "</span></div>";
 
     html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
-      "这里只改<b>金币</b>，其它数据一律只读。改<b>实时玩家</b>前插件会自动存一份档（auto/，按「按时存档保留份数」轮转）；" +
+      "金币可以在列表里直接改；<b>背包/缸里的鱼</b>是只读的（估值由三维算出来，手改会对不上）。" +
+      "点每行的 <b>🧰 改数据</b> 还能增减<b>累计钓获 / 体力 / 鱼饵 / 道具 / 杂物 / 变异计数 / 称号 / 当前钓点</b>。" +
+      "改<b>实时玩家</b>前插件会自动存一份档（auto/，按「按时存档保留份数」轮转）；" +
       "改<b>存档里</b>的玩家不会动在线数据，要等「恢复」那份存档之后才生效。金币范围 0 ~ " +
       esc(fmtNum(state.playersGoldMax)) + "。<br />右上角「🔍 找回旧数据」是唯一的例外：" +
       "它只把<b>旧作用域里当前库没有的玩家</b>补进来（导入前自动存档，已有的玩家不动，旧数据不删）。" +
@@ -5201,7 +5257,198 @@ table.grid td.actions .btn { vertical-align: middle; }
       "</span>";
     html += "</div>";
     html += "</section>";
+    html += renderPlayerDataPanel();
     return html;
+  }
+
+  /**
+   * 玩家**实时数据**编辑面板（v1.18.53）。
+   *
+   * 站长的原话：「新增功能可以配置玩家的实时数据，增减东西，就是改金币的拓展」。
+   * 字段名单**不由页面写**：插件下发的 `player_get` 里带着 sections（中文名 + 说明 +
+   * 当前值 + 类型），页面照着渲染 —— 以后插件加一个可改字段，页面自动多一行。
+   *
+   * 两种模式（整块面板共用一个）：
+   *   · 增加 / 减少：每个框里填「改多少」（减就填负数），也可以一次填多行，一起提交
+   *   · 直接设置：每个框里填「新的值」
+   * 提交前有二次确认条（写的是真实存档），插件侧还会再要一次 confirm 并**改前自动存档**。
+   */
+  function renderPlayerDataPanel() {
+    var d = state.dataEdit;
+    if (!d) return "";
+    var mode = d.mode === "set" ? "set" : "add";
+    var html = '<section class="card" id="playerDataPanel">';
+    html += '<div class="card-head"><h2>🧰 改玩家数据· <span class="mono">' + esc(d.user_id) + "</span>" +
+      (d.name ? '<span class="hint">（' + esc(d.name) + "）</span>" : "") + "</h2>" +
+      '<span class="hint">' +
+      (d.mode2 === "snapshot"
+        ? "正在改**存档里**的数据（要「恢复」这份存档才生效）"
+        : "正在改**实时**玩家数据（提交前插件会自动存一份档）") +
+      "</span>" +
+      '<span class="spacer"></span>' +
+      '<button class="btn btn-sm" data-act="pd:close">✖ 关闭</button></div>';
+
+    html += '<div class="toolbar">';
+    html += '<button class="btn btn-sm' + (mode === "add" ? " btn-primary" : "") + '" data-act="pd:mode" data-mode="add">加减（填正负数）</button>';
+    html += '<button class="btn btn-sm' + (mode === "set" ? " btn-primary" : "") + '" data-act="pd:mode" data-mode="set">直接设为</button>';
+    html += '<span class="hint">　' +
+      (mode === "add"
+        ? "每个框里填<b>改多少</b>：正数是加、负数是减（减到 0 为止，不会变负）；留空 = 不改这一项"
+        : "每个框里填<b>新的值</b>（直接覆盖）；留空 = 不改这一项") + "</span>";
+    html += '<span class="spacer" style="margin-left:auto"></span>';
+    html += '<button class="btn btn-sm btn-primary" data-act="pd:apply">✔ 提交修改</button>';
+    html += "</div>";
+
+    if (!d.loaded) {
+      html += '<div class="notice"><span class="notice-icon">⏳</span><div>正在读这个玩家的数据…</div></div>';
+      html += "</section>";
+      return html;
+    }
+    if (d.error) {
+      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(d.error) +
+        '<div class="hint faint">读不到就改不了；多数是玩家 ID 不在当前作用域，或数据库正忙。</div></div></div>';
+      html += "</section>";
+      return html;
+    }
+
+    (d.sections || []).forEach(function (sec) {
+      if (sec.kind === "fields") {
+        html += '<h3 class="mini-head">' + esc(sec.title) + "</h3>";
+        html += '<div class="table-wrap"><table class="grid" style="min-width:560px"><thead><tr>' +
+          "<th>项目</th><th>现在</th><th style=\"width:150px\">" + (mode === "add" ? "改多少" : "新值") + "</th>" +
+          "<th>说明</th></tr></thead><tbody>";
+        sec.items.forEach(function (item) {
+          var isText = item.key === "current_location" || item.key === "equipped_rod"
+            || item.key === "equipped_bait" || item.key === "title";
+          var input = isText
+            ? '<input class="cell-input" type="text" maxlength="64" data-pd="f:' + esc(item.key) + '" placeholder="（不改）" />'
+            : '<input class="cell-input mono" type="number" step="1" data-pd="f:' + esc(item.key) + '" placeholder="0" />';
+          if (mode === "set" && isText) input = input.replace('type="text"', 'type="text"');
+          html += "<tr>" +
+            '<td data-label="项目">' + esc(item.label) +
+            ' <span class="faint mono">' + esc(item.key) + "</span></td>" +
+            '<td class="num" data-label="现在"><b>' + esc(fmtNum(item.value)) + "</b></td>" +
+            '<td data-label="改多少">' + input + "</td>" +
+            '<td class="faint" data-label="说明">' + esc(item.desc) + "</td>" +
+            "</tr>";
+        });
+        html += "</tbody></table></div>";
+        return;
+      }
+      if (sec.kind === "maps") {
+        html += '<h3 class="mini-head">' + esc(sec.title) + "</h3>";
+        sec.items.forEach(function (m) {
+          html += '<div class="table-wrap" style="margin-bottom:10px"><table class="grid" style="min-width:520px">' +
+            '<thead><tr><th colspan="2">' + esc(m.label) + ' <span class="faint mono">' + esc(m.key) + "</span></th>" +
+            '<th style="width:150px">' + (mode === "add" ? "改多少" : "新值") + "</th>" +
+            '<th class="faint">' + esc(m.desc) + "</th></tr></thead><tbody>";
+          if (!m.entries.length) {
+            html += '<tr><td colspan="4" class="faint">（现在是空的）</td></tr>';
+          }
+          m.entries.forEach(function (e) {
+            html += "<tr>" +
+              '<td data-label="名字" class="mono">' + esc(e.name) + "</td>" +
+              '<td class="num" data-label="现在">' + esc(fmtNum(e.count)) + "</td>" +
+              '<td data-label="改多少"><input class="cell-input mono" type="number" step="1" ' +
+              'data-pd="m:' + esc(m.key) + ":" + esc(e.name) + '" placeholder="0" /></td>' +
+              "<td></td></tr>";
+          });
+          // 新增一项（比如给玩家塞一个他从没有过的道具）
+          html += "<tr>" +
+            '<td data-label="新项"><input class="cell-input mono" type="text" data-pd="nk:' + esc(m.key) + '" placeholder="新 ' + esc(m.key) + ' id" /></td>' +
+            '<td class="faint" data-label="现在">新增</td>' +
+            '<td data-label="数量"><input class="cell-input mono" type="number" step="1" data-pd="nv:' + esc(m.key) + '" placeholder="1" /></td>' +
+            '<td class="faint">填「名字 + 数量」就会新增一项</td></tr>';
+          html += "</tbody></table></div>";
+        });
+        return;
+      }
+      if (sec.kind === "fish") {
+        html += '<h3 class="mini-head">' + esc(sec.title) + "</h3>";
+        html += '<div class="table-wrap"><table class="grid" style="min-width:460px"><thead><tr>' +
+          "<th>位置</th><th>条数</th><th>整块清空</th></tr></thead><tbody>";
+        sec.items.forEach(function (item) {
+          var armed = d.clearArm === item.key;
+          html += "<tr>" +
+            '<td data-label="位置">' + esc(item.label) + ' <span class="faint mono">' + esc(item.key) + "</span></td>" +
+            '<td class="num" data-label="条数"><b>' + esc(fmtNum(item.count)) + "</b></td>" +
+            '<td data-label="整块清空">' +
+            (armed
+              ? '<span class="confirm-strip"><span class="q">确定清空 ' + esc(item.label) + "？</span>" +
+                '<button class="btn btn-sm btn-danger" data-act="pd:clearYes" data-key="' + esc(item.key) + '">确认清空</button>' +
+                '<button class="btn btn-sm" data-act="pd:clearNo">取消</button></span>'
+              : '<button class="btn btn-sm" data-act="pd:clear" data-key="' + esc(item.key) + '">🗑 清空</button>') +
+            "</td></tr>";
+        });
+        html += "</tbody></table></div>";
+        html += '<div class="hint faint" style="margin-top:6px">' +
+          "只提供「整块清空」：逐条改鱼的属性容易把数据改歪（估值是算出来的，手改会和三维对不上）。" +
+          "想给玩家发鱼，用游戏里的指令或大鱼乐更安全。</div>";
+        return;
+      }
+    });
+
+    html += "</section>";
+    return html;
+  }
+
+  /** 收集面板里填过的框（只收非空的，留空 = 这一项不改）。 */
+  function playerDataEditsFromPage() {
+    var mode = (state.dataEdit && state.dataEdit.mode) === "set" ? "set" : "add";
+    var edits = [];
+    var bad = "";
+    Array.prototype.slice.call(document.querySelectorAll("[data-pd]")).forEach(function (input) {
+      var spec = String(input.getAttribute("data-pd") || "");
+      var raw = String(input.value == null ? "" : input.value).trim();
+      if (!raw) return;
+      var parts = spec.split(":");
+      if (parts[0] === "f") {
+        var isText = ["current_location", "equipped_rod", "equipped_bait", "title"].indexOf(parts[1]) >= 0;
+        if (!isText) {
+          var n = Number(raw);
+          if (!isFinite(n) || Math.floor(n) !== n) {
+            bad = bad || ("「" + parts[1] + "」要填整数（收到 " + raw + "）");
+            return;
+          }
+        }
+        edits.push({ field: parts[1], value: isText ? raw : Number(raw) });
+        return;
+      }
+      if (parts[0] === "m") {
+        var mv = Number(raw);
+        if (!isFinite(mv) || Math.floor(mv) !== mv) {
+          bad = bad || ("「" + parts[2] + "」要填整数（收到 " + raw + "）");
+          return;
+        }
+        edits.push({ map: parts[1], key: parts[2], value: Number(mv) });
+        return;
+      }
+      if (parts[0] === "nk" || parts[0] === "nv") return;   // 由下面那一对单独处理
+    });
+    // 「新增一项」：名字 + 数量配成一条
+    Array.prototype.slice.call(document.querySelectorAll("[data-pd^='nk:']")).forEach(function (nameInput) {
+      var mapKey = String(nameInput.getAttribute("data-pd") || "").slice(3);
+      var name = String(nameInput.value || "").trim();
+      if (!name) return;
+      var valueInput = document.querySelector('[data-pd="nv:' + mapKey + '"]');
+      if (!valueInput) {
+        // ⚠️ 不能「找不到就当 1」：那会静默给错数量（曾经真的想这么写）
+        bad = bad || ("新增「" + name + "」时读不到数量框，请刷新页面重试");
+        return;
+      }
+      var rawCount = String(valueInput.value == null ? "" : valueInput.value).trim();
+      var count = rawCount === "" ? 1 : Number(rawCount);
+      if (rawCount !== "" && (!isFinite(count) || Math.floor(count) !== count)) {
+        bad = bad || ("新增「" + name + "」的数量要填整数（收到 " + rawCount + "）");
+        return;
+      }
+      if (mode === "add" && count < 0) {
+        bad = bad || "新增一项时数量不能是负数（想减少就填在已有的那一行里）";
+        return;
+      }
+      edits.push({ map: mapKey, key: name, value: Number(count) });
+    });
+    return { edits: edits, error: bad, mode: mode };
   }
 
   function renderPlayerRow(r, live) {
@@ -5225,7 +5472,8 @@ table.grid td.actions .btn { vertical-align: middle; }
         '<button class="btn btn-sm" data-act="p:goldCancel">取消</button>';
     } else {
       actions = '<button class="btn btn-sm" data-act="p:gold" data-uid="' + esc(uid) + '" ' +
-        (confirming ? "disabled" : "") + ">✏️ 改金币</button>";
+        (confirming ? "disabled" : "") + ">✏️ 改金币</button>" +
+        '<button class="btn btn-sm" data-act="p:data" data-uid="' + esc(uid) + '">🧰 改数据</button>';
     }
     return "<tr>" +
       '<td class="mono" data-label="玩家 ID">' + esc(uid) + "</td>" +
@@ -7802,6 +8050,55 @@ table.grid td.actions .btn { vertical-align: middle; }
             render();
           }
         });
+        break;
+      }
+
+      /* ---- 🧰 改玩家数据（v1.18.53）---- */
+      case "p:data": {
+        var duid = el.getAttribute("data-uid");
+        var drow = playerRowsNow().filter(function (r) { return r.user_id === duid; })[0];
+        state.dataEdit = {
+          user_id: duid, name: (drow && drow.name) || "",
+          mode2: state.playersMode === "snapshot" ? "snapshot" : "live",
+          snapshot: state.snapshotPick || "",
+          mode: "add", loaded: false, error: "", sections: [], clearArm: null,
+        };
+        render();
+        openPlayerData(duid);
+        break;
+      }
+      case "pd:close":
+        state.dataEdit = null;
+        render();
+        break;
+      case "pd:mode":
+        if (!state.dataEdit) break;
+        state.dataEdit.mode = el.getAttribute("data-mode") === "set" ? "set" : "add";
+        render();
+        break;
+      case "pd:clear":
+        if (!state.dataEdit) break;
+        state.dataEdit.clearArm = el.getAttribute("data-key") || null;
+        render();
+        break;
+      case "pd:clearNo":
+        if (!state.dataEdit) break;
+        state.dataEdit.clearArm = null;
+        render();
+        break;
+      case "pd:clearYes": {
+        if (!state.dataEdit) break;
+        var ckey = el.getAttribute("data-key") || "";
+        state.dataEdit.clearArm = null;
+        submitPlayerData([{ clear: ckey }]);
+        break;
+      }
+      case "pd:apply": {
+        if (!state.dataEdit) break;
+        var packed = playerDataEditsFromPage();
+        if (packed.error) { toast("err", "有填错的地方", packed.error); break; }
+        if (!packed.edits.length) { toast("warn", "没有要改的项", "每个框留空 = 不改这一项"); break; }
+        submitPlayerData(packed.edits);
         break;
       }
 

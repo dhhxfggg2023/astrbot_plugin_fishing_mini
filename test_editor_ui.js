@@ -170,6 +170,9 @@ const hookNames = [
   "refreshReplyPicker", "refreshReplyPickerSummary", "addPickedButton", "renderReplyButtonRow",
   // 动态按钮（v1.18.35）：翻页 / 再次使用的占位符预演
   "isDynamicButtonScene", "renderButtonSample", "DYNAMIC_BUTTON_SCENES", "DYNAMIC_BUTTON_SAMPLES",
+  // v1.18.53：改玩家实时数据的面板（字段名单由插件下发，页面只渲染）
+  "renderPlayerDataPanel", "playerDataEditsFromPage", "openPlayerData", "submitPlayerData",
+  "renderPlayerRow",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -1821,6 +1824,153 @@ async function configKeysCoverage() {
     "视图上真的会出红条点名（不是只在函数里算）");
   check(redHtml.indexOf("没有入口 <b>1</b>") > 0, "汇总条上的「没有入口」跟着变成 1");
   T.state.configKeys = savedKeys;
+
+  /* ---- v1.18.53：改玩家实时数据的面板 ----
+     站长的原话：「新增功能可以配置玩家的实时数据，增减东西，就是改金币的拓展」。
+     字段名单**由插件下发**（player_get 的 sections），页面只渲染 ——
+     所以这里喂一份假 sections，验「渲染 + 收集」这两件页面该干的事。 */
+  function fakeInput(pd, value) {
+    return { value: value, getAttribute: function (k) { return k === "data-pd" ? pd : null; } };
+  }
+  const pdSections = [
+    { title: "数值与状态", kind: "fields", items: [
+      { key: "gold", label: "金币", desc: "主货币", value: 1000 },
+      { key: "total_caught", label: "累计钓获", desc: "等级按它算", value: 12 },
+      { key: "stamina", label: "体力", desc: "当前体力", value: -1 },
+      { key: "current_location", label: "当前钓点", desc: "钓点 id", value: "novice" },
+    ] },
+    { title: "计数表", kind: "maps", items: [
+      { key: "items", label: "道具数量", desc: "道具表 id", entries: [
+        { name: "feed_basic", count: 3 },
+      ] },
+      { key: "baits", label: "鱼饵数量", desc: "鱼饵表 id", entries: [] },
+    ] },
+    { title: "鱼", kind: "fish", items: [
+      { key: "inventory", label: "背包", count: 7 },
+      { key: "aquarium", label: "水族馆", count: 2 },
+    ] },
+  ];
+  T.state.dataEdit = {
+    user_id: "10001", name: "钓鱼佬", mode2: "live", snapshot: "",
+    mode: "add", loaded: true, error: "", sections: pdSections, clearArm: null,
+  };
+  const pdHtml = T.renderPlayerDataPanel();
+  check(pdHtml.indexOf("改玩家数据") > 0 && pdHtml.indexOf("10001") > 0,
+    "面板标题写明正在改哪个玩家");
+  check(pdHtml.indexOf("加减（填正负数）") > 0 && pdHtml.indexOf("直接设为") > 0,
+    "两种模式（加减 / 直接设为）都在面板上");
+  check(pdHtml.indexOf('data-pd="f:gold"') > 0 && pdHtml.indexOf('data-pd="f:stamina"') > 0,
+    "插件下发的每个字段都长出了输入框（页面不认识字段名也照渲染）");
+  check(pdHtml.indexOf('data-pd="m:items:feed_basic"') > 0,
+    "计数表里已有的项各有一个输入框");
+  check(pdHtml.indexOf('data-pd="nk:baits"') > 0 && pdHtml.indexOf('data-pd="nv:baits"') > 0,
+    "计数表支持「新增一项」（名字 + 数量）");
+  check(pdHtml.indexOf("清空") > 0 && pdHtml.indexOf("背包") > 0,
+    "鱼列表只给「整块清空」（不提供逐条改属性）");
+  check(pdHtml.indexOf("实时") > 0 && pdHtml.indexOf("自动存一份档") > 0,
+    "面板上写明改的是实时数据、且改前会自动存档");
+  // 二次确认条
+  T.state.dataEdit.clearArm = "inventory";
+  check(T.renderPlayerDataPanel().indexOf("确认清空") > 0,
+    "清空要点两次（先按「清空」再按「确认清空」）");
+  T.state.dataEdit.clearArm = null;
+  // 模式切换
+  T.state.dataEdit.mode = "set";
+  check(T.renderPlayerDataPanel().indexOf("新的值") > 0, "切到「直接设为」时表头跟着变");
+  T.state.dataEdit.mode = "add";
+  // 加载中 / 出错
+  T.state.dataEdit.loaded = false;
+  check(T.renderPlayerDataPanel().indexOf("正在读") > 0, "还没读到时显示「正在读」");
+  T.state.dataEdit.loaded = true;
+  T.state.dataEdit.error = "找不到玩家";
+  check(T.renderPlayerDataPanel().indexOf("找不到玩家") > 0, "读失败时把原因写在面板上");
+  T.state.dataEdit.error = "";
+  // 收集：留空 = 这一项不改
+  const collected = T.playerDataEditsFromPage();
+  check(collected.edits.length === 0 && collected.error === "",
+    "一个框都没填 -> 收集到 0 项（不会误提交空改动）");
+  /* 真的填几个框（临时替换 document 的查询，模拟 DOM）：验「收集成什么结构」。
+     这是页面与插件之间的契约：插件只认 {field|map|clear, value} 这几种形态。 */
+  const fakeInputs = [
+    fakeInput('f:gold', "500"),
+    fakeInput('f:total_caught', "-3"),
+    fakeInput('f:current_location', "lake"),
+    fakeInput('m:items:feed_basic', "2"),
+    fakeInput('m:baits:worm', "-1"),
+    fakeInput('nk:items', "hot_soup"),
+    fakeInput('nv:items', "4"),
+    fakeInput('f:stamina', ""),          // 留空 = 不改
+  ];
+  const savedQSA = documentStub.querySelectorAll;
+  const savedQS = documentStub.querySelector;
+  documentStub.querySelectorAll = function (sel) {
+    var s = String(sel);
+    if (s.indexOf("data-pd") < 0) return [];
+    // 页面用 [data-pd] 收全部、用 [data-pd^='nk:'] 只收「新增项的名字框」——
+    // 桩要按选择器语义返回，否则会把所有框都当成名字框（测试自己会算错）
+    if (s.indexOf("^=") >= 0) {
+      return fakeInputs.filter(function (i) {
+        return String(i.getAttribute("data-pd") || "").indexOf("nk:") === 0;
+      });
+    }
+    return fakeInputs;
+  };
+  // 新增一项时页面会用 querySelector 找「数量」框（找不到要报错，不能静默当 1）
+  documentStub.querySelector = function (sel) {
+    var m = String(sel).match(/data-pd="nv:([^"]+)"/);
+    if (!m) return null;
+    var want = "nv:" + m[1];
+    return fakeInputs.filter(function (i) {
+      return i.getAttribute("data-pd") === want;
+    })[0] || null;
+  };
+  const packed = T.playerDataEditsFromPage();
+  documentStub.querySelectorAll = savedQSA;
+  documentStub.querySelector = savedQS;
+  const byField = {};
+  packed.edits.forEach(function (e) {
+    byField[e.field || (e.map + ":" + e.key)] = e;
+  });
+  check(packed.error === "" && packed.mode === "add", "填了东西也能收集成功（默认加减模式）",
+    "error=" + JSON.stringify(packed.error) + " mode=" + packed.mode +
+    " edits=" + JSON.stringify(packed.edits));
+  check(byField["gold"] && byField["gold"].value === 500,
+    "数字字段收集成数字（金币 500）", JSON.stringify(byField["gold"]));
+  check(byField["total_caught"] && byField["total_caught"].value === -3,
+    "负数原样收（-3 = 扣 3）", JSON.stringify(byField["total_caught"]));
+  check(byField["current_location"] && byField["current_location"].value === "lake",
+    "文本字段收成字符串（钓点 id）");
+  check(byField["items:feed_basic"] && byField["items:feed_basic"].value === 2,
+    "计数表已有的项收成 {map,key,value}", JSON.stringify(byField["items:feed_basic"]));
+  check(byField["items:hot_soup"] && byField["items:hot_soup"].value === 4,
+    "「新增一项」把名字 + 数量配成一条（hot_soup=4）",
+    JSON.stringify(byField["items:hot_soup"]));
+  check(!byField["stamina"], "留空的框不进提交（那一项不动）");
+  // 非整数 / 新增负数 应当被页面拦下并给中文原因
+  const badInputs = [fakeInput('f:gold', "1.5")];
+  documentStub.querySelectorAll = function (sel) {
+    return String(sel).indexOf("data-pd") < 0 ? [] : badInputs;
+  };
+  const badPacked = T.playerDataEditsFromPage();
+  documentStub.querySelectorAll = savedQSA;
+  check(!!badPacked.error && badPacked.error.indexOf("整数") > 0,
+    "填了小数会被页面拦下并说明原因", badPacked.error);
+  // 行按钮：每行都有「改金币」和「改数据」两个入口
+  const rowHtml = T.renderPlayerRow(
+    { user_id: "10001", name: "钓鱼佬", gold: 500, level: 3, caught: 9, sold: 2, fish: 1, aquarium: 0, saved_text: "" },
+    true);
+  check(rowHtml.indexOf('data-act="p:gold"') > 0 && rowHtml.indexOf('data-act="p:data"') > 0,
+    "玩家列表每行都有「✏️ 改金币」和「🧰 改数据」两个按钮");
+  T.state.dataEdit = null;
+
+  /* 配置面板里「只读」的键仍然只有那 7 个：不能因为加了新功能就多出来
+     （站长要求「不要在配置页面放只读，全部改成可配置」—— 那 7 个是文件字段 /
+     数据操作 / 页面自己的状态，本来就不是「配置值」）。 */
+  const stillPanel = schemaKeys.filter(function (k) { return cov.entries[k] === "panel"; }).sort();
+  check(stillPanel.length === 7 &&
+    stillPanel.join(",") === "backup_export_file,backup_import_file,data_action,data_confirm,data_status,data_target,editor_status",
+    "加了新功能之后，只读的键仍然是那 7 个「不是配置值」的（没有多出来）",
+    stillPanel.join(","));
 
   /* v1.18.47：插件把 _conf_schema.json 一起下发了 —— 页面没登记、但 schema 认得的键
      要**自动**长出一行（走数值页），不再把站长挡在红行上。 */

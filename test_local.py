@@ -11110,6 +11110,161 @@ async def main():
         f"整张奖表能通过内容表通道改掉 -> {_msg_c[:30]}",
     )
 
+    # --- 玩家实时数据编辑（v1.18.53）：金币之外的字段也能增 / 减 / 改 ---
+    # 站长的原话：「新增功能可以配置玩家的实时数据，增减东西，就是改金币的拓展」。
+    # 安全口径必须和改金币一模一样：白名单 + 范围校验 + 二次确认 + 改前自动存档。
+    _pe = make_plugin()
+    _pe_p = mod._default_player("89671")
+    _pe_p["gold"] = 1000
+    _pe_p["baits"] = {"worm": 5}
+    _pe_p["items"] = {"feed_basic": 2}
+    _pe_p["total_caught"] = 10
+    await _pe._save_player(_pe_p)
+
+    # 读：白名单里有啥、现在是多少
+    _pe_detail = await _pe._editor_player_detail("89671")
+    check(_pe_detail[0] is True, "player_get 能读出玩家数据")
+    _pe_view = _pe_detail[1]
+    check(
+        isinstance(_pe_view, dict) and _pe_view.get("sections"),
+        "读出来的结构带 sections（页面照着渲染，不用自己知道字段名单）",
+    )
+    _pe_fields = {
+        item["key"]: item["value"]
+        for sec in _pe_view["sections"] if sec["kind"] == "fields"
+        for item in sec["items"]
+    }
+    check(
+        _pe_fields.get("gold") == 1000 and _pe_fields.get("total_caught") == 10,
+        f"字段值读对了（金币 {_pe_fields.get('gold')}、累计 {_pe_fields.get('total_caught')}）",
+    )
+    _pe_maps = {
+        m["key"]: {e["name"]: e["count"] for e in m["entries"]}
+        for sec in _pe_view["sections"] if sec["kind"] == "maps"
+        for m in sec["items"]
+    }
+    check(
+        _pe_maps.get("baits", {}).get("worm") == 5
+        and _pe_maps.get("items", {}).get("feed_basic") == 2,
+        f"计数表也读出来了 -> 鱼饵 {_pe_maps.get('baits')}｜道具 {_pe_maps.get('items')}",
+    )
+
+    # 增：金币 +500、鱼饵 +20、道具 +3（一次提交多项）
+    _ok_pe, _msg_pe = await _pe._editor_set_player_data({
+        "user_id": "89671", "mode": "add", "confirm": True,
+        "edits": [
+            {"field": "gold", "value": 500},
+            {"map": "baits", "key": "worm", "value": 20},
+            {"map": "items", "key": "feed_basic", "value": 3},
+            {"field": "total_caught", "value": 5},
+        ],
+    })
+    _pe_p = await _pe._load_player("89671")
+    check(
+        _ok_pe and _pe_p["gold"] == 1500 and _pe_p["baits"]["worm"] == 25
+        and _pe_p["items"]["feed_basic"] == 5 and _pe_p["total_caught"] == 15,
+        f"一次提交多项「增加」全部生效 -> {_msg_pe[:46]}",
+    )
+
+    # 减：负数就是扣（减到 0 为止，不会变负）
+    _ok_pe2, _msg_pe2 = await _pe._editor_set_player_data({
+        "user_id": "89671", "mode": "add", "confirm": True,
+        "edits": [
+            {"field": "gold", "value": -200},
+            {"map": "baits", "key": "worm", "value": -999},
+        ],
+    })
+    _pe_p = await _pe._load_player("89671")
+    check(
+        _ok_pe2 and _pe_p["gold"] == 1300 and "worm" not in _pe_p["baits"],
+        f"负数 = 扣减，扣到 0 就把那一项删掉 -> {_msg_pe2[:40]}",
+    )
+
+    # 直接设：mode=set
+    _ok_pe3, _ = await _pe._editor_set_player_data({
+        "user_id": "89671", "mode": "set", "confirm": True,
+        "edits": [{"field": "total_caught", "value": 3}],
+    })
+    _pe_p = await _pe._load_player("89671")
+    check(_ok_pe3 and _pe_p["total_caught"] == 3, "mode=set 直接覆盖")
+
+    # 校验：非白名单字段 / 负数直设 / 缺二次确认 / 不存在的玩家，一律拒绝且不改数据
+    _gold_before = (await _pe._load_player("89671"))["gold"]
+    _bad_cases = [
+        ({"user_id": "89671", "confirm": True, "edits": [{"field": "hacked", "value": 1}]},
+         "不是可改的玩家字段"),
+        ({"user_id": "89671", "confirm": True, "edits": [{"field": "gold", "value": -5}]},
+         "不能是负数"),
+        ({"user_id": "89671", "confirm": True, "edits": [{"field": "gold", "value": 10 ** 12}]},
+         "最多"),
+        ({"user_id": "89671", "edits": [{"field": "gold", "value": 1}]},
+         "再确认一次"),
+        ({"user_id": "不存在的号", "confirm": True, "edits": [{"field": "gold", "value": 1}]},
+         "找不到玩家"),
+        ({"user_id": "89671", "confirm": True, "edits": [{"map": "没有这张表", "key": "x", "value": 1}]},
+         "不认识的计数表"),
+        ({"user_id": "89671", "confirm": True, "edits": []}, "没有要改的字段"),
+    ]
+    _bad_ok = True
+    for _case, _want in _bad_cases:
+        _ok_c, _msg_c = await _pe._editor_set_player_data(_case)
+        if _ok_c or _want not in _msg_c:
+            _bad_ok = False
+            check(False, f"坏输入「{_want}」应当被拒 -> ok={_ok_c} msg={_msg_c[:40]}")
+    if _bad_ok:
+        check(True, f"{len(_bad_cases)} 种坏输入全部被拒")
+    check(
+        (await _pe._load_player("89671"))["gold"] == _gold_before,
+        "被拒的请求一个字都没改（校验在动数据之前）",
+    )
+    # 金币上限：在真有 9 亿的号上加 5 亿必须被拒（依赖当前值的校验不能只在空字典上跑）
+    _rich = mod._default_player("89672")
+    _rich["gold"] = 900_000_000
+    await _pe._save_player(_rich)
+    _ok_r, _msg_r = await _pe._editor_set_player_data({
+        "user_id": "89672", "mode": "add", "confirm": True,
+        "edits": [{"field": "gold", "value": 500_000_000}],
+    })
+    check(
+        not _ok_r and "最多" in _msg_r
+        and (await _pe._load_player("89672"))["gold"] == 900_000_000,
+        f"给 9 亿的号加 5 亿被上限挡住 -> {_msg_r[:44]}",
+    )
+
+    # 清空某张计数表 / 背包
+    _ok_c1, _ = await _pe._editor_set_player_data({
+        "user_id": "89671", "confirm": True,
+        "edits": [{"clear": "baits"}, {"clear": "inventory"}],
+    })
+    _pe_p = await _pe._load_player("89671")
+    check(_ok_c1 and _pe_p["baits"] == {} and _pe_p["inventory"] == [],
+          "「清空」能清计数表与背包")
+
+    # 文本字段（换称号 / 换钓点）
+    _ok_t, _msg_t = await _pe._editor_set_player_data({
+        "user_id": "89671", "mode": "set", "confirm": True,
+        "edits": [{"field": "current_location", "value": "novice"}],
+    })
+    _pe_p = await _pe._load_player("89671")
+    check(
+        _ok_t and _pe_p["current_location"] == "novice",
+        f"文本字段也能改（当前钓点）-> {_msg_t[:34]}",
+    )
+    _bad_t, _msg_bt = await _pe._editor_set_player_data({
+        "user_id": "89671", "mode": "set", "confirm": True,
+        "edits": [{"field": "current_location", "value": "x" * 100}],
+    })
+    check(not _bad_t and "太长" in _msg_bt, "文本字段超长被拒")
+    # 白名单在模块级（页面靠插件下发的字段表渲染，两边不会各写一份）
+    _pe_bridge = sys.modules.get("astrbot_fishing_editor_bridge")
+    check(
+        _pe_bridge is not None
+        and hasattr(_pe_bridge, "PLAYER_FIELDS")
+        and "gold" in _pe_bridge.PLAYER_FIELDS
+        and "baits" in _pe_bridge.PLAYER_MAP_FIELDS,
+        "字段白名单是插件侧唯一的一份（页面照它渲染，不会各写一份）",
+    )
+
     # =====================================================================
     print("\n[18] 回复场景全覆盖：每条回复都能配按钮/文案 + 护栏断言（v1.12.0）")
 
