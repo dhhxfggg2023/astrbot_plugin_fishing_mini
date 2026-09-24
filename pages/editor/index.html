@@ -3657,7 +3657,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.58";
+  var PAGE_VERSION = "v1.18.59";
 
   /* ===========================================================================
      5. 状态
@@ -5593,6 +5593,44 @@ table.grid td.actions .btn { vertical-align: middle; }
     return Object.keys(st.fishEdit || {}).length;
   }
 
+  /**
+   * 「改成 / 加减」的算式预览（v1.18.58）。
+   *
+   * 站长反馈「哪里输入数值呢」—— 光有输入框不够，得让他填完**立刻**看到结果：
+   * 「当前 12800 → 10800（-2000）」比一句「留空 = 不改」有用得多。
+   * 解析不了就直说，不猜（跟插件侧的校验口径保持一致：整数、减到 0 为止）。
+   */
+  function pdCalcText(current, raw, mode, allowDecimal) {
+    var cur = Number(current === undefined || current === null ? 0 : current);
+    if (!isFinite(cur)) cur = 0;
+    var text = String(raw === undefined || raw === null ? "" : raw).trim();
+    var head = "当前 " + fmtNum(cur);
+    if (text === "") return head + "（框里填个数字，填 0 = 清零）";
+    var n = Number(text);
+    if (!isFinite(n)) return head + " → 「" + text + "」不是数字，改不了";
+    if (!allowDecimal && Math.floor(n) !== n) return head + " → " + n + " 不是整数（这一项只收整数）";
+    var next = mode === "add" ? cur + n : n;
+    if (mode === "add") {
+      if (n < 0 && next < 0) next = 0;                 // 减到 0 为止，不会变负
+      return head + (n >= 0 ? " ＋ " : " − ") + fmtNum(Math.abs(n)) + " → " + fmtNum(next);
+    }
+    return head + " → " + fmtNum(next) + (next === cur ? "（没变）" : "");
+  }
+
+  /** 把某个字段的算式预览写进它那一行（敲字时用，避免整页重绘丢焦点）。 */
+  function pdRefreshCalc(dk) {
+    var box = document.querySelector('[data-calc="' + String(dk).replace(/"/g, '\\"') + '"]');
+    if (!box) return;
+    var parts = String(dk).split("|");
+    var item = pdFindField(parts[0], parts.slice(1).join("|"));
+    var input = document.querySelector('[data-pd2="' + String(dk).replace(/"/g, '\\"') + '"]');
+    var modeBox = document.querySelector('[data-pd2add="' + String(dk).replace(/"/g, '\\"') + '"]');
+    var mode = modeBox ? String(modeBox.value || "set") : "set";
+    var current = item ? item.value : 0;
+    var decimal = !!item && item.kind === "ratio";
+    box.textContent = pdCalcText(current, input ? input.value : "", mode, decimal);
+  }
+
   /** 枚举项 -> ``{id, name}``（兼容旧的纯字符串形态）。 */
   function pdEnumEntry(item) {
     if (item && typeof item === "object") {
@@ -5822,10 +5860,15 @@ table.grid td.actions .btn { vertical-align: middle; }
         '<select class="cell-input" data-pd2item="' + esc(dk) + '">' + pdItemOptions(item.enum) + "</select>" +
         '<select class="cell-input" data-pd2mode="' + esc(dk) + '">' +
         '<option value="add">加上</option><option value="remove">去掉</option></select></div>';
+      var tableHint = "整表写法：逗号分隔的「id:数量」";
+      if (!Object.keys(item.value && typeof item.value === "object" ? item.value : {}).length) {
+        tableHint += "；现在是空的 —— 直接在最上面那个框里写「worm:10, bread:5」也能塞进去";
+      }
       return {
-        control: '<input class="cell-input mono" type="text"' + fire +
-          ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(hint || "（空）") + '" />' +
-          '<div class="hint faint">整表写法：逗号分隔的「id:数量」（改动会整表覆盖）</div>' + addRow,
+        control: '<div class="pd-line"><span class="hint">' + (item.kind === "map_int" ? "数字表" : "文字表") + "</span>" +
+          '<input class="cell-input mono" type="text"' + fire +
+          ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(hint || "（空）") + '" /></div>' +
+          '<div class="hint faint">' + tableHint + "</div>" + addRow,
         mark: mark, now: now,
       };
     }
@@ -5837,21 +5880,47 @@ table.grid td.actions .btn { vertical-align: middle; }
       };
     }
     if (kind === "count" || kind === "int") {
-      // 「改成 / 加减」放**前面**：这样所有输入框左对齐成一列，扫一眼就能上下对着看
-      return line('<select class="cell-input" data-pd2add="' + esc(dk) + '">' +
-        '<option value="set">改成</option><option value="add">加减</option></select>' +
-        '<input class="cell-input mono" type="number" step="1"' + fire +
-        ' value="' + esc(pdDraft(gtitle, item)) + '" />');
+      /* 站长（v1.18.58 反馈）：「只有加上和减去按钮，哪里输入数值呢」——
+         说明光给一个输入框不够，得**明说哪里填数字、填完会变成多少**。
+         所以：①「改成 / 加减」放前面并说明作用 ②输入框前面写「数字」
+              ③旁边「算一下」实时算出结果（不用先保存才知道对不对）。 */
+      var text = pdDraft(gtitle, item);
+      var preview = pdCalcText(item.value, text, "set", false);
+      return {
+        control: '<div class="pd-line">' +
+          '<select class="cell-input" data-act="pd2:add" data-pd2add="' + esc(dk) + '" title="改成：填一个新的数值直接覆盖；加减：填要加多少（填负数就是减，减到 0 为止）">' +
+          '<option value="set">改成</option><option value="add">加减</option></select>' +
+          '<span class="hint">数字</span>' +
+          '<input class="cell-input mono" type="number" step="1"' + fire +
+          ' value="' + esc(text) + '" aria-label="' + esc(item.label) + '：在这里填数字" />' +
+          '<button type="button" class="btn btn-sm" data-act="pd2:calc" data-key="' + esc(dk) + '">算一下</button>' +
+          "</div>" +
+          '<div class="hint faint pd-calc" data-calc="' + esc(dk) + '">' + esc(preview) + "</div>",
+        mark: mark, now: now,
+      };
     }
     if (kind === "ratio") {
-      return line('<input class="cell-input mono" type="number" step="0.01"' + fire +
-        ' value="' + esc(pdDraft(gtitle, item)) + '" />');
+      /* 比例类（手气强度、行情加成…）同样明写「数字」，也带算式预览 —— 
+         它们和计数类长得一样，不能一个有一个没有（站长刚被这个坑过）。 */
+      var rtext = pdDraft(gtitle, item);
+      var rpreview = pdCalcText(item.value, rtext, "set", true);
+      return {
+        control: '<div class="pd-line"><span class="hint">数字</span>' +
+          '<input class="cell-input mono" type="number" step="0.01"' + fire +
+          ' value="' + esc(rtext) + '" aria-label="' + esc(item.label) + '：在这里填数字" />' +
+          '<span class="hint faint">小数也可以</span></div>' +
+          '<div class="hint faint pd-calc" data-calc="' + esc(dk) + '">' + esc(rpreview) + "</div>",
+        mark: mark, now: now,
+      };
     }
-    // text：有 enum 就下拉（显示中文），否则输入框
+    // text：有 enum 就下拉（显示中文），否则输入框（同样明写「文字」——不然只是个空框，
+    // 站长刚抱怨过「哪里输入」，别让文字字段重蹈覆辙）
     if (item.enum) {
       return line('<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>");
     }
-    return line('<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) + '" />');
+    return line('<span class="hint">文字</span>' +
+      '<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) +
+      '" placeholder="填新的内容" aria-label="' + esc(item.label) + '：在这里填文字" />');
   }
 
   function renderPlayerDataTab(tab) {
@@ -8578,6 +8647,11 @@ table.grid td.actions .btn { vertical-align: middle; }
         render();
         break;
       }
+      case "pd2:calc": {   // 「算一下」：只更新那一行的算式，不整页重绘（不丢焦点）
+        var calcKey = el.getAttribute("data-key");
+        if (calcKey) pdRefreshCalc(calcKey);
+        break;
+      }
       /* 下面三个都是「发一次请求 + 重新读一遍」的动作：必须挡住连点。
          否则第二次请求会对着**上一次**的列表算出错误的 index（删错鱼 / 清错缸），
          两次响应还会互相覆盖页面状态。busy 期间直接忽略，按钮本身也会变灰。 */
@@ -9045,6 +9119,11 @@ table.grid td.actions .btn { vertical-align: middle; }
       state.autoBackupDirty = true;
       render();
     }
+    /* ---- 🧰 玩家数据：把「改成 / 加减」从下拉换成 change（不整页重绘，只更新那一行的算式）---- */
+    else if (act === "pd2:add" || act === "pd2:modeSel") {
+      var pdKey = el.getAttribute("data-pd2add");
+      if (pdKey) pdRefreshCalc(pdKey);
+    }
     /* ---- 💬 回复：按钮样式下拉（select 走 change） ---- */
     else if (act === "rp:btnStyle") {
       var stId = el.getAttribute("data-scene");
@@ -9101,6 +9180,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       var gt = dk.split("|")[0];
       var fk = dk.split("|").slice(1).join("|");
       pdSetDraft(gt, fk, ev.target.value);
+      pdRefreshCalc(dk);                 // 敲字时顺手把「→ 会变成多少」算出来
       renderPlayerDataDirty();
       return;
     }

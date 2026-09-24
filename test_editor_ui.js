@@ -177,6 +177,7 @@ const hookNames = [
   "renderPlayerDataTab", "pdState", "pdPlayerOptions", "pdFindField", "pdDraft", "pdSetDraft",
   "pdFieldControl", "pdFishTable", "pdFishRow", "pdEnumOptions", "pdEnumSelect", "loadPlayerFull",
   "submitPlayerFull", "collectPlayerEdits", "collectFishDrafts", "collectNewFish",
+  "pdCalcText", "pdRefreshCalc",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -1878,6 +1879,19 @@ async function configKeysCoverage() {
   check(pdHtml.indexOf("蚯蚓") > 0 && pdHtml.indexOf("data-pd2item") > 0,
     "计数表/枚举都用中文名显示（不再只写 worm 这种 id）");
   check(pdHtml.indexOf("12,800") > 0, "「现在是多少」显示真实值（千分位）");
+  /* v1.18.58：站长「只有加上和减去按钮，哪里输入数值呢」——
+     数字类字段必须**一眼看出在哪填**：输入框前面写「数字」、旁边给算式预览。 */
+  check(pdHtml.indexOf("<span class=\"hint\">数字</span>") > 0 &&
+    pdHtml.indexOf('type="number" step="1" data-pd2="基础|gold"') > 0,
+    "数字字段明写「数字」+ 数字输入框（不再让人找不到在哪填）");
+  check(pdHtml.indexOf('class="hint faint pd-calc" data-calc="基础|gold"') > 0,
+    "每个数字字段都带算式预览（填完就知道会变成多少）");
+  check(T.pdCalcText(12800, "500", "set") === "当前 12,800 → 500" &&
+    T.pdCalcText(12800, "-500", "add") === "当前 12,800 − 500 → 12,300" &&
+    T.pdCalcText(100, "-500", "add") === "当前 100 − 500 → 0" &&
+    T.pdCalcText(12800, "", "set").indexOf("填个数字") > 0,
+    "算式预览按「改成 / 加减」分别算（减到 0 为止、空着会提示）",
+    T.pdCalcText(12800, "-500", "add"));
   /* v1.18.58：站长反馈「改数据不好改啊，怎么是一堆的挤在一起」——
      控件必须各自成行、表头列宽收敛、分组不要再套内部滚动（那会让它变成一个小窗口）。 */
   check(pdHtml.indexOf('class="pd-line"') > 0 && pdHtml.indexOf("grid stack pd-grid wrap-cells") > 0,
