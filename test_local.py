@@ -11306,7 +11306,7 @@ async def main():
     )
 
     # =====================================================================
-    print("\n[10ah] 玩家存档编辑器：全字段 + 逐条改鱼 + 原始 JSON（v1.18.56）")
+    print("\n[10ah] 玩家数据编辑器：全字段 + 逐条改鱼 + 原始 JSON（v1.18.56 建，v1.18.57 唯一写入口）")
     # 站长要的是「能改玩家的所有数据，单独弄一个界面」，并且定了三条：
     #   鱼能逐条改（鱼种/品质/异色/三维/估值，可增可删）、留原始 JSON 高级区、整批提交。
     _ep = mod.EDITOR_PLAYER
@@ -11355,8 +11355,44 @@ async def main():
         f"称号 {len(_enum['titles'])}｜异色 {len(_enum['variants'])}｜成就 {len(_enum['achievements'])}",
     )
     check(
-        _enum["quality"] == list(mod.QUALITY_ORDER),
-        f"个体品质档来自配置 -> {_enum['quality']}",
+        [q["id"] for q in _enum["quality"]] == list(mod.QUALITY_ORDER),
+        f"个体品质档来自配置 -> {[q['id'] for q in _enum['quality']]}",
+    )
+    # 站长原话：「能改的给我搞成中文啊，写一堆函数名干什么」——
+    # 枚举项一律是 {id, name}：页面显示 name、提交 id。这里验每个枚举都有中文名。
+    _no_cn = []
+    for _key in ("fish", "baits", "items", "rods", "locations", "titles",
+                 "variants", "achievements", "weather", "collectibles", "quality"):
+        for _row in _enum.get(_key) or []:
+            if not isinstance(_row, dict) or not _row.get("id") or not str(_row.get("name") or "").strip():
+                _no_cn.append(f"{_key}:{_row!r}")
+    check(
+        not _no_cn,
+        f"每个枚举项都有 id + 中文名（页面不会显示代码 id）-> 问题项 {_no_cn[:3] or '无'}",
+    )
+    _first_fish_id = _enum["fish"][0]["id"]
+    check(
+        _enum["name_map"]["baits"].get("worm") and _enum["name_map"]["fish"].get(_first_fish_id)
+        and " " not in str(_enum["name_map"]["fish"].get(_first_fish_id)).strip(),
+        f"name_map 能把 id 翻成中文 -> worm={_enum['name_map']['baits'].get('worm')!r}｜"
+        f"{_first_fish_id}={_enum['name_map']['fish'].get(_first_fish_id)!r}",
+    )
+    # 每个字段的中文名 + 它引用的枚举表都得真的存在（页面照着渲染，缺了就白给）
+    _ascii_labels = [
+        k for k, row in _specs.items()
+        if not any("\u4e00" <= ch <= "\u9fff" for ch in str(row.get("label") or ""))
+    ]
+    check(
+        not _ascii_labels,
+        f"每个字段都有中文名（界面上不再露 gold / total_caught 这种键名）-> 问题项 {_ascii_labels or '无'}",
+    )
+    _bad_enum = sorted({
+        str(row.get("enum")) for row in _specs.values()
+        if row.get("enum") and row["enum"] not in _enum
+    })
+    check(
+        not _bad_enum,
+        f"字段引用的枚举表都存在 -> 缺失 {_bad_enum or '无'}",
     )
 
     # --- 读：接口给的分组 + 原始 JSON ---

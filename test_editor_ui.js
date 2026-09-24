@@ -127,7 +127,7 @@ const hookNames = [
   "tabHasError", "problemsInTab", "problemWhere", "gotoProblem", "doSave", "tabHealth",
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
-  "fetchSnapshotPlayers", "savePlayerGold", "playerRowsNow", "renderPlayersTab",
+  "fetchSnapshotPlayers", "playerRowsNow", "renderPlayersTab",
   "renderPlayerRow", "runLegacyAction", "closeLegacyPanel", "applyStatus",
   // 道具效果键白名单（v1.11.0：喂鱼 / 手气 / 装饰 三种角色；v1.15.1 加旧写法映射）
   "ITEM_EFFECT_KEYS", "ITEM_EFFECT_KEY_NAMES", "ITEM_EFFECT_HINT", "ITEM_EFFECT_ALIASES",
@@ -155,6 +155,7 @@ const hookNames = [
   "numberRowValue", "levelThresholdAt", "levelCurveHint", "numberLiveHint",
   // v1.18.16：全量配置键（每个键都要有编辑入口）+ 「🔎 全部配置键」视图 + 入口行渲染
   "DEMO_NUMBER_VALUES", "demoNumberRows", "demoConfig", "numberEntryOf", "keyEntryLabel",
+  "PAGE_VERSION",
   "keyEntryEditable", "KEY_DOCS", "applyKeyDocs", "numberRowFromItem", "configKeyCoverage",
   // v1.18.47：新配置项自动登记（插件下发 config_schema，页面据此现造一行）
   "numberRowFromSchema", "schemaDef",
@@ -170,12 +171,11 @@ const hookNames = [
   "refreshReplyPicker", "refreshReplyPickerSummary", "addPickedButton", "renderReplyButtonRow",
   // 动态按钮（v1.18.35）：翻页 / 再次使用的占位符预演
   "isDynamicButtonScene", "renderButtonSample", "DYNAMIC_BUTTON_SCENES", "DYNAMIC_BUTTON_SAMPLES",
-  // v1.18.53：改玩家实时数据的面板（字段名单由插件下发，页面只渲染）
-  "renderPlayerDataPanel", "playerDataEditsFromPage", "openPlayerData", "submitPlayerData",
+  // v1.18.57：玩家数据是**唯一**的改数据入口（实时 / 存档内都在这一页切换）
   "renderPlayerRow", "playersCommand",
   // v1.18.56：玩家存档大编辑器（全字段 + 逐条改鱼 + 原始 JSON）
   "renderPlayerDataTab", "pdState", "pdPlayerOptions", "pdFindField", "pdDraft", "pdSetDraft",
-  "pdFieldControl", "pdFishTable", "pdFishRow", "pdEnumOptions", "loadPlayerFull",
+  "pdFieldControl", "pdFishTable", "pdFishRow", "pdEnumOptions", "pdEnumSelect", "loadPlayerFull",
   "submitPlayerFull", "collectPlayerEdits", "collectFishDrafts", "collectNewFish",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
@@ -501,12 +501,14 @@ function runAssertions() {
         check(out.indexOf("自动备份") >= 0 && out.indexOf("snap-card") >= 0,
           "存档页渲染出表单与卡片", out.length + " 字符");
         check(out.indexOf("kind-daily") >= 0 && out.indexOf("kind-manual") >= 0, "存档类型徽标齐全");
-        check(out.indexOf("snap:players") >= 0 && out.indexOf("👤 改金币") >= 0,
-          "存档卡片上有「改金币」入口（跳到玩家页的存档模式）");
+        check(out.indexOf("snap:players") >= 0 && out.indexOf("看玩家") >= 0,
+          "存档卡片上有「看玩家」入口（跳到玩家页的存档模式）");
       } else if (t.kind === "players") {
         const out = T.renderPlayersTab(t);
-        check(out.indexOf("<table") >= 0 && out.indexOf("金币（可改）") >= 0,
-          "玩家页渲染出可改金币的表格", out.length + " 字符");
+        check(out.indexOf("<table") >= 0 && out.indexOf("去改数据") >= 0,
+          "玩家页渲染出只读表格（每行带「去改数据」入口）", out.length + " 字符");
+        check(out.indexOf("p:gold") < 0 && out.indexOf("savePlayerGold") < 0,
+          "玩家页不再就地改金币（改数据只剩「🧰 玩家数据」一处）");
         check(out.indexOf("p:mode") >= 0 && out.indexOf("存档内玩家") >= 0 && out.indexOf("实时玩家") >= 0,
           "玩家页有「实时 / 存档内」两种模式");
       } else if (t.kind === "replies") {
@@ -516,10 +518,12 @@ function runAssertions() {
         check(out.indexOf("rp-side") >= 0 && out.indexOf("👁️ 预览") >= 0,
           "「💬 回复」右侧有常驻预览面板");
       } else if (t.kind === "playerdata") {
-        // v1.18.56：玩家数据大编辑器（还没选玩家时应该给出引导，不是空白）
+        // v1.18.57：玩家数据大编辑器（唯一的改数据入口；没选玩家时给引导，不是白屏）
         const out = T.renderPlayerDataTab(t);
-        check(out.indexOf("玩家存档编辑器") >= 0 && out.indexOf("先在上面选一个玩家") >= 0,
+        check(out.indexOf("玩家数据编辑器") >= 0 && out.indexOf("先在上面选一个玩家") >= 0,
           "「🧰 玩家数据」没选玩家时给引导（不是白屏）", out.length + " 字符");
+        check(out.indexOf('data-act="pd2:mode"') >= 0 && out.indexOf("存档内玩家") >= 0,
+          "「🧰 玩家数据」自己就能切实时 / 存档内（不用再回玩家页）");
       } else if (t.kind === "keys") {
         const out = T.renderKeysTab(t);
         check(out.indexOf("<table") >= 0 && out.indexOf("全部配置键") >= 0,
@@ -869,20 +873,15 @@ async function channelHelpers() {
   check((T.state.data.aliases || []).length === 3 && (T.state.data.custom || []).length === 2,
     "离线演示也带别名/自定义命令样例（首屏就能看到长什么样）");
 
-  /* ---- v1.10.0：玩家页（金币）---- */
+  /* ---- v1.10.0 / v1.18.57：玩家页（只读列表 + 跳去玩家数据页）---- */
   check((T.state.playersList || []).length === 4, "离线演示 4 名玩家", (T.state.playersList || []).length);
   check(T.playerRowsNow().length === 4 && T.state.playersMode === "live", "玩家页默认看「实时玩家」");
   const playerHtml = T.renderPlayersTab(T.TAB_BY_ID.players);
   check(playerHtml.indexOf("10001") > 0 && playerHtml.indexOf("12,800") > 0,
     "玩家表渲染出真实金币（千分位格式化）");
-  check(playerHtml.indexOf("p:gold") > 0, "每行都有「改金币」按钮");
-  T.state.goldConfirm = { user_id: "10001", value: 5000, mode: "live", oldValue: 12800 };
-  check(T.renderPlayersTab(T.TAB_BY_ID.players).indexOf("确认修改") > 0,
-    "二次确认条出现（改金币不是一键生效）");
-  T.state.goldConfirm = null;
-  const offlineGold = await T.savePlayerGold("live", "10001", 5000);
-  check(offlineGold.ok === false && /离线预览/.test(offlineGold.message),
-    "离线模式下改金币被拦下（不会假装成功）", offlineGold.message);
+  check(playerHtml.indexOf('data-act="p:toData"') > 0, "每行都有「🧰 去改数据」按钮");
+  check(playerHtml.indexOf("p:gold") < 0 && playerHtml.indexOf("savePlayerGold") < 0,
+    "玩家页没有就地改金币的控件了（改数据只剩「🧰 玩家数据」一处）");
 
   // 序列化
   const serialized = T.serializeContentTables();
@@ -1834,211 +1833,204 @@ async function configKeysCoverage() {
   check(redHtml.indexOf("没有入口 <b>1</b>") > 0, "汇总条上的「没有入口」跟着变成 1");
   T.state.configKeys = savedKeys;
 
-  /* ---- v1.18.53：改玩家实时数据的面板 ----
-     站长的原话：「新增功能可以配置玩家的实时数据，增减东西，就是改金币的拓展」。
-     字段名单**由插件下发**（player_get 的 sections），页面只渲染 ——
-     所以这里喂一份假 sections，验「渲染 + 收集」这两件页面该干的事。 */
-  function fakeInput(pd, value) {
-    return { value: value, getAttribute: function (k) { return k === "data-pd" ? pd : null; } };
-  }
-  const pdSections = [
-    { title: "数值与状态", kind: "fields", items: [
-      { key: "gold", label: "金币", desc: "主货币", value: 1000 },
-      { key: "total_caught", label: "累计钓获", desc: "等级按它算", value: 12 },
-      { key: "stamina", label: "体力", desc: "当前体力", value: -1 },
-      { key: "current_location", label: "当前钓点", desc: "钓点 id", value: "novice" },
-    ] },
-    { title: "计数表", kind: "maps", items: [
-      { key: "items", label: "道具数量", desc: "道具表 id", entries: [
-        { name: "feed_basic", count: 3 },
-      ] },
-      { key: "baits", label: "鱼饵数量", desc: "鱼饵表 id", entries: [] },
-    ] },
-    { title: "鱼", kind: "fish", items: [
-      { key: "inventory", label: "背包", count: 7 },
-      { key: "aquarium", label: "水族馆", count: 2 },
+  /* ---- v1.18.57：玩家数据页 = 唯一的改数据入口（实时 / 存档内都在这切换）----
+     站长的原话：「你怎么玩家和玩家数据两个界面都可以改数据，合并成一个啊」。
+     所以这里同时验：模式条、存档模式、中文标签（不能再露代码 id）。 */
+  T.state.playerData = null;
+  T.state.playersList = [
+    { user_id: "10001", name: "钓鱼佬", gold: 12800, level: 3, caught: 9, sold: 2, fish: 1, aquarium: 0, saved_text: "" },
+  ];
+  T.state.snapshotPick = "2026-09-18_1820.json";
+  T.state.snapshots = [
+    { name: "2026-09-18_1820.json", note: "手动" },
+    { name: "auto/2026-09-19_0700.json", note: "自动" },
+  ];
+  T.state.tab = "playerdata";
+  T.state.pluginVersion = "";
+  const pdTab = T.TAB_BY_ID.playerdata;
+  let pds = T.pdState();
+  pds.user_id = "10001";
+  pds.loaded = true;
+  pds.enums = {
+    fish: [{ id: "crucian", name: "🦈 鲫鱼" }],
+    quality: [{ id: "凡品", name: "⚪凡品" }, { id: "珍品", name: "🏆珍品" }],
+    variants: [{ id: "rainbow", name: "🌈 虹彩" }],
+    baits: [{ id: "worm", name: "🪱 蚯蚓" }],
+  };
+  pds.groups = [
+    { title: "基础", items: [
+      { key: "gold", label: "金币", kind: "count", value: 12800, desc: "主货币" },
+      { key: "stamina", label: "体力", kind: "count", value: -1, desc: "" },
+      { key: "baits", label: "鱼饵", kind: "map", value: { worm: 3 }, desc: "", enum: "baits" },
+      { key: "equipped_bait", label: "当前鱼饵", kind: "text", value: "worm", desc: "", enum: "baits" },
+      { key: "inventory", label: "背包（鱼）", kind: "fish_list", value: [
+        { fish_id: "crucian", quality: "珍品", variant: "rainbow", attrs: { meat: 10, spirit: 20, sheen: 30 }, feed_uses: 1, value: 500 },
+      ], desc: "逐条可改" },
     ] },
   ];
-  T.state.dataEdit = {
-    user_id: "10001", name: "钓鱼佬", mode2: "live", snapshot: "",
-    mode: "add", loaded: true, error: "", sections: pdSections, clearArm: null,
-  };
-  const pdHtml = T.renderPlayerDataPanel();
-  check(pdHtml.indexOf("改玩家数据") > 0 && pdHtml.indexOf("10001") > 0,
-    "面板标题写明正在改哪个玩家");
-  check(pdHtml.indexOf("加减（填正负数）") > 0 && pdHtml.indexOf("直接设为") > 0,
-    "两种模式（加减 / 直接设为）都在面板上");
-  check(pdHtml.indexOf('data-pd="f:gold"') > 0 && pdHtml.indexOf('data-pd="f:stamina"') > 0,
-    "插件下发的每个字段都长出了输入框（页面不认识字段名也照渲染）");
-  check(pdHtml.indexOf('data-pd="m:items:feed_basic"') > 0,
-    "计数表里已有的项各有一个输入框");
-  check(pdHtml.indexOf('data-pd="nk:baits"') > 0 && pdHtml.indexOf('data-pd="nv:baits"') > 0,
-    "计数表支持「新增一项」（名字 + 数量）");
-  check(pdHtml.indexOf("清空") > 0 && pdHtml.indexOf("背包") > 0,
-    "鱼列表只给「整块清空」（不提供逐条改属性）");
-  check(pdHtml.indexOf("实时") > 0 && pdHtml.indexOf("自动存一份档") > 0,
-    "面板上写明改的是实时数据、且改前会自动存档");
-  // 二次确认条
-  T.state.dataEdit.clearArm = "inventory";
-  check(T.renderPlayerDataPanel().indexOf("确认清空") > 0,
-    "清空要点两次（先按「清空」再按「确认清空」）");
-  T.state.dataEdit.clearArm = null;
-  // 模式切换
-  T.state.dataEdit.mode = "set";
-  check(T.renderPlayerDataPanel().indexOf("新的值") > 0, "切到「直接设为」时表头跟着变");
-  T.state.dataEdit.mode = "add";
-  // 加载中 / 出错
-  T.state.dataEdit.loaded = false;
-  check(T.renderPlayerDataPanel().indexOf("正在读") > 0, "还没读到时显示「正在读」");
-  T.state.dataEdit.loaded = true;
-  T.state.dataEdit.error = "找不到玩家";
-  check(T.renderPlayerDataPanel().indexOf("找不到玩家") > 0, "读失败时把原因写在面板上");
-  T.state.dataEdit.error = "";
-  // 收集：留空 = 这一项不改
-  const collected = T.playerDataEditsFromPage();
-  check(collected.edits.length === 0 && collected.error === "",
-    "一个框都没填 -> 收集到 0 项（不会误提交空改动）");
-  /* 真的填几个框（临时替换 document 的查询，模拟 DOM）：验「收集成什么结构」。
-     这是页面与插件之间的契约：插件只认 {field|map|clear, value} 这几种形态。 */
-  const fakeInputs = [
-    fakeInput('f:gold', "500"),
-    fakeInput('f:total_caught', "-3"),
-    fakeInput('f:current_location', "lake"),
-    fakeInput('m:items:feed_basic', "2"),
-    fakeInput('m:baits:worm', "-1"),
-    fakeInput('nk:items', "hot_soup"),
-    fakeInput('nv:items', "4"),
-    fakeInput('f:stamina', ""),          // 留空 = 不改
-  ];
-  const savedQSA = documentStub.querySelectorAll;
-  const savedQS = documentStub.querySelector;
-  documentStub.querySelectorAll = function (sel) {
-    var s = String(sel);
-    if (s.indexOf("data-pd") < 0) return [];
-    // 页面用 [data-pd] 收全部、用 [data-pd^='nk:'] 只收「新增项的名字框」——
-    // 桩要按选择器语义返回，否则会把所有框都当成名字框（测试自己会算错）
-    if (s.indexOf("^=") >= 0) {
-      return fakeInputs.filter(function (i) {
-        return String(i.getAttribute("data-pd") || "").indexOf("nk:") === 0;
-      });
-    }
-    return fakeInputs;
-  };
-  // 新增一项时页面会用 querySelector 找「数量」框（找不到要报错，不能静默当 1）
-  documentStub.querySelector = function (sel) {
-    var m = String(sel).match(/data-pd="nv:([^"]+)"/);
-    if (!m) return null;
-    var want = "nv:" + m[1];
-    return fakeInputs.filter(function (i) {
-      return i.getAttribute("data-pd") === want;
-    })[0] || null;
-  };
-  const packed = T.playerDataEditsFromPage();
-  documentStub.querySelectorAll = savedQSA;
-  documentStub.querySelector = savedQS;
-  const byField = {};
-  packed.edits.forEach(function (e) {
-    byField[e.field || (e.map + ":" + e.key)] = e;
-  });
-  check(packed.error === "" && packed.mode === "add", "填了东西也能收集成功（默认加减模式）",
-    "error=" + JSON.stringify(packed.error) + " mode=" + packed.mode +
-    " edits=" + JSON.stringify(packed.edits));
-  check(byField["gold"] && byField["gold"].value === 500,
-    "数字字段收集成数字（金币 500）", JSON.stringify(byField["gold"]));
-  check(byField["total_caught"] && byField["total_caught"].value === -3,
-    "负数原样收（-3 = 扣 3）", JSON.stringify(byField["total_caught"]));
-  check(byField["current_location"] && byField["current_location"].value === "lake",
-    "文本字段收成字符串（钓点 id）");
-  check(byField["items:feed_basic"] && byField["items:feed_basic"].value === 2,
-    "计数表已有的项收成 {map,key,value}", JSON.stringify(byField["items:feed_basic"]));
-  check(byField["items:hot_soup"] && byField["items:hot_soup"].value === 4,
-    "「新增一项」把名字 + 数量配成一条（hot_soup=4）",
-    JSON.stringify(byField["items:hot_soup"]));
-  check(!byField["stamina"], "留空的框不进提交（那一项不动）");
-  // 非整数 / 新增负数 应当被页面拦下并给中文原因
-  const badInputs = [fakeInput('f:gold', "1.5")];
-  documentStub.querySelectorAll = function (sel) {
-    return String(sel).indexOf("data-pd") < 0 ? [] : badInputs;
-  };
-  const badPacked = T.playerDataEditsFromPage();
-  documentStub.querySelectorAll = savedQSA;
-  check(!!badPacked.error && badPacked.error.indexOf("整数") > 0,
-    "填了小数会被页面拦下并说明原因", badPacked.error);
-  // 行按钮：每行都有「改金币」和「改数据」两个入口
+  const pdHtml = T.renderPlayerDataTab(pdTab);
+  check(pdHtml.indexOf('data-act="pd2:mode"') > 0 && pdHtml.indexOf("🟢 实时玩家") > 0 &&
+    pdHtml.indexOf("💾 存档内玩家") > 0,
+    "玩家数据页自己带「实时 / 存档内」切换（合并后不用再回玩家页切）", pdHtml.length + " 字符");
+  check(pdHtml.indexOf("pd2:snapPick") < 0, "「实时玩家」模式下不显示存档下拉（少一步误操作）");
+  check(pdHtml.indexOf('data-pd2="基础|gold"') > 0 && pdHtml.indexOf("金币") > 0,
+    "插件下发的字段渲染成控件，并带中文名");
+  check(pdHtml.indexOf("蚯蚓") > 0 && pdHtml.indexOf("data-pd2item") > 0,
+    "计数表/枚举都用中文名显示（不再只写 worm 这种 id）");
+  check(pdHtml.indexOf("12,800") > 0, "「现在是多少」显示真实值（千分位）");
+  // 逐条改鱼：鱼种/品质/异色下拉里只能是中文，而且**不能**是 [object Object]
+  const fishRowHtml = T.pdFishRow("inventory", 0, pds.groups[0].items[4].value[0]);
+  check(fishRowHtml.indexOf("[object Object]") < 0,
+    "鱼表的下拉不会把枚举对象渲染成 [object Object]（v1.18.57 修）");
+  check(fishRowHtml.indexOf('value="珍品"') > 0 && fishRowHtml.indexOf("珍品") > 0,
+    "品质下拉：显示中文、提交 id");
+  check(fishRowHtml.indexOf('value="rainbow"') > 0 && fishRowHtml.indexOf("虹彩") > 0,
+    "异色下拉：显示中文、提交 id");
+  // 切到「存档内玩家」：要出现存档下拉 + 写明改的是存档文件
+  pds.mode2 = "snapshot";
+  pds.snapshot = "2026-09-18_1820.json";
+  const snapHtml = T.renderPlayerDataTab(pdTab);
+  check(snapHtml.indexOf("pd2:snapPick") > 0 && snapHtml.indexOf("2026-09-18_1820.json") > 0,
+    "存档模式下列出可选的存档");
+  check(snapHtml.indexOf("恢复这份存档") > 0 && snapHtml.indexOf("实时数据一行都不动") > 0,
+    "存档模式明确写出「要恢复这份存档才生效」（不会误以为已经生效）");
+  // 存档模式但没选档：不能拿实时数据显示（宁可空着）
+  pds.snapshot = "";
+  const noSnapHtml = T.renderPlayerDataTab(pdTab);
+  check(noSnapHtml.indexOf("先在上面选一份存档") > 0 && noSnapHtml.indexOf("data-pd2=") < 0,
+    "存档模式没选档时不显示任何编辑控件（避免看着像在改实时数据）");
+  pds.mode2 = "live";
+  // 保存入口 / 未保存计数
+  pds.drafts = {};
+  pds.fishEdit = {};
+  pds.dirty = 0;
+  check(pdHtml.indexOf('data-act="pd2:save"') > 0 && pdHtml.indexOf('data-act="pd2:reload"') > 0,
+    "页面有「保存修改」和「重读」两个入口");
+  T.pdSetDraft("基础", "gold", "13000");
+  check(T.pdState().dirty === 1, "改了金币 -> 未保存计数 = 1", String(T.pdState().dirty));
+  check(T.collectPlayerEdits().length === 1 && T.collectPlayerEdits()[0].key === "gold",
+    "草稿能收集成插件认识的 edits", JSON.stringify(T.collectPlayerEdits()));
+  pds.drafts = {};
+  pds.fishEdit = {};
+  pds.dirty = 0;
+  // 日志：玩家数据页是自己出问题也不能白屏（安全口径要写在页面上）
+  const safetyHtml = T.renderPlayerDataTab(pdTab);
+  check(safetyHtml.indexOf("整批校验") > 0 && safetyHtml.indexOf("改前自动存一份档") > 0 &&
+    safetyHtml.indexOf("重算估值") > 0,
+    "页面上写清了安全口径（整批校验 / 改前自动存档 / 重算估值）");
+  // 行按钮：每行只有一个「去改数据」入口
   const rowHtml = T.renderPlayerRow(
     { user_id: "10001", name: "钓鱼佬", gold: 500, level: 3, caught: 9, sold: 2, fish: 1, aquarium: 0, saved_text: "" },
     true);
-  check(rowHtml.indexOf('data-act="p:gold"') > 0 && rowHtml.indexOf('data-act="p:data"') > 0,
-    "玩家列表每行都有「✏️ 改金币」和「🧰 改数据」两个按钮");
+  check(rowHtml.indexOf('data-act="p:toData"') > 0 && rowHtml.indexOf("去改数据") > 0,
+    "玩家列表每行有「🧰 去改数据」按钮（带着玩家跳到玩家数据页）");
+  check(rowHtml.indexOf('data-act="p:gold"') < 0 && rowHtml.indexOf("改金币") < 0,
+    "玩家列表不再有就地改金币的控件");
   /* v1.18.54：玩家页把「插件版本 vs 页面版本」并排显示 ——
      「点了没反应」最常见的原因是浏览器缓存了旧页面，这里一眼能看出来。 */
-  T.state.pluginVersion = "v1.18.55";
+  T.state.pluginVersion = T.PAGE_VERSION;
   const verHtml = T.renderPlayersTab(T.TAB_BY_ID.players);
-  check(verHtml.indexOf("插件 <b>v1.18.55</b>") > 0 && verHtml.indexOf("页面 <b>v1.18.55</b>") > 0,
+  check(verHtml.indexOf("插件 <b>" + T.PAGE_VERSION + "</b>") > 0 &&
+    verHtml.indexOf("页面 <b>" + T.PAGE_VERSION + "</b>") > 0,
     "玩家页显示插件版本与页面版本（一致时打勾）");
   T.state.pluginVersion = "v1.18.40";
   const verHtml2 = T.renderPlayersTab(T.TAB_BY_ID.players);
   check(verHtml2.indexOf("Ctrl+F5") > 0 && verHtml2.indexOf("不一致") > 0,
     "两版不一致时明确提示「按 Ctrl+F5 强制刷新」");
   T.state.pluginVersion = "";
-  T.state.dataEdit = null;
+  T.state.playerData = null;
 
-  /* 请求失败时**必须把原因写在面板上**（v1.18.53）：以前 openPlayerData 没兜住
-     「请求本身被拒」——老后端没这个动作时 await 直接抛出去，函数当场中断，
-     面板就卡着不动，站长看到的是「点了没反应」。
-     ⚠️ 用**真实的桩 SDK** 造失败（页面的 playersCommand 是函数声明，外部赋值
-        进不去闭包），这样走的才是真链路。 */
+  /* v1.18.57：改玩家数据只剩「🧰 玩家数据」一处（玩家页只读），所以读取失败的
+     「点了没反应」防护搬到这里测：请求被拒必须把原因写在页面上，不能静默卡住。 */
   {
     const L = loadPageFromSource(makeFakeSdk()).T;
-    const savedPost = L.ENV.sdk ? null : null;
-    const openCase = function () {
-      L.state.dataEdit = {
-        user_id: "10001", name: "", mode2: "live", snapshot: "",
-        mode: "add", loaded: false, error: "", sections: [], clearArm: null,
-      };
-      return L.openPlayerData("10001");
+    const loadCase = function (uid) {
+      L.state.playerData = null;
+      return L.loadPlayerFull(uid, "");
     };
-    // ① 后端不认这个动作（旧版插件）：错误信封 -> 面板上写清楚
+    // ① 后端不认这个动作（旧版插件）：错误信封 -> 页面上写清楚
     captured.playersFail = function () {
       return Promise.reject({
         response: { status: 400, data: { status: "error",
-          message: "不认识的玩家动作「player_get」（可用：list、set_gold）" } },
+          message: "不认识的玩家动作「player_full_get」（可用：list、set_gold）" } },
         message: "Request failed with status code 400",
       });
     };
     let threw = null;
-    try { await openCase(); } catch (e) { threw = e; }
+    try { await loadCase("10001"); } catch (e) { threw = e; }
     check(threw === null, "请求被拒不会把异常抛出去（抛出去 = 点了没反应）",
       threw ? String(threw.message) : "无抛出");
-    check(L.state.dataEdit.loaded === true && L.state.dataEdit.error.indexOf("player_get") >= 0,
-      "后端不认这个动作时，原因写在面板上（不是静默卡住）",
-      "error=" + JSON.stringify(L.state.dataEdit.error) +
-      " loaded=" + L.state.dataEdit.loaded);
-    const errPanel = L.renderPlayerDataPanel();
-    check(errPanel.indexOf("读不到就改不了") > 0 && errPanel.indexOf("↻ 刷新") > 0,
-      "面板上还给了「怎么办」（重启插件 / 刷新重试）");
-    // ② 恢复真桩：成功路径要把字段渲染成输入框（端到端）
+    const lst = L.pdState();
+    check(lst.loaded === true && String(lst.error).indexOf("player_full_get") >= 0,
+      "后端不认这个动作时，原因写在页面上（不是静默卡住）",
+      "error=" + JSON.stringify(lst.error) + " loaded=" + lst.loaded);
+    const errHtml = L.renderPlayerDataTab(L.TAB_BY_ID.playerdata);
+    check(errHtml.indexOf("读不到就改不了") > 0,
+      "页面上还给了「怎么办」（重启插件 / 刷新重试）");
+    // ② 恢复真桩：成功路径要把插件下发的字段渲染成控件（端到端）
     captured.playersFail = null;
-    await openCase();
-    const okPanel = L.renderPlayerDataPanel();
-    check(L.state.dataEdit.error === "" && okPanel.indexOf('data-pd="f:gold"') > 0,
-      "恢复正常后：拿到插件下发的字段并渲染出输入框（端到端）",
-      "error=" + JSON.stringify(L.state.dataEdit.error) + " len=" + okPanel.length);
+    await loadCase("10001");
+    const okHtml = L.renderPlayerDataTab(L.TAB_BY_ID.playerdata);
+    /* ⚠️ 必须现取 pdState()：loadPlayerFull 成功后会 fire-and-forget 地刷新玩家列表
+       （fetchPlayers(...).then(render)），那次 render 会重建面板状态对象，
+       上面拿着的 lst 引用可能已经过期（测试第一次就是这么误报的）。 */
+    const after = L.pdState();
+    check(after.error === "" && okHtml.indexOf('data-pd2="') > 0,
+      "恢复正常后：拿到插件下发的字段并渲染出控件（端到端）",
+      "error=" + JSON.stringify(after.error) + " len=" + okHtml.length);
     // ③ 提交失败要有提示（不能静默）
-    L.state.dataEdit.mode = "add";
     captured.playersFail = function () {
       return Promise.reject({ response: { status: 500, data: { message: "数据库正忙" } },
         message: "Request failed with status code 500" });
     };
     let subThrew = null;
     let sub = null;
-    try { sub = await L.submitPlayerData([{ field: "gold", value: 100 }]); }
+    try { sub = await L.submitPlayerFull([{ key: "gold", value: 100 }]); }
     catch (e) { subThrew = e; }
     check(subThrew === null && sub && sub.ok === false && String(sub.message).length > 0,
       "提交失败也不抛异常，而是返回失败 + 给站长一句能看懂的原因",
       subThrew ? String(subThrew.message) : JSON.stringify(sub && sub.message));
     captured.playersFail = null;
-    L.state.dataEdit = null;
+    L.state.playerData = null;
+  }
+
+  /* v1.18.57：连点两次「🗑 删」不能算出错的 index（第二次请求会对着上一次的列表算）
+     —— 写请求期间 busy=true，第二个请求根本不发出去。 */
+  {
+    const R = loadPageFromSource(makeFakeSdk()).T;
+    R.state.playerData = null;
+    const rst = R.pdState();
+    rst.user_id = "10001";
+    rst.loaded = true;
+    captured.calls = [];
+    const p1 = R.submitPlayerFull([{ key: "inventory", op: "remove", index: 1 }]);
+    const second = R.submitPlayerFull([{ key: "inventory", op: "remove", index: 1 }]);
+    await p1;
+    const secondRes = await second;
+    const writes = captured.calls.filter(function (c) {
+      return c.kind === "post" && JSON.parse(c.body).action === "player_full_set";
+    });
+    check(writes.length === 1,
+      "写请求在进行中时，第二次提交直接被拦下（只发出去一条）", "发出 " + writes.length + " 条");
+    check(secondRes && secondRes.ok === false && /稍等|处理/.test(secondRes.message),
+      "被拦下的那次给一句人话（不是静默丢掉）", JSON.stringify(secondRes && secondRes.message));
+    check(R.pdState().busy === false, "一轮结束后 busy 归位（不会卡住页面）");
+    R.state.playerData = null;
+  }
+
+  /* ---- v1.18.57：老「改金币 / 小面板」那份代码必须**真的删干净** ----
+     站长原话：「你怎么玩家和玩家数据两个界面都可以改数据，合并成一个啊」。
+     留着旧函数 = 两套改数据路径，早晚又分叉；这里直接按源码断言。 */
+  {
+    const src = html;   // 页面源码（本文件开头已经读进来了）
+    const deadNames = ["renderPlayerDataPanel", "playerDataEditsFromPage", "openPlayerData",
+      "submitPlayerData", "savePlayerGold", "goldEdit", "goldConfirm", "dataEdit",
+      "p:goldInput", "p:goldYes", "p:gold"];
+    const alive = deadNames.filter(function (n) { return src.indexOf(n) >= 0; });
+    check(alive.length === 0, "旧的小面板 / 改金币代码已经删干净（不留第二套改数据路径）",
+      "还残留：" + alive.join("、"));
+    const bothTabs = (src.match(/id: "playerdata"/g) || []).length;
+    check(bothTabs === 1, "「玩家数据」页在标签里只登记一次", "登记了 " + bothTabs + " 次");
   }
 
   /* ---- v1.18.56：玩家存档大编辑器（全字段 + 逐条改鱼 + 原始 JSON）----
@@ -2079,7 +2071,7 @@ async function configKeysCoverage() {
     st.rawOpen = false;
 
     const bigHtml = T.renderPlayerDataTab(T.TAB_BY_ID.playerdata);
-    check(bigHtml.indexOf("玩家存档编辑器") > 0 && bigHtml.indexOf("基础（") > 0,
+    check(bigHtml.indexOf("玩家数据编辑器") > 0 && bigHtml.indexOf("基础（") > 0,
       "大编辑器渲染出分组与字段", bigHtml.length + " 字符");
     check(bigHtml.indexOf('data-pd2="基础|gold"') > 0
       && bigHtml.indexOf('data-pd2add="基础|gold"') > 0,
@@ -2461,6 +2453,33 @@ const FAKE_PLAYER_SECTIONS = [
   ] },
 ];
 
+/** v1.18.56：插件下发的「玩家全部数据」长什么样（真后端由 _editor_player 生成）。 */
+const FAKE_PLAYER_FULL = {
+  user_id: "10001", name: "钓鱼佬", from_snapshot: false,
+  raw_json: "{\n \"user_id\": \"10001\",\n \"gold\": 12800\n}",
+  groups: [
+    { key: "基础", title: "基础", items: [
+      { key: "gold", label: "金币", kind: "count", value: 12800, has: true, desc: "主货币" },
+      { key: "stamina", label: "体力", kind: "count", value: -1, has: true, desc: "" },
+    ] },
+    { key: "资产", title: "资产", items: [
+      { key: "baits", label: "鱼饵", kind: "map", value: { worm: 3 }, has: true, desc: "", enum: "baits" },
+      { key: "inventory", label: "背包（鱼）", kind: "fish_list", value: [
+        { fish_id: "carp", quality: "凡品", variant: "", attrs: { meat: 10, spirit: 5, sheen: 3 },
+          feed_uses: 0, locked: false, value: 120 },
+      ], has: true, desc: "逐条可改" },
+    ] },
+  ],
+  enums: {
+    fish: [{ id: "carp", name: "🐟 鲤鱼" }],
+    quality: [{ id: "凡品", name: "⚪凡品" }, { id: "珍品", name: "🏆珍品" }],
+    variants: [{ id: "golden", name: "🌟 黄金" }],
+    baits: [{ id: "worm", name: "🪱 蚯蚓" }],
+    items: [{ id: "feed_basic", name: "🥫 基础饲料" }],
+    rods: [], locations: [], titles: [], achievements: [], weather: [], collectibles: [],
+  },
+};
+
 function makeFakeSdk() {
   const sdk = {
     ready() {
@@ -2527,11 +2546,28 @@ function makeFakeSdk() {
             sections: FAKE_PLAYER_SECTIONS
           }));
         }
-        // v1.18.53：改玩家数据（增 / 减 / 改）
+        // v1.18.53：改玩家数据（增 / 减 / 改）—— 已被 v1.18.57 的 player_full_set 取代，
+        //           这里保留旧动作只是为了验「插件仍认它」（老页面/老客户端不至于报错）
         if (action === "player_set" || action === "snapshot_player_set") {
           const n = ((payload.edits || []).length);
           return Promise.resolve(Object.assign({}, base, {
             message: "已改玩家 " + payload.user_id + "：" + n + " 项"
+          }));
+        }
+        // v1.18.57：玩家全部数据（读 / 写）。写的时候要带 snapshot = 改哪份存档。
+        if (action === "player_full_get" || action === "player_full_set") {
+          const full = Object.assign({}, FAKE_PLAYER_FULL, {
+            user_id: String(payload.user_id || "10001"),
+            from_snapshot: !!payload.snapshot,
+          });
+          if (action === "player_full_get") {
+            return Promise.resolve(Object.assign({}, base, full));
+          }
+          const n = ((payload.edits || []).length);
+          return Promise.resolve(Object.assign({}, base, {
+            message: (payload.snapshot
+              ? "已改存档「" + payload.snapshot + "」里玩家 "
+              : "已改玩家 ") + payload.user_id + " 的数据：" + n + " 项",
           }));
         }
         return Promise.resolve(Object.assign({}, base, {
@@ -2844,26 +2880,50 @@ async function channelRoundTrip() {
     "存档内玩家走 snapshot_list + 快照名", JSON.stringify(snapEnv));
   check(F.state.snapshotPlayers.length === 1, "存档内玩家列表渲染出来了", F.state.snapshotPlayers.length);
 
+  /* v1.18.57：改玩家数据只有一条通路（player_full_set），实时 / 存档内都在这一页切 */
   captured.calls = [];
-  const liveRes = await F.savePlayerGold("live", "10001", 5000);
+  F.state.playerData = null;
+  await F.loadPlayerFull("10001", "");
+  const getCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const getEnv = JSON.parse(getCall.body);
+  check(getCall.endpoint === "players" && getEnv.action === "player_full_get"
+    && getEnv.user_id === "10001" && !getEnv.snapshot,
+    "读实时玩家全部数据：player_full_get + user_id（不带 snapshot）", JSON.stringify(getEnv));
+  check(F.pdState().loaded === true && F.pdState().groups.length === 2,
+    "读回来就渲染成分组（插件下发什么就显示什么）", F.pdState().groups.length);
+
+  captured.calls = [];
+  const liveRes = await F.submitPlayerFull([{ key: "gold", value: 5000 }]);
   const liveCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
   const liveEnv = JSON.parse(liveCall.body);
   check(liveCall.endpoint === "players",
-    "改金币 POST 到 players（不走 config，也不会被 snapshot_ 前缀误判到存档接口）", liveCall.endpoint);
-  check(liveEnv.action === "set_gold" && liveEnv.user_id === "10001" && liveEnv.gold === 5000,
-    "改实时玩家金币的指令正确", JSON.stringify(liveEnv));
+    "改实时玩家 POST 到 players（不走 config，也不会被 snapshot_ 前缀误判到存档接口）", liveCall.endpoint);
+  check(liveEnv.action === "player_full_set" && liveEnv.user_id === "10001"
+    && !liveEnv.snapshot && liveEnv.edits.length === 1,
+    "改实时玩家数据的指令正确", JSON.stringify(liveEnv));
   check(liveEnv.confirm === true,
     "请求里带 confirm=true（页面上的二次确认走完才会发这条）");
-  check(liveRes.ok === true && /10001/.test(liveRes.message), "改金币结果取插件返回的真实结果", liveRes.message);
+  check(liveRes.ok === true && /10001/.test(liveRes.message), "改数据结果取插件返回的真实结果", liveRes.message);
 
   captured.calls = [];
-  await F.savePlayerGold("snapshot", "10001", 6600, "2026-09-18_1820.json");
-  const snapGoldCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
-  const snapGoldEnv = JSON.parse(snapGoldCall.body);
-  check(snapGoldCall.endpoint === "players"
-    && snapGoldEnv.action === "snapshot_gold" && snapGoldEnv.name === "2026-09-18_1820.json"
-    && snapGoldEnv.user_id === "10001" && snapGoldEnv.gold === 6600 && snapGoldEnv.confirm === true,
-    "改存档内金币的指令正确（带快照名 + 玩家 + 金币 + confirm）", JSON.stringify(snapGoldEnv));
+  await F.loadPlayerFull("10001", "2026-09-18_1820.json");
+  const snapGetEnv = JSON.parse(captured.calls.filter(function (c) { return c.kind === "post"; })[0].body);
+  check(snapGetEnv.action === "player_full_get" && snapGetEnv.snapshot === "2026-09-18_1820.json",
+    "读存档内玩家：带上要读哪一份存档", JSON.stringify(snapGetEnv));
+  check(F.pdState().mode2 === "snapshot" && F.pdState().snapshot === "2026-09-18_1820.json",
+    "页面记住了「现在改的是存档内玩家」");
+
+  captured.calls = [];
+  await F.submitPlayerFull([{ key: "gold", value: 6600 }]);
+  const snapSetCall = captured.calls.filter(function (c) { return c.kind === "post"; })[0];
+  const snapSetEnv = JSON.parse(snapSetCall.body);
+  check(snapSetCall.endpoint === "players" && snapSetEnv.action === "player_full_set"
+    && snapSetEnv.snapshot === "2026-09-18_1820.json"
+    && snapSetEnv.user_id === "10001" && snapSetEnv.confirm === true,
+    "改存档内玩家的指令正确（带存档名 + 玩家 + confirm）", JSON.stringify(snapSetEnv));
+  check(snapSetEnv.edits.length === 1 && snapSetEnv.snapshot === "2026-09-18_1820.json",
+    "存档内改数据也走同一条动作（只有一个写入口，不会再分叉）", JSON.stringify(snapSetEnv));
+  F.state.playerData = null;
 
   /* ---- 💬 回复：scenes 端点读不到时的只读兜底（不白屏、不抛异常） ---- */
   console.log("  ── 💬 回复：scenes 读不到 -> 只读兜底 ──");

@@ -1,20 +1,23 @@
 # -*- coding: utf-8 -*-
-"""玩家存档编辑器（v1.18.56）：把玩家的**全部数据**做成一个可编辑的大界面。
+"""玩家数据编辑器（v1.18.56 建，v1.18.57 成为**唯一**的改数据路径）。
 
 站长原话：「能改玩家的所有数据，不止你说的那些，单独弄个界面吧，之前的太小了」，
 后面又定下三条：**鱼能逐条改**（鱼种/品质/异色/三维/估值、可增可删）、
 **留一个原始 JSON 高级区**、**改好几处一起提交**。
+v1.18.57 又提了两条：「能改的给我搞成中文啊，写一堆函数名干什么」（枚举一律 {id, name}，
+页面显示中文名、提交 id）与「你怎么玩家和玩家数据两个界面都可以改数据，合并成一个啊」
+（「👤 玩家」页改只读，写入只剩本模块这条路径）。
 
 ## 这一模块负责什么
 
-* `player_sections_payload()` —— 把一个玩家的存档拆成「分组 -> 字段 -> 当前值」，
-  连同**枚举表**（鱼种/鱼饵/道具/鱼竿/钓点/称号/成就/变异）一起给页面。
+* `section_payload()` —— 把一个玩家的存档拆成「分组 -> 字段 -> 当前值」，
+  连同**枚举表**（鱼种/鱼饵/道具/鱼竿/钓点/称号/成就/变异，都是 {id, name}）一起给页面。
   页面是纯渲染：以后本模块新增一个字段，界面自动多一行，不用改两处。
 * `apply_player_edits()` —— 把页面来的编辑批量应用到一个玩家字典上（**纯内存**）。
 
 ## 安全口径（和改金币完全一致，一处都不放宽）
 
-1. **白名单**：字段必须在 `PLAYER_FIELD_SPECS`（或「其它字段」兜底桶）里；
+1. **白名单**：字段必须在 `_field_specs()`（或「其它字段」兜底桶）里；
    没登记但有值的键走 `json` 类型，仍可改 —— 但类型要过校验。
 2. **范围校验**：计数 0~10 亿（金币同）、比例 0~100、文本 ≤200 字、JSON 能解析。
 3. **枚举校验**：鱼种 / 鱼饵 / 道具 / 鱼竿 / 钓点 / 称号 / 变异 / 成就 必须真的存在，
@@ -22,11 +25,11 @@
 4. **整批原子**：调用方在**深拷贝**上先跑一遍，任何一项不过就一个字都不改。
 5. **改前自动存档**：由调用方（编辑器通道）负责，存档失败就放弃本次修改。
 
-## 与「改金币」的关系
+## 与老「改金币」接口的关系
 
-`_editor_bridge` 里的 `player_set` / `snapshot_player_set` 是**同一套实现**，
-只是它们走的是老的 `PLAYER_FIELDS`（一小组常用字段）。这一模块是它的超集：
-金币也在里面，所以两条通道不会打架（同一张表说了算）。
+`_editor_bridge` 里的 `player_set` / `snapshot_player_set` / `set_gold` 仍能收（同一套
+校验与存档口径），但**页面已经不用它们了**（留给缓存了旧页面的站长一句清楚的话）。
+本模块是它们的超集：金币也在里面，所以两条通道不会打架（同一张表说了算）。
 """
 
 from __future__ import annotations
@@ -207,39 +210,105 @@ def _ids_of(rows: Any, key: str = "id") -> list[str]:
     return out
 
 
-def enum_tables(plugin: Any) -> dict[str, list[str]]:
-    """给页面用的枚举表（都从**当前生效的内容表**取，站长改了鱼池这里跟着变）。"""
+def _opt(item_id: Any, name: Any = "", emoji: Any = "") -> dict[str, str]:
+    """一个下拉项：``{"id": 存档里存的值, "name": 显示给人看的中文}``。
+
+    页面**只用 name 显示、只用 id 提交** —— 所以界面上不会再出现 ``abyss_bait``
+    这种代码 id（站长：「能改的给我搞成中文啊，写一堆函数名干什么」）。
+    """
+    ident = str(item_id or "").strip()
+    label = str(name or "").strip() or ident
+    mark = str(emoji or "").strip()
+    return {"id": ident, "name": (f"{mark}{label}" if mark else label)}
+
+
+def _opts_of(rows: Any, *, with_emoji: bool = False) -> list[dict[str, str]]:
+    """内容表 -> 下拉项列表（带中文名；按显示名排序，方便找）。"""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        if isinstance(row, dict):
+            ident = str(row.get("id") or "").strip()
+            name = str(row.get("name") or "").strip()
+            emoji = row.get("emoji") if with_emoji else ""
+        else:
+            ident, name, emoji = str(row or "").strip(), "", ""
+        if not ident or ident in seen:
+            continue
+        seen.add(ident)
+        out.append(_opt(ident, name, emoji))
+    out.sort(key=lambda item: item["name"])
+    return out
+
+
+def enum_tables(plugin: Any) -> dict[str, list[dict[str, str]]]:
+    """给页面用的枚举表（都从**当前生效的内容表**取，站长改了鱼池这里跟着变）。
+
+    每一项都是 ``{"id": ..., "name": 中文名}``：页面显示 name、提交 id。
+    """
     g = globals()
-    fish = _ids_of(g.get("FISH_POOL"))
-    baits = list((getattr(plugin, "baits", None) or {}).keys())
-    items = list((getattr(plugin, "items", None) or {}).keys())
-    rods = [str(r.get("id")) for r in (g.get("RODS") or []) if isinstance(r, dict)]
-    locations = [str(x.get("id")) for x in (g.get("LOCATIONS") or []) if isinstance(x, dict)]
-    titles = []
+    baits: list[dict[str, str]] = []
+    for ident, row in (getattr(plugin, "baits", None) or {}).items():
+        info = row if isinstance(row, dict) else {}
+        baits.append(_opt(ident, info.get("name"), info.get("emoji")))
+    baits.sort(key=lambda item: item["name"])
+    items: list[dict[str, str]] = []
+    for ident, row in (getattr(plugin, "items", None) or {}).items():
+        info = row if isinstance(row, dict) else {}
+        items.append(_opt(ident, info.get("name"), info.get("emoji")))
+    items.sort(key=lambda item: item["name"])
+    titles: list[dict[str, str]] = []
     try:
         for row in getattr(plugin, "titles", None) or []:
             if isinstance(row, dict) and row.get("id"):
-                titles.append(str(row["id"]))
+                titles.append(_opt(row["id"], row.get("name"), row.get("emoji")))
     except Exception:                                            # pragma: no cover
         titles = []
-    variants = [str(v.get("id")) for v in (g.get("VARIANTS") or []) if isinstance(v, dict)]
-    achievements = list((g.get("ACHIEVEMENTS") or {}).keys())
-    weathers = [str(w.get("id")) for w in (g.get("WEATHERS") or []) if isinstance(w, dict)]
+    titles.sort(key=lambda item: item["name"])
+    # 成就的「中文名」就是它那句人话说明（🎣 初次垂钓：钓到第一条鱼）
+    achievements = [
+        _opt(ident, label)
+        for ident, label in (g.get("ACHIEVEMENTS") or {}).items()
+    ]
+    achievements.sort(key=lambda item: item["name"])
+    quality = [
+        _opt(str(t[0]), f"{t[3]}{t[0]}" if len(t) > 3 else str(t[0]))
+        for t in (g.get("QUALITY_TIERS") or []) if t
+    ]
+    rarity_emoji = g.get("RARITY_EMOJI") or {}
+    fish_rarity = [
+        _opt(str(r), f"{rarity_emoji.get(str(r), '')}{r}")
+        for r in (g.get("RARITY_ORDER") or [])
+    ]
     return {
-        "fish": sorted(set(fish)),
-        "baits": sorted(set(baits)),
-        "items": sorted(set(items)),
-        "rods": sorted(set(rods)),
-        "locations": sorted(set(locations)),
-        "titles": sorted(set(titles)),
-        "variants": sorted(set(variants)),
-        "achievements": sorted(set(achievements)),
-        "weather": sorted(set(weathers)),
-        "collectibles": _ids_of(g.get("COLLECTIBLES")),
+        "fish": _opts_of(g.get("FISH_POOL")),
+        "baits": baits,
+        "items": items,
+        "rods": _opts_of(g.get("RODS"), with_emoji=True),
+        "locations": _opts_of(g.get("LOCATIONS"), with_emoji=True),
+        "titles": titles,
+        "variants": _opts_of(g.get("VARIANTS"), with_emoji=True),
+        "achievements": achievements,
+        "weather": _opts_of(g.get("WEATHERS"), with_emoji=True),
+        "collectibles": _opts_of(g.get("COLLECTIBLES"), with_emoji=True),
         # 个体品质档（六档名字来自配置的 quality_tiers）
-        "quality": [str(t[0]) for t in (g.get("QUALITY_TIERS") or []) if t],
-        "fish_rarity": [str(r) for r in (g.get("RARITY_ORDER") or [])],
+        "quality": quality,
+        "fish_rarity": fish_rarity,
+        # 稀有度名 -> 中文（页面把鱼表里的稀有度也显示成中文）
+        "name_map": {
+            "fish": {i["id"]: i["name"] for i in _opts_of(g.get("FISH_POOL"))},
+            "baits": {i["id"]: i["name"] for i in baits},
+            "items": {i["id"]: i["name"] for i in items},
+            "rods": {i["id"]: i["name"] for i in _opts_of(g.get("RODS"), with_emoji=True)},
+            "locations": {i["id"]: i["name"] for i in _opts_of(g.get("LOCATIONS"), with_emoji=True)},
+            "titles": {i["id"]: i["name"] for i in titles},
+            "variants": {i["id"]: i["name"] for i in _opts_of(g.get("VARIANTS"), with_emoji=True)},
+            "achievements": {i["id"]: i["name"] for i in achievements},
+            "weather": {i["id"]: i["name"] for i in _opts_of(g.get("WEATHERS"), with_emoji=True)},
+            "collectibles": {i["id"]: i["name"] for i in _opts_of(g.get("COLLECTIBLES"), with_emoji=True)},
+        },
     }
+
 
 
 # ---------------------------------------------------------------------------
@@ -387,7 +456,7 @@ def edit_fish(plugin: Any, instance: dict[str, Any], edit: dict[str, Any]) -> tu
     changed: list[str] = []
     if "fish_id" in edit:
         fish_id = str(edit.get("fish_id") or "").strip()
-        if fish_id and enum["fish"] and fish_id not in enum["fish"]:
+        if fish_id and _enum_ids(enum, "fish") and fish_id not in _enum_ids(enum, "fish"):
             return False, f"没有「{fish_id}」这种鱼（鱼池里查不到）"
         if fish_id:
             instance["fish_id"] = fish_id
@@ -397,7 +466,7 @@ def edit_fish(plugin: Any, instance: dict[str, Any], edit: dict[str, Any]) -> tu
         variant = "" if raw is None else str(raw).strip()
         if variant in ("none", "无", "否"):
             variant = ""
-        if variant and enum["variants"] and variant not in enum["variants"]:
+        if variant and _enum_ids(enum, "variants") and variant not in _enum_ids(enum, "variants"):
             return False, f"没有「{variant}」这种异色（变异表里查不到）"
         instance["variant"] = variant or None
         changed.append("异色→" + (variant or "无"))
@@ -471,13 +540,13 @@ def new_fish(plugin: Any, edit: dict[str, Any]) -> tuple[dict[str, Any] | None, 
     fish_id = str(edit.get("fish_id") or "").strip()
     if not fish_id:
         return None, "要写鱼种 id"
-    if enum["fish"] and fish_id not in enum["fish"]:
+    if _enum_ids(enum, "fish") and fish_id not in _enum_ids(enum, "fish"):
         return None, f"没有「{fish_id}」这种鱼"
     raw = edit.get("variant")
     variant = "" if raw is None else str(raw).strip()
     if variant in ("none", "无", "否"):
         variant = ""
-    if variant and enum["variants"] and variant not in enum["variants"]:
+    if variant and _enum_ids(enum, "variants") and variant not in _enum_ids(enum, "variants"):
         return None, f"没有「{variant}」这种异色"
     quality = edit.get("quality")
     # 允许页面写成倍率数字；写品质名时先造出来再改品质（_new_instance 收的是倍率）
@@ -548,21 +617,38 @@ def _coerce_text(value: Any) -> tuple[str | None, str]:
     return text, ""
 
 
-def _check_enum(spec: dict[str, Any], value: Any, enum: dict[str, list[str]]) -> str:
+def _enum_ids(enum: dict[str, Any], key: str) -> set[str]:
+    """枚举表里的**可选 id 集合**。
+
+    枚举表现在是 ``[{"id": ..., "name": 中文名}, ...]``（页面显示中文、提交 id），
+    但也要认旧的「纯字符串列表」形态（热重载时新旧模块可能各持一份）。
+    """
+    out: set[str] = set()
+    for item in (enum or {}).get(key) or []:
+        if isinstance(item, dict):
+            ident = str(item.get("id") or "").strip()
+        else:
+            ident = str(item or "").strip()
+        if ident:
+            out.add(ident)
+    return out
+
+
+def _check_enum(spec: dict[str, Any], value: Any, enum: dict[str, Any]) -> str:
     """枚举字段校验：值必须真的存在（空串 = 不设，跳过）。"""
     key = str(spec.get("enum") or "")
     if not key or value is None or str(value).strip() == "":
         return ""
-    allowed = enum.get(key) or []
+    allowed = _enum_ids(enum, key)
     if not allowed:
         return ""
     if str(value).strip() not in allowed:
-        return f"{spec.get('label')}：「{value}」不存在（{key} 里没有这一项）"
+        return f"{spec.get('label')}：「{value}」不存在（没有这一项）"
     return ""
 
 
 def _apply_map(
-    player: dict[str, Any], spec: dict[str, Any], edit: dict[str, Any], enum: dict[str, list[str]]
+    player: dict[str, Any], spec: dict[str, Any], edit: dict[str, Any], enum: dict[str, Any]
 ) -> tuple[bool, str]:
     """计数表（鱼饵 / 道具 / 杂物 / 变异）里的一项：可增可减可直设，也能整表换。"""
     key = spec["key"]
@@ -607,7 +693,7 @@ def _apply_map(
 
 
 def _apply_str_list(
-    player: dict[str, Any], spec: dict[str, Any], edit: dict[str, Any], enum: dict[str, list[str]]
+    player: dict[str, Any], spec: dict[str, Any], edit: dict[str, Any], enum: dict[str, Any]
 ) -> tuple[bool, str]:
     """字符串列表（鱼竿 / 钓点 / 称号 / 成就 / 纸条）：整表换 或 加/删一项。"""
     key = spec["key"]

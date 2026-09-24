@@ -132,7 +132,7 @@ TEXT_LIB: Any = _load_sibling("_texts", "astrbot_fishing_texts")
 LEGACY: Any = _load_sibling("_legacy", "astrbot_fishing_legacy")
 #: 大鱼乐彩票的奖表解析 / 抽奖 / 期望值模型（v1.18.51）
 LOTTERY: Any = _load_sibling("_lottery", "astrbot_fishing_lottery")
-#: 玩家存档编辑器（v1.18.56）：全字段清单 + 逐条改鱼 + 原始 JSON
+#: 玩家数据编辑器（v1.18.56）：全字段清单 + 逐条改鱼 + 原始 JSON
 EDITOR_PLAYER: Any = _load_sibling("_editor_player", "astrbot_fishing_editor_player")
 
 
@@ -5670,7 +5670,7 @@ SIBLING_MODULES: tuple[Any, ...] = tuple(
         LEGACY,
         # 大鱼乐（v1.18.51）：解析奖表、期望值模型都要用注入进来的鱼池/道具/品质常量
         LOTTERY,
-        # 玩家存档编辑器（v1.18.56）：字段清单里的枚举要用鱼池/鱼饵/道具/称号/变异表，
+        # 玩家数据编辑器（v1.18.56）：字段清单里的枚举要用鱼池/鱼饵/道具/称号/变异表，
         # 逐条改鱼还要用 _new_instance / _compute_value —— 全都靠注入
         EDITOR_PLAYER,
     )

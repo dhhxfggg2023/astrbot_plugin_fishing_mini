@@ -3559,16 +3559,16 @@ table.grid td.actions .btn { vertical-align: middle; }
     {
       id: "players",
       label: "👤 玩家",
-      title: "玩家金币",
+      title: "玩家列表",
       kind: "players",
-      hint: "查看在线玩家，或改某份存档里的玩家金币"
+      hint: "找人和看数据（只读）；要改数据就点这一页的「🧰 去改数据」跳到玩家数据页"
     },
     {
       id: "playerdata",
       label: "🧰 玩家数据",
-      title: "玩家存档编辑器",
+      title: "玩家数据编辑器",
       kind: "playerdata",
-      hint: "改玩家的**全部数据**：金币/资产/装备/体力/手气/每日额度/订单/图鉴/鱼（可逐条改）/原始 JSON"
+      hint: "改实时玩家或某份存档里玩家的**全部数据**：金币/资产/装备/体力/手气/每日额度/订单/图鉴/鱼（可逐条改）/原始 JSON"
     },
     {
       id: "aliases",
@@ -3609,6 +3609,10 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   var TAB_BY_ID = {};
   TABS.forEach(function (t) { TAB_BY_ID[t.id] = t; });
+
+  /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
+      改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
+  var PAGE_VERSION = "v1.18.57";
 
   /* ===========================================================================
      5. 状态
@@ -3652,15 +3656,9 @@ table.grid td.actions .btn { vertical-align: middle; }
     snapshotPick: "",           // 当前选中的存档名
     snapshotPlayers: [],        // 该存档里的玩家
     snapshotPlayersError: "",
-    goldEdit: null,             // { user_id, value } 正在改的金币
-    goldConfirm: null,          // { user_id, value, mode } 二次确认中
     pluginVersion: "",          // 插件版本（来自 editor_status，用于和页面版本对账）
-    // ---- 🧰 玩家数据：独立的大编辑器（v1.18.56）----
+    // ---- 🧰 玩家数据：唯一的玩家数据编辑器（v1.18.57 起「👤 玩家」页只读）----
     playerData: null,
-    // ---- 改玩家数据（v1.18.53）：金币之外的实时数据也能增/减/改 ----
-    // { user_id, name, mode2:"live"|"snapshot", snapshot, mode:"add"|"set",
-    //   loaded, error, sections, clearArm }
-    dataEdit: null,
     legacy: null,               // 「找回旧数据」的扫描结果（插件回写，没扫过是 null）
     legacyMsg: "",              // 上一次扫描/导入的结果说明
     legacyBusy: false,          // 正在扫或正在导入（按钮转圈，防连点）
@@ -4887,7 +4885,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     } else {
       actions =
         '<button class="btn btn-sm" data-act="snap:restore" data-index="' + i + '" title="把这批玩家数据恢复到这份存档">↩ 恢复</button>' +
-        '<button class="btn btn-sm" data-act="snap:players" data-index="' + i + '" title="查看/修改这份存档里的玩家金币（恢复后生效）">👤 改金币</button>' +
+        '<button class="btn btn-sm" data-act="snap:players" data-index="' + i + '" title="看/改这份存档里的玩家（改完恢复这份存档才生效）">👤 看玩家</button>' +
         '<button class="btn btn-sm" data-act="snap:download" data-index="' + i + '" title="下载这份存档的信息（名字/时间/玩家数），不是玩家数据本体">⬇ 下载信息</button>' +
         '<span class="spacer"></span>' +
         '<button class="btn btn-sm btn-danger" data-act="snap:delete" data-index="' + i + '" title="删除这份存档（删前会自动存一份）">🗑 删除</button>';
@@ -5020,87 +5018,6 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
   }
 
-  /** 改金币（实时玩家 / 存档内玩家）。confirm 由调用方在二次确认后传 true。 */
-  /**
-   * 读一个玩家的**可编辑数据**（v1.18.53）：字段名单由插件下发（sections），
-   * 页面只负责渲染 —— 插件以后加字段，页面自动多一行，不用改两次。
-   */
-  async function openPlayerData(userId) {
-    // ⚠️ 整段都要兜住：这个请求一旦被拒（老后端没 player_get、路由只允许 GET、
-    //    网络错），await 会直接抛出去，函数当场中断 —— 面板就静静地卡在「正在读」，
-    //    站长看到的就是「点了没反应」。所以任何失败都要写进面板。
-    function fail(msg) {
-      if (!state.dataEdit || state.dataEdit.user_id !== userId) return;
-      state.dataEdit.loaded = true;
-      state.dataEdit.error = msg || "读取失败";
-      render();
-    }
-    if (!ENV.online) {
-      fail("离线预览：读不到玩家数据（在插件里打开页面才有）");
-      return;
-    }
-    var res;
-    try {
-      res = await playersCommand({ action: "player_get", user_id: text(userId) });
-    } catch (e) {
-      fail("读取玩家数据失败：" + describeError(e, "players"));
-      return;
-    }
-    if (!state.dataEdit || state.dataEdit.user_id !== userId) return;   // 期间换了人
-    var body = (res && res.detail) || null;
-    if (res && res.accepted && body && body.sections) {
-      state.dataEdit.loaded = true;
-      state.dataEdit.error = "";
-      state.dataEdit.sections = body.sections;
-      state.dataEdit.name = body.name || state.dataEdit.name;
-    } else {
-      fail((res && res.message) || "读取失败");
-      return;
-    }
-    render();
-  }
-
-  /** 提交「改玩家数据」：走 player_set / snapshot_player_set（插件侧还要 confirm 与自动存档）。 */
-  async function submitPlayerData(edits) {
-    var d = state.dataEdit;
-    if (!d) return { ok: false, message: "面板已经关了" };
-    if (!ENV.online) return { ok: false, message: "离线预览：不会真正改玩家数据" };
-    var body = d.mode2 === "snapshot"
-      ? { action: "snapshot_player_set", name: text(d.snapshot), user_id: text(d.user_id),
-          mode: d.mode, edits: edits, confirm: true }
-      : { action: "player_set", user_id: text(d.user_id), mode: d.mode,
-          edits: edits, confirm: true };
-    var res;
-    try {
-      res = await playersCommand(body);
-    } catch (e) {
-      var why = "提交失败：" + describeError(e, "players");
-      toast("err", "修改没成功", why);
-      return { ok: false, message: why };
-    }
-    if (res && res.accepted) {
-      toast("ok", "已修改", (res.message || "").slice(0, 200));
-      await openPlayerData(d.user_id);                     // 重新读一遍，页面立刻显示新值
-      if (d.mode2 === "live") fetchPlayers(false).then(function () { render(); });
-      else if (d.snapshot) fetchSnapshotPlayers(d.snapshot, false).then(function () { render(); });
-    } else {
-      toast("err", "修改没成功", (res && res.message) || "未知原因");
-    }
-    return { ok: !!(res && res.accepted), message: (res && res.message) || "" };
-  }
-
-  async function savePlayerGold(mode, userId, gold, snapshotName) {
-    if (!ENV.online) {
-      return { ok: false, message: "离线预览：不会真正改玩家数据" };
-    }
-    var body = mode === "snapshot"
-      ? { action: "snapshot_gold", name: text(snapshotName || state.snapshotPick),
-          user_id: text(userId), gold: num(gold, 0), confirm: true }
-      : { action: "set_gold", user_id: text(userId), gold: num(gold, 0), confirm: true };
-    var res = await playersCommand(body);
-    return { ok: !!res.accepted, message: res.message, detail: res.detail };
-  }
-
   /**
    * 收起「找回旧数据」面板：清掉页面上的结果/提示，并让插件忘掉缓存的扫描结果
    * （否则刷新一次页面它又冒出来）。**一个字节的玩家数据都不动。**
@@ -5160,20 +5077,18 @@ table.grid td.actions .btn { vertical-align: middle; }
     html += '<div class="card-head"><h2>👤 ' + esc(tab.title) + "</h2>" +
       '<span class="hint">' + esc(tab.hint) + "</span></div>";
 
-    html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
-      "金币可以在列表里直接改；<b>背包/缸里的鱼</b>是只读的（估值由三维算出来，手改会对不上）。" +
-      "<b>点每行的「🧰 改数据」</b>还能增减<b>累计钓获 / 体力 / 鱼饵 / 道具 / 杂物 / 变异计数 / 称号 / 当前钓点</b>" +
-      "（点完下面会展开一块面板：选「加减」或「直接设为」，填好按「✔ 提交修改」）。" +
-      "改<b>实时玩家</b>前插件会自动存一份档（auto/，按「按时存档保留份数」轮转）；" +
-      "改<b>存档里</b>的玩家不会动在线数据，要等「恢复」那份存档之后才生效。金币范围 0 ~ " +
-      esc(fmtNum(state.playersGoldMax)) + "。<br />右上角「🔍 找回旧数据」是唯一的例外：" +
-      "它只把<b>旧作用域里当前库没有的玩家</b>补进来（导入前自动存档，已有的玩家不动，旧数据不删）。" +
+    html += '<div class="notice"><span class="notice-icon">ℹ️</span><div>' +
+      "这一页只用来<b>找人和看数据</b>（只读）。要改东西就点每行的 <b>「🧰 去改数据」</b> —— " +
+      "会带着这个玩家跳到「🧰 玩家数据」页，" +
+      "那里**所有字段都能改**（金币、体力、鱼饵、道具、鱼竿、称号、钓点、图鉴，还能逐条改鱼）。" +
+      "<br />右上角「🔍 找回旧数据」是唯一的例外：它只把" +
+      "<b>旧作用域里当前库没有的玩家</b>补进来（导入前自动存档，已有的玩家不动，旧数据不删）。" +
       "</div></div>";
-    /* 版本对账的醒目提示（v1.18.55）：插件与页面版本不一致 = 浏览器缓存了旧页面，
+    /* 版本对账的醒目提示（v1.18.54）：插件与页面版本不一致 = 浏览器缓存了旧页面，
        这正是「点了没反应 / 报错看不懂」最常见的原因，所以放在最上面说清楚。 */
-    if (text(state.pluginVersion) && text(state.pluginVersion) !== "v1.18.55") {
+    if (text(state.pluginVersion) && text(state.pluginVersion) !== PAGE_VERSION) {
       html += '<div class="notice"><span class="notice-icon">🔄</span><div>' +
-        "插件是 <b>" + esc(text(state.pluginVersion)) + "</b>，而这个页面是 <b>v1.18.55</b> —— " +
+        "插件是 <b>" + esc(text(state.pluginVersion)) + "</b>，而这个页面是 <b>" + PAGE_VERSION + "</b> —— " +
         "版本不一致时页面可能不认识插件的新功能（点按钮没反应、报错看不懂多半就是这个）。" +
         '<div style="margin-top:4px">按 <b>Ctrl + F5</b>（Mac：⌘ + Shift + R）强制刷新一次即可。</div>' +
         "</div></div>";
@@ -5183,12 +5098,12 @@ table.grid td.actions .btn { vertical-align: middle; }
     html += '<button class="btn btn-sm' + (live ? " btn-primary" : "") + '" data-act="p:mode" data-mode="live">🟢 实时玩家</button>';
     html += '<button class="btn btn-sm' + (!live ? " btn-primary" : "") + '" data-act="p:mode" data-mode="snapshot">💾 存档内玩家</button>';
     html += '<span class="divider"></span>';
-    /* 版本对账（v1.18.55）：插件版本 vs 页面版本。
+    /* 版本对账（v1.18.54）：插件版本 vs 页面版本。
        「点了没反应」最常见的原因就是浏览器缓存了旧页面 —— 这里一眼能看出来。 */
     var _pv = text(state.pluginVersion);
     html += '<span class="stat-chip" title="插件版本来自 metadata.yaml；页面版本 = 这个 index.html 的版本。两者不一致说明浏览器缓存了旧页面（Ctrl+F5 强制刷新）">' +
-      "插件 <b>" + esc(_pv || "?") + "</b>｜页面 <b>v1.18.55</b>" +
-      (_pv && _pv !== "v1.18.55" ? ' <span style="color:var(--warn)">⚠️ 不一致：按 Ctrl+F5 强刷</span>' : " ✅") +
+      "插件 <b>" + esc(_pv || "?") + "</b>｜页面 <b>" + PAGE_VERSION + "</b>" +
+      (_pv && _pv !== PAGE_VERSION ? ' <span style="color:var(--warn)">⚠️ 不一致：按 Ctrl+F5 强刷</span>' : " ✅") +
       "</span>";
     if (live) {
       html += '<label class="field search"><span class="field-icon">🔍</span>' +
@@ -5319,215 +5234,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       "</span>";
     html += "</div>";
     html += "</section>";
-    // 面板自己出问题也绝不能把整个玩家页带崩（渲染异常以前会让「点了没反应」）
-    try {
-      html += renderPlayerDataPanel();
-    } catch (e) {
-      html += '<section class="card"><div class="notice"><span class="notice-icon">⛔</span><div>' +
-        "改数据面板渲染失败：" + esc(String((e && e.message) || e)) +
-        '<div class="hint faint">按右上角「↻ 刷新」重试；一直失败请把这句话发给开发者。</div>' +
-        "</div></div></section>";
-    }
     return html;
-  }
-
-  /**
-   * 玩家**实时数据**编辑面板（v1.18.53）。
-   *
-   * 站长的原话：「新增功能可以配置玩家的实时数据，增减东西，就是改金币的拓展」。
-   * 字段名单**不由页面写**：插件下发的 `player_get` 里带着 sections（中文名 + 说明 +
-   * 当前值 + 类型），页面照着渲染 —— 以后插件加一个可改字段，页面自动多一行。
-   *
-   * 两种模式（整块面板共用一个）：
-   *   · 增加 / 减少：每个框里填「改多少」（减就填负数），也可以一次填多行，一起提交
-   *   · 直接设置：每个框里填「新的值」
-   * 提交前有二次确认条（写的是真实存档），插件侧还会再要一次 confirm 并**改前自动存档**。
-   */
-  function renderPlayerDataPanel() {
-    var d = state.dataEdit;
-    if (!d) return "";
-    var mode = d.mode === "set" ? "set" : "add";
-    var html = '<section class="card" id="playerDataPanel">';
-    html += '<div class="card-head"><h2>🧰 改玩家数据· <span class="mono">' + esc(d.user_id) + "</span>" +
-      (d.name ? '<span class="hint">（' + esc(d.name) + "）</span>" : "") + "</h2>" +
-      '<span class="hint">' +
-      (d.mode2 === "snapshot"
-        ? "正在改**存档里**的数据（要「恢复」这份存档才生效）"
-        : "正在改**实时**玩家数据（提交前插件会自动存一份档）") +
-      "</span>" +
-      '<span class="spacer"></span>' +
-      '<button class="btn btn-sm" data-act="pd:close">✖ 关闭</button></div>';
-
-    html += '<div class="toolbar">';
-    html += '<button class="btn btn-sm' + (mode === "add" ? " btn-primary" : "") + '" data-act="pd:mode" data-mode="add">加减（填正负数）</button>';
-    html += '<button class="btn btn-sm' + (mode === "set" ? " btn-primary" : "") + '" data-act="pd:mode" data-mode="set">直接设为</button>';
-    html += '<span class="hint">　' +
-      (mode === "add"
-        ? "每个框里填<b>改多少</b>：正数是加、负数是减（减到 0 为止，不会变负）；留空 = 不改这一项"
-        : "每个框里填<b>新的值</b>（直接覆盖）；留空 = 不改这一项") + "</span>";
-    html += '<span class="spacer" style="margin-left:auto"></span>';
-    html += '<button class="btn btn-sm btn-primary" data-act="pd:apply">✔ 提交修改</button>';
-    html += "</div>";
-
-    if (!d.loaded) {
-      html += '<div class="notice"><span class="notice-icon">⏳</span><div>正在读这个玩家的数据…</div></div>';
-      html += "</section>";
-      return html;
-    }
-    if (d.error) {
-      html += '<div class="notice"><span class="notice-icon">⛔</span><div>' + esc(d.error) +
-        '<div class="hint faint">读不到就改不了。常见原因：插件还是旧版（重启 AstrBot 让新代码生效）、' +
-        '玩家 ID 不在当前作用域、或数据库正忙。<b>先按右上角「↻ 刷新」再试一次</b>。</div></div></div>';
-      html += "</section>";
-      return html;
-    }
-    if (!(d.sections || []).length) {
-      html += '<div class="notice"><span class="notice-icon">🤔</span><div>' +
-        "插件没下发任何可改字段（可能插件版本比页面旧）。<br />" +
-        '<span class="hint faint">重启 AstrBot 让插件与页面版本一致；' +
-        "还不行就把这条消息发给开发者。</span></div></div>";
-      html += "</section>";
-      return html;
-    }
-
-    (d.sections || []).forEach(function (sec) {
-      if (sec.kind === "fields") {
-        html += '<h3 class="mini-head">' + esc(sec.title) + "</h3>";
-        html += '<div class="table-wrap"><table class="grid" style="min-width:560px"><thead><tr>' +
-          "<th>项目</th><th>现在</th><th style=\"width:150px\">" + (mode === "add" ? "改多少" : "新值") + "</th>" +
-          "<th>说明</th></tr></thead><tbody>";
-        sec.items.forEach(function (item) {
-          var isText = item.key === "current_location" || item.key === "equipped_rod"
-            || item.key === "equipped_bait" || item.key === "title";
-          var input = isText
-            ? '<input class="cell-input" type="text" maxlength="64" data-pd="f:' + esc(item.key) + '" placeholder="（不改）" />'
-            : '<input class="cell-input mono" type="number" step="1" data-pd="f:' + esc(item.key) + '" placeholder="0" />';
-          if (mode === "set" && isText) input = input.replace('type="text"', 'type="text"');
-          html += "<tr>" +
-            '<td data-label="项目">' + esc(item.label) +
-            ' <span class="faint mono">' + esc(item.key) + "</span></td>" +
-            '<td class="num" data-label="现在"><b>' + esc(fmtNum(item.value)) + "</b></td>" +
-            '<td data-label="改多少">' + input + "</td>" +
-            '<td class="faint" data-label="说明">' + esc(item.desc) + "</td>" +
-            "</tr>";
-        });
-        html += "</tbody></table></div>";
-        return;
-      }
-      if (sec.kind === "maps") {
-        html += '<h3 class="mini-head">' + esc(sec.title) + "</h3>";
-        sec.items.forEach(function (m) {
-          html += '<div class="table-wrap" style="margin-bottom:10px"><table class="grid" style="min-width:520px">' +
-            '<thead><tr><th colspan="2">' + esc(m.label) + ' <span class="faint mono">' + esc(m.key) + "</span></th>" +
-            '<th style="width:150px">' + (mode === "add" ? "改多少" : "新值") + "</th>" +
-            '<th class="faint">' + esc(m.desc) + "</th></tr></thead><tbody>";
-          if (!m.entries.length) {
-            html += '<tr><td colspan="4" class="faint">（现在是空的）</td></tr>';
-          }
-          m.entries.forEach(function (e) {
-            html += "<tr>" +
-              '<td data-label="名字" class="mono">' + esc(e.name) + "</td>" +
-              '<td class="num" data-label="现在">' + esc(fmtNum(e.count)) + "</td>" +
-              '<td data-label="改多少"><input class="cell-input mono" type="number" step="1" ' +
-              'data-pd="m:' + esc(m.key) + ":" + esc(e.name) + '" placeholder="0" /></td>' +
-              "<td></td></tr>";
-          });
-          // 新增一项（比如给玩家塞一个他从没有过的道具）
-          html += "<tr>" +
-            '<td data-label="新项"><input class="cell-input mono" type="text" data-pd="nk:' + esc(m.key) + '" placeholder="新 ' + esc(m.key) + ' id" /></td>' +
-            '<td class="faint" data-label="现在">新增</td>' +
-            '<td data-label="数量"><input class="cell-input mono" type="number" step="1" data-pd="nv:' + esc(m.key) + '" placeholder="1" /></td>' +
-            '<td class="faint">填「名字 + 数量」就会新增一项</td></tr>';
-          html += "</tbody></table></div>";
-        });
-        return;
-      }
-      if (sec.kind === "fish") {
-        html += '<h3 class="mini-head">' + esc(sec.title) + "</h3>";
-        html += '<div class="table-wrap"><table class="grid" style="min-width:460px"><thead><tr>' +
-          "<th>位置</th><th>条数</th><th>整块清空</th></tr></thead><tbody>";
-        sec.items.forEach(function (item) {
-          var armed = d.clearArm === item.key;
-          html += "<tr>" +
-            '<td data-label="位置">' + esc(item.label) + ' <span class="faint mono">' + esc(item.key) + "</span></td>" +
-            '<td class="num" data-label="条数"><b>' + esc(fmtNum(item.count)) + "</b></td>" +
-            '<td data-label="整块清空">' +
-            (armed
-              ? '<span class="confirm-strip"><span class="q">确定清空 ' + esc(item.label) + "？</span>" +
-                '<button class="btn btn-sm btn-danger" data-act="pd:clearYes" data-key="' + esc(item.key) + '">确认清空</button>' +
-                '<button class="btn btn-sm" data-act="pd:clearNo">取消</button></span>'
-              : '<button class="btn btn-sm" data-act="pd:clear" data-key="' + esc(item.key) + '">🗑 清空</button>') +
-            "</td></tr>";
-        });
-        html += "</tbody></table></div>";
-        html += '<div class="hint faint" style="margin-top:6px">' +
-          "只提供「整块清空」：逐条改鱼的属性容易把数据改歪（估值是算出来的，手改会和三维对不上）。" +
-          "想给玩家发鱼，用游戏里的指令或大鱼乐更安全。</div>";
-        return;
-      }
-    });
-
-    html += "</section>";
-    return html;
-  }
-
-  /** 收集面板里填过的框（只收非空的，留空 = 这一项不改）。 */
-  function playerDataEditsFromPage() {
-    var mode = (state.dataEdit && state.dataEdit.mode) === "set" ? "set" : "add";
-    var edits = [];
-    var bad = "";
-    Array.prototype.slice.call(document.querySelectorAll("[data-pd]")).forEach(function (input) {
-      var spec = String(input.getAttribute("data-pd") || "");
-      var raw = String(input.value == null ? "" : input.value).trim();
-      if (!raw) return;
-      var parts = spec.split(":");
-      if (parts[0] === "f") {
-        var isText = ["current_location", "equipped_rod", "equipped_bait", "title"].indexOf(parts[1]) >= 0;
-        if (!isText) {
-          var n = Number(raw);
-          if (!isFinite(n) || Math.floor(n) !== n) {
-            bad = bad || ("「" + parts[1] + "」要填整数（收到 " + raw + "）");
-            return;
-          }
-        }
-        edits.push({ field: parts[1], value: isText ? raw : Number(raw) });
-        return;
-      }
-      if (parts[0] === "m") {
-        var mv = Number(raw);
-        if (!isFinite(mv) || Math.floor(mv) !== mv) {
-          bad = bad || ("「" + parts[2] + "」要填整数（收到 " + raw + "）");
-          return;
-        }
-        edits.push({ map: parts[1], key: parts[2], value: Number(mv) });
-        return;
-      }
-      if (parts[0] === "nk" || parts[0] === "nv") return;   // 由下面那一对单独处理
-    });
-    // 「新增一项」：名字 + 数量配成一条
-    Array.prototype.slice.call(document.querySelectorAll("[data-pd^='nk:']")).forEach(function (nameInput) {
-      var mapKey = String(nameInput.getAttribute("data-pd") || "").slice(3);
-      var name = String(nameInput.value || "").trim();
-      if (!name) return;
-      var valueInput = document.querySelector('[data-pd="nv:' + mapKey + '"]');
-      if (!valueInput) {
-        // ⚠️ 不能「找不到就当 1」：那会静默给错数量（曾经真的想这么写）
-        bad = bad || ("新增「" + name + "」时读不到数量框，请刷新页面重试");
-        return;
-      }
-      var rawCount = String(valueInput.value == null ? "" : valueInput.value).trim();
-      var count = rawCount === "" ? 1 : Number(rawCount);
-      if (rawCount !== "" && (!isFinite(count) || Math.floor(count) !== count)) {
-        bad = bad || ("新增「" + name + "」的数量要填整数（收到 " + rawCount + "）");
-        return;
-      }
-      if (mode === "add" && count < 0) {
-        bad = bad || "新增一项时数量不能是负数（想减少就填在已有的那一行里）";
-        return;
-      }
-      edits.push({ map: mapKey, key: name, value: Number(count) });
-    });
-    return { edits: edits, error: bad, mode: mode };
   }
 
   /* ===========================================================================
@@ -5553,6 +5260,10 @@ table.grid td.actions .btn { vertical-align: middle; }
         confirm: false,    // 二次确认
         lastResult: "",
         fishEdit: {},      // "list|index" -> 该条鱼的草稿对象（局部覆盖）
+        busy: false,       // 有请求在飞（提交 / 重读）—— 用来挡住「连点两次」的竞态
+        /* 改的是**实时**玩家还是某份**存档里**的玩家（v1.18.57 合并后才有） */
+        mode2: "live",     // "live" | "snapshot"
+        snapshot: "",      // mode2 === "snapshot" 时改哪份存档
       };
     }
     return state.playerData;
@@ -5579,10 +5290,17 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
   }
 
-  /** 读一个玩家的全部数据（插件下发的分组 + 枚举）。任何失败都写进面板，不静默。 */
-  async function loadPlayerFull(userId) {
+  /** 读一个玩家的全部数据（插件下发的分组 + 枚举）。任何失败都写进面板，不静默。
+      ``snapshot`` 非空 = 读**那份存档里**的玩家（只读文件，不动实时数据）。 */
+  async function loadPlayerFull(userId, snapshot) {
     var st = pdState();
     st.user_id = text(userId);
+    if (arguments.length > 1) {
+      var want = text(snapshot);
+      st.mode2 = want ? "snapshot" : "live";
+      st.snapshot = want;
+    }
+    var snapRef = st.mode2 === "snapshot" ? text(st.snapshot) : "";
     st.loaded = false;
     st.error = "";
     st.drafts = {};
@@ -5592,15 +5310,19 @@ table.grid td.actions .btn { vertical-align: middle; }
     render();
     if (!ENV.online) {
       st.loaded = true;
+      st.busy = false;
       st.error = "离线预览：读不到玩家数据（在插件里打开页面才有）";
       render();
       return;
     }
     var res;
     try {
-      res = await playersCommand({ action: "player_full_get", user_id: st.user_id });
+      res = await playersCommand({
+        action: "player_full_get", user_id: st.user_id, snapshot: snapRef,
+      });
     } catch (e) {
       st.loaded = true;
+      st.busy = false;
       st.error = "读取失败：" + describeError(e, "players");
       render();
       return;
@@ -5608,6 +5330,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     var body = (res && res.detail) || null;
     if (!(res && res.accepted) || !body || !body.groups) {
       st.loaded = true;
+      st.busy = false;
       st.error = (res && res.message) || "读取失败（插件返回的数据不完整）";
       render();
       return;
@@ -5618,6 +5341,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     st.enums = body.enums || {};
     st.raw_json = text(body.raw_json);
     st.error = "";
+    st.busy = false;
     render();
   }
 
@@ -5732,13 +5456,25 @@ table.grid td.actions .btn { vertical-align: middle; }
     var st = pdState();
     if (!st.user_id) return { ok: false, message: "还没选玩家" };
     if (!ENV.online) return { ok: false, message: "离线预览：不会真正改玩家数据" };
+    var snapRef = st.mode2 === "snapshot" ? text(st.snapshot) : "";
+    if (st.mode2 === "snapshot" && !snapRef) {
+      return { ok: false, message: "还没选存档（存档内玩家要指定改哪一份档）" };
+    }
+    if (st.busy) {
+      // 上一次写请求还没落地：这一次要是发出去，index 是照着旧列表算的（会删错鱼）
+      return { ok: false, message: "上一次操作还在处理，稍等一下再点" };
+    }
+    st.busy = true;          // 挡住连点：写请求 + 紧随其后的重读不能被第二次点击插队
+    render();
     var res;
     try {
       res = await playersCommand({
         action: "player_full_set", user_id: st.user_id, edits: edits, confirm: true,
+        snapshot: snapRef,
       });
     } catch (e) {
       var why = "提交失败：" + describeError(e, "players");
+      st.busy = false;
       st.lastResult = why;
       toast("err", "修改没成功", why);
       render();
@@ -5747,9 +5483,15 @@ table.grid td.actions .btn { vertical-align: middle; }
     if (res && res.accepted) {
       st.lastResult = (res.message || "已写入").slice(0, 400);
       toast("ok", "已写入玩家数据", st.lastResult.slice(0, 160));
-      await loadPlayerFull(st.user_id);
-      fetchPlayers(false).then(function () { render(); });
+      if (snapRef) {
+        // 改的是存档文件：重读这份存档（玩家列表也跟着更新），实时列表不动
+        fetchSnapshotPlayers(snapRef, false).then(function () { render(); });
+      } else {
+        fetchPlayers(false).then(function () { render(); });
+      }
+      await loadPlayerFull(st.user_id, snapRef);
     } else {
+      st.busy = false;
       st.lastResult = (res && res.message) || "未知原因";
       toast("err", "修改没成功", st.lastResult.slice(0, 160));
       render();
@@ -5806,19 +5548,66 @@ table.grid td.actions .btn { vertical-align: middle; }
     return Object.keys(st.fishEdit || {}).length;
   }
 
+  /** 枚举项 -> ``{id, name}``（兼容旧的纯字符串形态）。 */
+  function pdEnumEntry(item) {
+    if (item && typeof item === "object") {
+      return { id: String(item.id || ""), name: String(item.name || item.id || "") };
+    }
+    return { id: String(item || ""), name: String(item || "") };
+  }
+
+  /** 枚举 id -> 中文名（存量值也显示成中文，而不是 abyss_bait 这种代码 id）。 */
+  function pdEnumName(enumKey, id) {
+    var want = String(id === undefined || id === null ? "" : id);
+    if (!want) return "";
+    var list = (pdState().enums || {})[enumKey] || [];
+    for (var i = 0; i < list.length; i++) {
+      var entry = pdEnumEntry(list[i]);
+      if (entry.id === want) return entry.name;
+    }
+    var maps = (pdState().enums || {}).name_map || {};
+    var table = maps[enumKey] || {};
+    return table[want] || want;
+  }
+
   function pdEnumOptions(enumKey, current) {
     var list = (pdState().enums || {})[enumKey] || [];
+    var cur = String(current === undefined || current === null ? "" : current);
     var html = '<option value="">（不设）</option>';
     var found = false;
-    list.forEach(function (id) {
-      var sel = String(current) === String(id);
+    list.forEach(function (raw) {
+      var entry = pdEnumEntry(raw);
+      if (!entry.id) return;
+      var sel = entry.id === cur;
       if (sel) found = true;
-      html += '<option value="' + esc(id) + '"' + (sel ? " selected" : "") + ">" + esc(id) + "</option>";
+      html += '<option value="' + esc(entry.id) + '"' + (sel ? " selected" : "") + ">" +
+        esc(entry.name) + "</option>";
     });
-    if (current && !found) {
-      html += '<option value="' + esc(current) + '" selected>' + esc(current) + "（当前值，不在枚举表里）</option>";
+    if (cur && !found) {
+      html += '<option value="' + esc(cur) + '" selected>' + esc(cur) + "（当前值，已不在列表里）</option>";
     }
     return html;
+  }
+
+  /** 枚举下拉（显示中文、提交 id）。``first`` = 第一项的文字（默认「（不设）」）。 */
+  function pdEnumSelect(enumKey, current, first, fire) {
+    var list = (pdState().enums || {})[enumKey] || [];
+    var cur = String(current === undefined || current === null ? "" : current);
+    var html = '<select class="cell-input"' + (fire || "") + ">";
+    html += '<option value=""' + (cur ? "" : " selected") + ">" + esc(first || "（不设）") + "</option>";
+    var found = false;
+    list.forEach(function (raw) {
+      var entry = pdEnumEntry(raw);
+      if (!entry.id) return;
+      var sel = entry.id === cur;
+      if (sel) found = true;
+      html += '<option value="' + esc(entry.id) + '"' + (sel ? " selected" : "") + ">" +
+        esc(entry.name) + "</option>";
+    });
+    if (cur && !found) {
+      html += '<option value="' + esc(cur) + '" selected>' + esc(cur) + "（当前值，已不在列表里）</option>";
+    }
+    return html + "</select>";
   }
 
   /* ---- 鱼：一条鱼一行，可改鱼种/品质/异色/三维/投喂/锁定 ---- */
@@ -5837,16 +5626,12 @@ table.grid td.actions .btn { vertical-align: middle; }
     rows += "<tr>" +
       '<td data-label="鱼种"><select class="cell-input" data-fish="' + esc(ek) + '" data-key="fish_id">' +
       pdEnumOptions("fish", fish.fish_id) + "</select></td>" +
-      '<td data-label="个体品质"><select class="cell-input" data-fish="' + esc(ek) + '" data-key="quality">' +
-      '<option value="">（不改）</option>' +
-      ((pdState().enums || {}).quality || []).map(function (q) {
-        return '<option value="' + esc(q) + '"' + (String(val("quality", quality)) === q ? " selected" : "") + ">" + esc(q) + "</option>";
-      }).join("") + "</select></td>" +
-      '<td data-label="异色"><select class="cell-input" data-fish="' + esc(ek) + '" data-key="variant">' +
-      '<option value=""' + (String(val("variant", variant)) === "" ? " selected" : "") + ">无</option>" +
-      ((pdState().enums || {}).variants || []).map(function (v) {
-        return '<option value="' + esc(v) + '"' + (String(val("variant", variant)) === v ? " selected" : "") + ">" + esc(v) + "</option>";
-      }).join("") + "</select></td>" +
+      '<td data-label="个体品质">' +
+      pdEnumSelect("quality", val("quality", quality), "（不改）",
+        ' data-fish="' + esc(ek) + '" data-key="quality"') + "</td>" +
+      '<td data-label="异色">' +
+      pdEnumSelect("variants", val("variant", variant), "无",
+        ' data-fish="' + esc(ek) + '" data-key="variant"') + "</td>" +
       '<td data-label="肉质"><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" ' +
       'data-fish="' + esc(ek) + '" data-key="meat" value="' + esc(attrs.meat === undefined ? "" : attrs.meat) + '" /></td>' +
       '<td data-label="灵性"><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" ' +
@@ -5860,7 +5645,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       '<td class="num" data-label="估值">' + esc(fmtNum(fish.value || 0)) +
       (Object.keys(d).length ? ' <span class="hint faint">（保存后重算）</span>' : "") + "</td>" +
       '<td data-label="操作"><button class="btn btn-sm btn-danger" data-act="pd2:fishDel" data-list="' +
-      esc(listKey) + '" data-index="' + index + '">🗑 删</button></td>' +
+      esc(listKey) + '" data-index="' + index + '"' + (st.busy ? " disabled" : "") + ">🗑 删</button></td>" +
       "</tr>";
     return rows;
   }
@@ -5880,15 +5665,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     html += '<tr><td data-label="新增">' +
       '<select class="cell-input" data-new="' + esc(listKey) + '" data-key="fish_id">' +
       pdEnumOptions("fish", "") + "</select></td>" +
-      '<td data-label="品质"><select class="cell-input" data-new="' + esc(listKey) + '" data-key="quality">' +
-      ((pdState().enums || {}).quality || []).map(function (q) {
-        return '<option value="' + esc(q) + '">' + esc(q) + "</option>";
-      }).join("") + "</select></td>" +
-      '<td data-label="异色"><select class="cell-input" data-new="' + esc(listKey) + '" data-key="variant">' +
-      '<option value="">无</option>' +
-      ((pdState().enums || {}).variants || []).map(function (v) {
-        return '<option value="' + esc(v) + '">' + esc(v) + "</option>";
-      }).join("") + "</select></td>" +
+      '<td data-label="品质">' +
+      pdEnumSelect("quality", "", "（品质）", ' data-new="' + esc(listKey) + '" data-key="quality"') + "</td>" +
+      '<td data-label="异色">' +
+      pdEnumSelect("variants", "", "无", ' data-new="' + esc(listKey) + '" data-key="variant"') + "</td>" +
       '<td><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" data-new="' +
       esc(listKey) + '" data-key="meat" placeholder="肉" /></td>' +
       '<td><input class="cell-input mono" style="width:64px" type="number" min="1" max="100" data-new="' +
@@ -5897,14 +5677,76 @@ table.grid td.actions .btn { vertical-align: middle; }
       esc(listKey) + '" data-key="sheen" placeholder="光" /></td>' +
       "<td></td><td></td>" +
       '<td data-label=""><button class="btn btn-sm btn-primary" data-act="pd2:fishAdd" data-list="' +
-      esc(listKey) + '">＋ 加一条</button></td>' +
+      esc(listKey) + '"' + (pdState().busy ? " disabled" : "") + ">＋ 加一条</button></td>" +
       '<td data-label=""><button class="btn btn-sm btn-danger" data-act="pd2:fishClear" data-list="' +
-      esc(listKey) + '">清空</button></td></tr>';
+      esc(listKey) + '"' + (pdState().busy ? " disabled" : "") + ">清空</button></td></tr>";
     html += "</tbody></table></div>";
     return html;
   }
 
-  /** 一个普通字段的输出控件（按 kind 选控件）。 */
+  /** 把一份存档值翻译成人看得懂的中文（枚举 id -> 中文名）。
+      站长要求「能改的给我搞成中文啊」—— 界面上不该出现 abyss_bait / golden 这种代码 id。 */
+  function pdHumanValue(enumKey, value) {
+    if (value === undefined || value === null || value === "") return "—";
+    var text = String(value);
+    if (text === "none") return "空钩";
+    return pdEnumName(enumKey, text) || text;
+  }
+
+  /** 列表型字段（鱼饵/道具/鱼竿…）：把「id:数量」翻译成「中文名 ×数量」。 */
+  function pdHumanList(enumKey, value) {
+    if (!value || typeof value !== "object") return "—";
+    var parts = [];
+    Object.keys(value).forEach(function (id) {
+      var name = pdHumanValue(enumKey, id);
+      var count = value[id];
+      parts.push(name + (typeof count === "number" ? " ×" + count : ""));
+    });
+    return parts.length ? parts.join("、") : "—";
+  }
+
+  /** 计数表/列表里每一项的中文名（给「加一项」的下拉用）。 */
+  function pdItemOptions(enumKey) {
+    var list = (pdState().enums || {})[enumKey] || [];
+    var html = '<option value="">（选一项）</option>';
+    list.forEach(function (raw) {
+      var entry = pdEnumEntry(raw);
+      if (!entry.id) return;
+      html += '<option value="' + esc(entry.id) + '">' + esc(entry.name) + "</option>";
+    });
+    return html;
+  }
+
+  /** 字段当前值的中文展示（比原始值更适合给人看）。 */
+  function pdCurrentText(gtitle, item) {
+    var v = item.value;
+    var key = item.key;
+    if (key === "equipped_bait" || key === "equipped_rod" || key === "current_location") {
+      var ekey = key === "equipped_bait" ? "baits" : (key === "equipped_rod" ? "rods" : "locations");
+      return pdHumanValue(ekey, v);
+    }
+    if (key === "title" || key === "auto_buff_item") {
+      return pdHumanValue(key === "title" ? "titles" : "items", v);
+    }
+    if (key === "weather") return pdHumanValue("weather", v);
+    if (key === "baits") return pdHumanList("baits", v);
+    if (key === "items") return pdHumanList("items", v);
+    if (key === "collectibles") return pdHumanList("collectibles", v);
+    if (key === "variants") return pdHumanList("variants", v);
+    if (key === "rods") return pdHumanList("rods", v);
+    if (key === "locations") return pdHumanList("locations", v);
+    if (key === "titles") return pdHumanList("titles", v);
+    if (key === "achievements") {
+      var list = (v || []).map(function (x) { return pdHumanValue("achievements", x); });
+      return list.length ? list.join("、") : "—";
+    }
+    if (v === null || v === undefined || v === "") return "—";
+    if (typeof v === "boolean") return v ? "是" : "否";
+    if (typeof v === "object") return "";
+    return String(v);
+  }
+  /** 编辑框：按 kind 选控件。返回 ``{control, mark, now}``。
+      ``now`` = 当前值的中文展示（站长要中文，所以「现在是多少」这一列也翻译过来）。 */
   function pdFieldControl(gtitle, item) {
     var st = pdState();
     var dk = gtitle + "|" + item.key;
@@ -5912,38 +5754,37 @@ table.grid td.actions .btn { vertical-align: middle; }
     var dirty = Object.prototype.hasOwnProperty.call(st.drafts, dk);
     var mark = dirty ? ' <span class="hint" style="color:var(--warn)">●</span>' : "";
     var kind = item.kind;
+    var now = pdCurrentText(gtitle, item);
     if (kind === "readonly") {
-      return { control: '<span class="faint mono">' + esc(String(item.value === undefined ? "—" : item.value)) + "</span>", mark: "" };
+      return { control: '<span class="faint">' + esc(String(item.value === undefined ? "—" : item.value)) + "</span>", mark: "", now: now };
     }
     if (kind === "fish_list") {
       return {
-        control: '<span class="hint faint">见下面那张表（' +
-          ((item.value || []).length) + " 条）</span>", mark: mark,
+        control: '<span class="hint faint">见下面那张「' + esc(item.label) + "」表（" +
+          ((item.value || []).length) + " 条）</span>", mark: mark, now: now,
       };
     }
     if (kind === "map" || kind === "str_list" || kind === "map_int") {
-      var cur = item.value;
-      var shown = "";
-      if (kind === "map" || kind === "map_int") {
-        shown = Object.keys(cur || {}).map(function (k) { return k + ":" + cur[k]; }).join(", ");
-      } else {
-        shown = (cur || []).join(", ");
+      var hint = pdHumanList(item.enum, item.value);
+      if (kind === "str_list") {
+        hint = (item.value || []).map(function (x) { return pdHumanValue(item.enum, x); }).join("、") || "（空）";
       }
+      var addRow = '<div class="hint">加一项：<select class="cell-input" style="width:180px" data-pd2item="' +
+        esc(dk) + '">' + pdItemOptions(item.enum) + "</select>" +
+        '<select class="cell-input" style="width:92px" data-pd2mode="' + esc(dk) + '">' +
+        '<option value="add">加上</option><option value="remove">去掉</option></select></div>';
       return {
-        control: '<input class="cell-input mono" style="min-width:260px" type="text"' + fire +
-          ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(shown || "（空）") + '" />' +
-          '<div class="hint faint">逗号分隔；也可只写一项来增/删：' +
-          '<input class="cell-input mono" style="width:150px" type="text" data-pd2item="' + esc(dk) + '" placeholder="name" />' +
-          '<select class="cell-input" style="width:96px" data-pd2mode="' + esc(dk) + '">' +
-          '<option value="add">加一项</option><option value="remove">删一项</option></select></div>',
-        mark: mark,
+        control: '<input class="cell-input mono" style="min-width:280px" type="text"' + fire +
+          ' value="' + esc(pdDraft(gtitle, item)) + '" placeholder="' + esc(hint || "（空）") + '" />' +
+          '<div class="hint faint">整表写法：逗号分隔的「id:数量」（改动会整表覆盖）</div>' + addRow,
+        mark: mark, now: now,
       };
     }
     if (kind === "json") {
       return {
         control: '<textarea class="cell-input is-multiline" rows="3" style="min-width:320px"' + fire + ">" +
           esc(pdDraft(gtitle, item)) + "</textarea>",
-        mark: mark,
+        mark: mark, now: "",
       };
     }
     if (kind === "count" || kind === "int") {
@@ -5951,27 +5792,27 @@ table.grid td.actions .btn { vertical-align: middle; }
         control: '<input class="cell-input mono" style="width:150px" type="number" step="1"' + fire +
           ' value="' + esc(pdDraft(gtitle, item)) + '" />' +
           '<select class="cell-input" style="width:96px" data-pd2add="' + esc(dk) + '">' +
-          '<option value="set">设为</option><option value="add">加减</option></select>',
-        mark: mark,
+          '<option value="set">改成</option><option value="add">加减</option></select>',
+        mark: mark, now: now,
       };
     }
     if (kind === "ratio") {
       return {
         control: '<input class="cell-input mono" style="width:130px" type="number" step="0.01"' + fire +
           ' value="' + esc(pdDraft(gtitle, item)) + '" />',
-        mark: mark,
+        mark: mark, now: now,
       };
     }
-    // text：有 enum 就下拉，否则输入框
+    // text：有 enum 就下拉（显示中文），否则输入框
     if (item.enum) {
       return {
         control: '<select class="cell-input"' + fire + ">" + pdEnumOptions(item.enum, pdDraft(gtitle, item)) + "</select>",
-        mark: mark,
+        mark: mark, now: now,
       };
     }
     return {
       control: '<input class="cell-input" type="text"' + fire + ' value="' + esc(pdDraft(gtitle, item)) + '" />',
-      mark: mark,
+      mark: mark, now: now,
     };
   }
 
@@ -5987,12 +5828,25 @@ table.grid td.actions .btn { vertical-align: middle; }
       (st.dirty
         ? '<span class="stat-chip pd-dirty" style="color:var(--warn)">● ' + st.dirty + " 处未保存</span>"
         : '<span class="stat-chip pd-dirty" style="display:none"></span>') +
-      '<button class="btn btn-sm btn-primary" data-act="pd2:save"' + (st.dirty ? "" : " disabled") +
-      ">✔ 保存修改</button>" +
-      '<button class="btn btn-sm" data-act="pd2:reload">↻ 重读</button></div>';
+      '<button class="btn btn-sm btn-primary" data-act="pd2:save"' + (st.dirty && !st.busy ? "" : " disabled") +
+      ">" + (st.busy ? "⏳ 正在处理…" : "✔ 保存修改") + "</button>" +
+      '<button class="btn btn-sm" data-act="pd2:reload"' + (st.busy ? " disabled" : "") + ">↻ 重读</button></div>";
 
-    // 选玩家
+    // 选玩家（先选「改实时玩家」还是「改某份存档里的玩家」）
     html += '<div class="toolbar">';
+    var pdLive = st.mode2 !== "snapshot";
+    html += '<button class="btn btn-sm' + (pdLive ? " btn-primary" : "") + '" data-act="pd2:mode" data-mode="live">🟢 实时玩家</button>';
+    html += '<button class="btn btn-sm' + (!pdLive ? " btn-primary" : "") + '" data-act="pd2:mode" data-mode="snapshot">💾 存档内玩家</button>';
+    html += '<span class="divider"></span>';
+    if (!pdLive) {
+      html += '<label class="field"><span class="field-icon">📄</span><select data-act="pd2:snapPick">';
+      html += '<option value="">（选一份存档）</option>';
+      (state.snapshots || []).forEach(function (s) {
+        html += '<option value="' + esc(s.name) + '"' + (st.snapshot === s.name ? " selected" : "") + ">" +
+          esc((s.note ? s.note + " · " : "") + s.name) + "</option>";
+      });
+      html += "</select></label>";
+    }
     var opts = pdPlayerOptions();
     html += '<label class="field"><span class="field-icon">👤</span><select data-act="pd2:pick">';
     html += '<option value="">（选一个玩家）</option>';
@@ -6012,6 +5866,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     html += '<div class="notice"><span class="notice-icon">🛡️</span><div>' +
       "这里改的是**这个玩家的全部数据**（65 个字段 + 每条鱼）。保存时会：①整批校验（有一项不合法就一个字都不改）" +
       "②**改前自动存一份档** ③在玩家锁里落盘。鱼的三维/品质改了会**按新值重算估值**（可升可降）。" +
+      (!pdLive
+        ? '<div style="margin-top:4px">现在改的是 <b>存档文件</b>「' + esc(text(st.snapshot) || "（没选）") +
+          "」里的玩家 —— 要<b>恢复这份存档</b>才会在游戏里生效（实时数据一行都不动）。</div>"
+        : "") +
       "</div></div>";
 
     if (st.error) {
@@ -6024,20 +5882,27 @@ table.grid td.actions .btn { vertical-align: middle; }
     }
     if (!st.user_id) {
       html += '<div class="empty"><span class="empty-icon">🧰</span><div class="empty-title">先在上面选一个玩家</div>' +
-        '<div class="empty-sub">读取之后这里会出现全部字段：基础 / 资产 / 装备 / 状态 / 手气 / 每日额度 / 订单 / 连载 / 世界 / 缓存</div></div>';
+        '<div class="empty-sub">' + (!pdLive && !text(st.snapshot)
+          ? "现在是「存档内玩家」模式：先挑一份存档，再挑玩家"
+          : "读取之后这里会出现全部字段：基础 / 资产 / 装备 / 状态 / 手气 / 每日额度 / 订单 / 连载 / 世界 / 缓存") +
+        "</div></div>";
       html += "</section>";
       return html;
     }
-    if (!st.loaded) {
-      html += '<div class="empty"><span class="empty-icon">⏳</span><div class="empty-title">正在读取…</div></div>';
+    if (!st.loaded || (!pdLive && !text(st.snapshot))) {
+      html += '<div class="empty"><span class="empty-icon">⏳</span><div class="empty-title">' +
+        (pdLive ? "正在读取…" : "先在上面选一份存档") + "</div></div>";
       html += "</section>";
       return html;
     }
 
-    // 二次确认条
+    // 二次确认条（存档模式下说明白：改的是存档文件，要「恢复」才生效）
     if (st.confirm) {
       html += '<div class="notice" style="border-color:var(--warn)"><span class="notice-icon">⚠️</span><div>' +
-        "要提交 <b>" + st.dirty + "</b> 处修改到玩家 <b>" + esc(st.user_id) + "</b> 的**真实存档**。" +
+        "要提交 <b>" + st.dirty + "</b> 处修改到玩家 <b>" + esc(st.user_id) + "</b> 的" +
+        (pdLive
+          ? "**真实存档**（实时生效）。"
+          : "**存档文件**「" + esc(text(st.snapshot)) + "」（游戏里要<b>恢复这份存档</b>才生效）。") +
         '<div style="margin-top:6px">' +
         '<button class="btn btn-sm btn-danger" data-act="pd2:saveYes">✔ 确认写入（先自动存档）</button>' +
         '<button class="btn btn-sm" data-act="pd2:saveNo">✖ 取消</button></div></div></div>';
@@ -6051,14 +5916,17 @@ table.grid td.actions .btn { vertical-align: middle; }
       var fishes = items.filter(function (i) { return i.kind === "fish_list"; });
       if (normal.length) {
         html += '<h3 class="mini-head">' + esc(group.title) + "（" + normal.length + " 项）</h3>";
-        html += '<div class="table-wrap"><table class="grid" style="min-width:760px"><thead><tr>' +
-          "<th style=\"width:210px\">项目</th><th>当前 / 修改</th><th>说明</th></tr></thead><tbody>";
+        html += '<div class="table-wrap"><table class="grid" style="min-width:860px"><thead><tr>' +
+          "<th style=\"width:190px\">项目</th><th style=\"width:200px\">现在是多少</th>" +
+          "<th>改成</th><th>说明</th></tr></thead><tbody>";
         normal.forEach(function (item) {
           var ctl = pdFieldControl(group.title, item);
           html += "<tr>" +
-            '<td data-label="项目">' + esc(item.label) +
-            ' <span class="faint mono">' + esc(item.key) + "</span>" + ctl.mark + "</td>" +
-            '<td data-label="值">' + ctl.control + "</td>" +
+            '<td data-label="项目">' + esc(item.label) + ctl.mark + "</td>" +
+            '<td data-label="现在是多少">' + (ctl.now
+              ? '<span class="faint">' + esc(ctl.now) + "</span>"
+              : '<span class="faint">（见右侧编辑框）</span>') + "</td>" +
+            '<td data-label="改成">' + ctl.control + "</td>" +
             '<td class="faint" data-label="说明">' + esc(item.desc || "") + "</td>" +
             "</tr>";
         });
@@ -6091,32 +5959,14 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   function renderPlayerRow(r, live) {
     var uid = r.user_id;
-    var editing = state.goldEdit && state.goldEdit.user_id === uid;
-    var confirming = state.goldConfirm && state.goldConfirm.user_id === uid;
-    var goldCell;
-    if (editing) {
-      goldCell = '<input class="cell-input mono" style="width:110px;display:inline-block" type="number" min="0" ' +
-        'step="1" data-act="p:goldInput" value="' + esc(state.goldEdit.value) + '" />';
-    } else {
-      goldCell = "<b>" + esc(fmtNum(r.gold)) + "</b>";
-    }
-    var actions;
-    if (confirming) {
-      actions = '<div class="confirm-strip"><span class="q">改成 ' + esc(fmtNum(state.goldConfirm.value)) + "？</span>" +
-        '<button class="btn btn-sm btn-primary" data-act="p:goldYes" data-uid="' + esc(uid) + '">确认修改</button>' +
-        '<button class="btn btn-sm" data-act="p:goldCancel">取消</button></div>';
-    } else if (editing) {
-      actions = '<button class="btn btn-sm btn-primary" data-act="p:goldApply" data-uid="' + esc(uid) + '">下一步</button>' +
-        '<button class="btn btn-sm" data-act="p:goldCancel">取消</button>';
-    } else {
-      actions = '<button class="btn btn-sm" data-act="p:gold" data-uid="' + esc(uid) + '" ' +
-        (confirming ? "disabled" : "") + ">✏️ 改金币</button>" +
-        '<button class="btn btn-sm" data-act="p:data" data-uid="' + esc(uid) + '">🧰 改数据</button>';
-    }
+    /* v1.18.57：这一页不再改数据（改数据的入口只有「🧰 玩家数据」一个），
+       所以每行只留一个「去改数据」按钮，带上这个玩家跳过去。 */
+    var actions = '<button class="btn btn-sm btn-primary" data-act="p:toData" data-uid="' + esc(uid) +
+      '" title="带着这个玩家跳到「🧰 玩家数据」页去改（那里所有字段都能改）">🧰 去改数据</button>';
     return "<tr>" +
       '<td class="mono" data-label="玩家 ID">' + esc(uid) + "</td>" +
       '<td data-label="昵称">' + (r.name ? esc(r.name) : '<span class="placeholder">未记录</span>') + "</td>" +
-      '<td class="num" data-label="金币（可改）">' + goldCell + "</td>" +
+      '<td class="num" data-label="金币">' + esc(fmtNum(r.gold)) + "</td>" +
       '<td class="num" data-label="等级">' + esc(r.level) + "</td>" +
       '<td class="num" data-label="钓获">' + esc(fmtNum(r.caught)) + "</td>" +
       '<td class="num" data-label="卖出">' + esc(fmtNum(r.sold)) + "</td>" +
@@ -8383,9 +8233,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     });
     if (cfg.autoBackup) state.autoBackup = deepClone(cfg.autoBackup);
     state.loadNotes = (cfg._notes || []).slice();
-    /* 玩家页：清掉上一轮的编辑/确认态，并拉一次列表（离线用演示数据） */
-    state.goldEdit = null;
-    state.goldConfirm = null;
+    /* 玩家页：拉一次实时列表（只读用；离线用演示数据） */
     state.playersError = "";
     await fetchPlayers(false);
 
@@ -8579,8 +8427,6 @@ table.grid td.actions .btn { vertical-align: middle; }
         var target = (state.snapshots || [])[index];
         state.playersMode = "snapshot";
         state.snapshotPick = target ? text(target.name) : "";
-        state.goldEdit = null;
-        state.goldConfirm = null;
         state.tab = "players";
         try { history.replaceState(null, "", "#players"); } catch (e) { /* 忽略 */ }
         render();
@@ -8588,12 +8434,10 @@ table.grid td.actions .btn { vertical-align: middle; }
         break;
       }
 
-      /* ---- 玩家页（改金币）---- */
+      /* ---- 玩家页（只读列表 + 跳转改数据）---- */
       case "p:mode": {
         var mode = el.getAttribute("data-mode") === "snapshot" ? "snapshot" : "live";
         state.playersMode = mode;
-        state.goldEdit = null;
-        state.goldConfirm = null;
         render();
         if (mode === "snapshot" && state.snapshotPick) fetchSnapshotPlayers(state.snapshotPick, false);
         break;
@@ -8632,117 +8476,33 @@ table.grid td.actions .btn { vertical-align: middle; }
           else toast("warn", "面板已收起", ((r && r.message) || "") + "（刷新后可能还会出现）");
         });
         break;
-      case "p:gold": {
-        var row = playerRowsNow().filter(function (r) { return r.user_id === el.getAttribute("data-uid"); })[0];
-        if (!row) break;
-        state.goldConfirm = null;
-        state.goldEdit = { user_id: row.user_id, value: row.gold };
-        render();
-        break;
-      }
-      case "p:goldInput": break;   // 输入框自身
-      case "p:goldApply": {
-        var uid = el.getAttribute("data-uid");
-        var input = document.querySelector('[data-act="p:goldInput"]');
-        var raw = input ? String(input.value).trim() : "";
-        var value = Number(raw);
-        if (raw === "" || !isFinite(value) || value < 0 || Math.floor(value) !== value) {
-          toast("err", "金币要填 0 或正整数", raw || "（空）");
-          break;
-        }
-        if (value > state.playersGoldMax) {
-          toast("err", "超出金币上限", "最多 " + fmtNum(state.playersGoldMax));
-          break;
-        }
-        var before = playerRowsNow().filter(function (r) { return r.user_id === uid; })[0];
-        state.goldEdit = null;
-        state.goldConfirm = {
-          user_id: uid, value: value, mode: state.playersMode,
-          oldValue: before ? before.gold : 0
-        };
-        render();
-        break;
-      }
-      case "p:goldCancel":
-        state.goldEdit = null;
-        state.goldConfirm = null;
-        render();
-        break;
-      case "p:goldYes": {
-        var conf = state.goldConfirm;
-        if (!conf) break;
-        var who = conf.user_id;
-        var val = conf.value;
-        var oldVal = conf.oldValue;
-        var snapName = state.snapshotPick;
-        var mode2 = conf.mode;
-        state.goldConfirm = null;
-        render();
-        savePlayerGold(mode2, who, val, snapName).then(function (res) {
-          if (res && res.ok) {
-            toast("ok", mode2 === "snapshot" ? "已改存档里的金币" : "已改玩家金币",
-              who + "：" + fmtNum(oldVal) + " → " + fmtNum(val) +
-              (mode2 === "snapshot" ? "（恢复这份存档后生效）" : ""));
-            if (mode2 === "snapshot") fetchSnapshotPlayers(snapName, false).then(function () { render(); });
-            else fetchPlayers(false).then(function () { render(); });
-          } else {
-            toast("err", "修改没成功", (res && res.message) || "未知原因");
-            render();
-          }
-        });
-        break;
-      }
-
-      /* ---- 🧰 改玩家数据（v1.18.53）---- */
-      case "p:data": {
-        var duid = el.getAttribute("data-uid");
-        var drow = playerRowsNow().filter(function (r) { return r.user_id === duid; })[0];
-        state.dataEdit = {
-          user_id: duid, name: (drow && drow.name) || "",
-          mode2: state.playersMode === "snapshot" ? "snapshot" : "live",
-          snapshot: state.snapshotPick || "",
-          mode: "add", loaded: false, error: "", sections: [], clearArm: null,
-        };
-        render();
-        openPlayerData(duid);
-        break;
-      }
-      case "pd:close":
-        state.dataEdit = null;
-        render();
-        break;
-      case "pd:mode":
-        if (!state.dataEdit) break;
-        state.dataEdit.mode = el.getAttribute("data-mode") === "set" ? "set" : "add";
-        render();
-        break;
-      case "pd:clear":
-        if (!state.dataEdit) break;
-        state.dataEdit.clearArm = el.getAttribute("data-key") || null;
-        render();
-        break;
-      case "pd:clearNo":
-        if (!state.dataEdit) break;
-        state.dataEdit.clearArm = null;
-        render();
-        break;
-      case "pd:clearYes": {
-        if (!state.dataEdit) break;
-        var ckey = el.getAttribute("data-key") || "";
-        state.dataEdit.clearArm = null;
-        submitPlayerData([{ clear: ckey }]);
-        break;
-      }
-      case "pd:apply": {
-        if (!state.dataEdit) break;
-        var packed = playerDataEditsFromPage();
-        if (packed.error) { toast("err", "有填错的地方", packed.error); break; }
-        if (!packed.edits.length) { toast("warn", "没有要改的项", "每个框留空 = 不改这一项"); break; }
-        submitPlayerData(packed.edits);
+      /* ---- 👤 玩家：只读列表，改数据统一跳到「🧰 玩家数据」---- */
+      case "p:toData": {
+        var toUid = el.getAttribute("data-uid");
+        var toSnap = state.playersMode === "snapshot" ? (state.snapshotPick || "") : "";
+        state.tab = "playerdata";
+        var pds = pdState();
+        pds.mode2 = toSnap ? "snapshot" : "live";
+        pds.snapshot = toSnap;
+        loadPlayerFull(toUid, toSnap);
         break;
       }
 
       /* ---- 🧰 玩家数据（v1.18.56）---- */
+      case "pd2:mode": {
+        var stm = pdState();
+        var wantMode = el.getAttribute("data-mode") === "snapshot" ? "snapshot" : "live";
+        stm.mode2 = wantMode;
+        stm.drafts = {};
+        stm.fishEdit = {};
+        stm.dirty = 0;
+        stm.confirm = false;
+        stm.lastResult = "";
+        if (wantMode === "snapshot" && !stm.snapshot) stm.loaded = false;   // 还没选存档，先别显示实时数据
+        render();
+        if (wantMode === "live" && stm.user_id) loadPlayerFull(stm.user_id, "");
+        break;
+      }
       case "pd2:pick": {
         var picked = "";
         var sel = document.querySelector('[data-act="pd2:pick"]');
@@ -8750,7 +8510,7 @@ table.grid td.actions .btn { vertical-align: middle; }
         if (picked) {
           var st0 = pdState();
           st0.user_id = picked;
-          loadPlayerFull(picked);
+          loadPlayerFull(picked, st0.mode2 === "snapshot" ? st0.snapshot : "");
         }
         break;
       }
@@ -8760,13 +8520,13 @@ table.grid td.actions .btn { vertical-align: middle; }
         if (!uid) { toast("warn", "先选或填一个玩家 ID", ""); break; }
         var st1 = pdState();
         st1.user_id = uid;
-        loadPlayerFull(uid);
+        loadPlayerFull(uid, st1.mode2 === "snapshot" ? st1.snapshot : "");
         break;
       }
       case "pd2:reload": {
         var st2 = pdState();
         if (!st2.user_id) break;
-        loadPlayerFull(st2.user_id);
+        loadPlayerFull(st2.user_id, st2.mode2 === "snapshot" ? st2.snapshot : "");
         break;
       }
       case "pd2:rawToggle": {
@@ -8777,7 +8537,11 @@ table.grid td.actions .btn { vertical-align: middle; }
         render();
         break;
       }
+      /* 下面三个都是「发一次请求 + 重新读一遍」的动作：必须挡住连点。
+         否则第二次请求会对着**上一次**的列表算出错误的 index（删错鱼 / 清错缸），
+         两次响应还会互相覆盖页面状态。busy 期间直接忽略，按钮本身也会变灰。 */
       case "pd2:fishDel": {
+        if (pdState().busy) { toast("warn", "上一次操作还在处理，稍等一下", ""); break; }
         var delList = el.getAttribute("data-list");
         var delIndex = Number(el.getAttribute("data-index"));
         collectFishDrafts();
@@ -8785,12 +8549,14 @@ table.grid td.actions .btn { vertical-align: middle; }
         break;
       }
       case "pd2:fishClear": {
+        if (pdState().busy) { toast("warn", "上一次操作还在处理，稍等一下", ""); break; }
         var clrList = el.getAttribute("data-list");
         if (!confirmStrip("确定清空 " + clrList + " 里所有鱼？")) break;
         submitPlayerFull([{ key: clrList, op: "clear" }]);
         break;
       }
       case "pd2:fishAdd": {
+        if (pdState().busy) { toast("warn", "上一次操作还在处理，稍等一下", ""); break; }
         var addList = el.getAttribute("data-list");
         var addVal = collectNewFish(addList);
         if (!addVal) break;
@@ -9183,10 +8949,6 @@ table.grid td.actions .btn { vertical-align: middle; }
       refreshReplyPickerSummary(toText(el.getAttribute("data-scene")));
       return;
     }
-    if (act === "p:goldInput") {
-      if (state.goldEdit) state.goldEdit.value = el.value;
-      return;
-    }
     if (act === "p:snapPick") {   // 顺手支持 input（select 一般走 change）
       state.snapshotPick = el.value;
       return;
@@ -9216,10 +8978,26 @@ table.grid td.actions .btn { vertical-align: middle; }
     else if (act === "sort") { state.sort = el.value; render(); }
     else if (act === "p:snapPick") {
       state.snapshotPick = el.value;
-      state.goldEdit = null;
-      state.goldConfirm = null;
       render();
       if (el.value) fetchSnapshotPlayers(el.value, false).then(function () { render(); });
+    }
+    /* 🧰 玩家数据：切到某份存档 -> 立刻读那份存档里的这个玩家 */
+    else if (act === "pd2:snapPick") {
+      var pds2 = pdState();
+      pds2.snapshot = String(el.value || "");
+      pds2.mode2 = pds2.snapshot ? "snapshot" : "live";
+      pds2.drafts = {};
+      pds2.fishEdit = {};
+      pds2.dirty = 0;
+      pds2.confirm = false;
+      pds2.lastResult = "";
+      pds2.loaded = false;
+      render();
+      if (pds2.snapshot) {
+        if (pds2.user_id) loadPlayerFull(pds2.user_id, pds2.snapshot);
+      } else if (pds2.user_id) {
+        loadPlayerFull(pds2.user_id, "");
+      }
     }
     else if (act === "auto:enable") {
       state.autoBackup.enable = el.checked;

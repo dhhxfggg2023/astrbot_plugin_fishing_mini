@@ -82,11 +82,17 @@ PLAYER_LIST_LIMIT = 500
 #: 不带搜索词时最多扫描索引里最近多少个玩家（索引最多 5000）
 PLAYER_SCAN_LIMIT = 2000
 #: 玩家页支持的动作（页面侧必须与这里一致）
+#:
+#: ⚠️ v1.18.57 起界面上**只剩 ``player_full_*`` 一条写路径**（「👤 玩家」页改成只读，
+#: 「🧰 玩家数据」页是唯一入口）。``set_gold`` / ``snapshot_gold`` / ``player_get`` /
+#: ``player_set`` 这几条**故意留着**：它们的校验/自动存档/玩家锁跟新路径是**同一套**，
+#: 留着只是为了让「浏览器缓存了旧页面」的站长点老按钮时能拿到一句清楚的话，
+#: 而不是 404 式的「不认识的动作」。新代码不要再往这里加动作。
 PLAYER_ACTIONS: tuple[str, ...] = (
     "list", "snapshot_list", "set_gold", "snapshot_gold",
-    # v1.18.53：玩家实时数据的通用编辑（金币之外的增/减/改）
+    # v1.18.53：玩家实时数据的通用编辑（金币之外的增/减/改）—— 已被 player_full_set 取代
     "player_get", "player_set", "player_add", "snapshot_player_set",
-    # v1.18.56：玩家存档编辑器（全字段 + 逐条改鱼 + 原始 JSON）
+    # v1.18.56：玩家数据编辑器（全字段 + 逐条改鱼 + 原始 JSON）；v1.18.57 起是唯一写入口
     "player_full_get", "player_full_set",
 )
 
@@ -924,14 +930,21 @@ class EditorApiMixin:
         }
 
     async def editor_api_players(self, body: dict[str, Any] | None = None):
-        """GET/POST players：实时玩家列表；POST 还能改金币。
+        """GET/POST players：实时玩家列表；POST 还能**改玩家的全部数据**。
 
         * GET（或 POST ``{"action": "list", "query": "..."}``）→ 实时玩家列表
         * POST ``{"action": "snapshot_list", "name": "..."}`` → 某份存档里的玩家
-        * POST ``{"action": "set_gold", "user_id", "gold", "confirm": true}``
-          → 改**实时**玩家金币（改前自动存一份 auto 档）
-        * POST ``{"action": "snapshot_gold", "name", "user_id", "gold", "confirm": true}``
-          → 改**某份存档里**的玩家金币（改完要「恢复」这份存档才生效）
+        * POST ``{"action": "player_full_get", "user_id", "snapshot"?}``
+          → 一个玩家的全部数据（分组 + 枚举 + 原始 JSON；带 snapshot = 读存档里的）
+        * POST ``{"action": "player_full_set", "user_id", "edits", "snapshot"?, "confirm": true}``
+          → 唯一的写入口（v1.18.57 起页面只用这条）：
+
+            - 不带 ``snapshot`` = 改**实时**玩家（改前自动存一份 auto 档）
+            - 带 ``snapshot`` = 改**存档文件**里那个玩家（改完要「恢复」才生效）
+            - 整批校验 + 二次确认 + 玩家锁；任何一项不过就一个字都不改
+
+        另有一条**兼容**动作（页面已不用，留给缓存了旧页面的浏览器）：
+        ``set_gold`` / ``snapshot_gold`` —— 只改金币，校验与自动存档口径相同。
         """
         if body is None:
             reader = getattr(self, "_editor_request_json", None)
@@ -955,7 +968,7 @@ class EditorApiMixin:
             payload.update(data if isinstance(data, dict) else {})
             return payload
         if action == "player_full_get":
-            # 玩家存档编辑器（v1.18.56）：读全部数据（分组 + 枚举 + 原始 JSON）
+            # 玩家数据编辑器（v1.18.56）：读全部数据（分组 + 枚举 + 原始 JSON）
             ok, data = await self._editor_player_detail_full(
                 str(body.get("user_id") or body.get("uid") or ""),
                 snapshot=str(body.get("snapshot") or ""),
@@ -979,7 +992,7 @@ class EditorApiMixin:
 
     # ------------------------------------------- 玩家实时数据（v1.18.53 通用编辑）
     def _editor_player_module(self) -> Any:
-        """玩家存档编辑器模块（v1.18.56）；拿不到就退回 None（老行为照常）。"""
+        """玩家数据编辑器模块（v1.18.56）；拿不到就退回 None（老行为照常）。"""
         for name in ("astrbot_fishing_editor_player", "_editor_player"):
             module = sys.modules.get(name)
             if module is not None:
@@ -1775,7 +1788,7 @@ class EditorBridgeMixin(EditorApiMixin):
             # 玩家页（v1.18.53）：金币之外的实时数据也能增/减/改
             "player_set": self._editor_set_player_data,
             "snapshot_player_set": self._editor_set_snapshot_player,
-            # 玩家存档编辑器（v1.18.56）：全字段 + 逐条改鱼 + 原始 JSON
+            # 玩家数据编辑器（v1.18.56）：全字段 + 逐条改鱼 + 原始 JSON
             "player_full_set": self._editor_save_player_full,
             # 旧作用域找回（作者名改过之后老存档会落在别的 scope 里）
             "legacy_scan": self._editor_legacy_scan,
