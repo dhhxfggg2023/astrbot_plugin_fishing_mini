@@ -355,8 +355,7 @@ body {
 .mini-head:first-of-type { margin-top: var(--sp-3); }
 
 table.grid.pd-grid { min-width: 0; width: 100%; }
-table.grid.pd-grid tbody td { vertical-align: top; padding: 7px 10px; }
-table.grid.pd-grid thead th { padding: 7px 10px; }
+table.grid.pd-grid tbody td { padding: 7px 10px; }
 table.grid.pd-grid td.pd-now { color: var(--muted); max-width: 280px; }
 table.grid.pd-grid td.pd-ctl { min-width: 300px; }
 table.grid.pd-grid td.pd-ctl .cell-input { width: auto; }
@@ -378,11 +377,94 @@ table.grid.pd-grid td.pd-ctl .cell-input { width: auto; }
 table.grid.pd-fish td .cell-input { width: auto; }
 table.grid.pd-fish td select.cell-input { min-width: 96px; max-width: 168px; }
 table.grid.pd-fish td input[type="number"].cell-input { width: 62px; min-width: 62px; }
-/* 「一个字段一张卡」模式下（窄面板）让控件占满整行 —— 卡片模式下宽度够，没必要挤着 */
-table.grid.stack.pd-grid tbody td.pd-ctl { flex: 1 1 auto; }
-table.grid.stack.pd-grid tbody td.pd-ctl input[type="text"].cell-input,
-table.grid.stack.pd-grid tbody td.pd-ctl textarea.cell-input { width: 100%; }
-table.grid.stack.pd-grid tbody td.pd-now { max-width: none; }
+
+/* ===========================================================================
+   🧰 玩家数据：一个字段一张卡（v1.18.60）
+   ---------------------------------------------------------------------------
+   站长截图（2026-09-24，面板约 900px 宽）里，4 列表格把控件压成了一条细缝，
+   输入框看着就像一段文字。**不再跟宽度较劲**：任何面板宽度下都用卡片，
+   一个字段一张卡、卡片里三种形态：
+
+     ① pd-head-row  字段名（左）+ 现在是多少（右，浅色小字）
+     ② pd-ctl       在这改：[改成/加减] [数字] [输入框] [＋1][−1][＋10][−10] [算一下]
+     ③ pd-calc      结果预览 → 只在有改动 / 鼠标停在卡片上时出现（不占平常的高度）
+   =========================================================================== */
+.pd-plain table.grid.pd-card { min-width: 0 !important; width: 100%; }
+table.grid.pd-card thead { display: none; }
+table.grid.pd-card tbody tr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 6px;
+  padding: 7px 11px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+table.grid.pd-card tbody tr:hover { border-color: var(--border); }
+table.grid.pd-card tbody tr.is-dirty { border-color: var(--warn); }
+table.grid.pd-card tbody tr.is-dirty td:first-child::after {
+  content: " ●";
+  color: var(--warn);
+}
+table.grid.pd-card tbody td {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: auto !important;
+  padding: 0;
+  border: 0 !important;
+  background: transparent;
+  text-align: left;
+}
+table.grid.pd-card tbody td::before { content: none; }
+table.grid.pd-card td.pd-name {
+  flex: 0 0 156px;
+  min-width: 0;
+  font-weight: 560;
+  overflow-wrap: anywhere;
+}
+table.grid.pd-card td.pd-now { flex: 0 0 auto; max-width: none; }
+table.grid.pd-card td.pd-now::before {
+  content: "现在";
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+table.grid.pd-card td.pd-now .cut { color: var(--muted); font-size: 12.5px; }
+table.grid.pd-card td.pd-ctl { flex: 1 1 340px; min-width: 0; }
+table.grid.pd-card td.pd-desc {
+  flex: 1 1 100%;
+  color: var(--faint);
+  font-size: 11.5px;
+  padding-left: 2px;
+}
+table.grid.pd-card td.pd-desc:empty { display: none; }
+/* 控件定宽（原来 .cell-input 是 width:100%，会把列撑爆） */
+table.grid.pd-card .cell-input { width: auto; }
+table.grid.pd-card input[type="number"].cell-input { width: 126px; }
+table.grid.pd-card input[type="text"].cell-input { width: 232px; }
+table.grid.pd-card select.cell-input { width: auto; min-width: 118px; max-width: 260px; }
+table.grid.pd-card textarea.cell-input { width: 100%; min-width: 240px; }
+/* ③ 先给个明确的「在框里填个数字」提示；有改动或鼠标停在这张卡上时，换成算式结果 */
+table.grid.pd-card tbody td .pd-calc {
+  flex: 1 1 100%;
+  display: block;
+  margin-top: 1px;
+  padding-left: 2px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+table.grid.pd-card tbody tr:hover td .pd-calc,
+table.grid.pd-card tbody tr.is-dirty td .pd-calc { color: var(--fg); }
+/* 🐟 逐条改鱼：控件同样定宽，否则「品质 / 异色」这两个下拉会把整行撑到离谱 */
+table.grid.pd-fish td .cell-input { width: auto; }
+table.grid.pd-fish td select.cell-input { min-width: 96px; max-width: 168px; }
+table.grid.pd-fish td input[type="number"].cell-input { width: 62px; min-width: 62px; }
 
 /* ---------- 工具栏 ---------- */
 .toolbar {
@@ -3657,7 +3739,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.59";
+  var PAGE_VERSION = "v1.18.60";
 
   /* ===========================================================================
      5. 状态
@@ -5631,6 +5713,43 @@ table.grid td.actions .btn { vertical-align: middle; }
     box.textContent = pdCalcText(current, input ? input.value : "", mode, decimal);
   }
 
+  /**
+   * ＋1 / −1 / ±10 快改按钮（v1.18.60）。
+   *
+   * 站长：「没有方便的修改方式」。所以给一个**不用打字**的路子：
+   * 点一下就在草稿上加减（默认 ±1、±10），倍数还能自己在框里先填
+   * （框里填 1000 再点「＋1」= 加 1000）。改的是**草稿**，还是要按「保存修改」才落盘。
+   */
+  function pdBumpField(dk, dir) {
+    var parts = String(dk).split("|");
+    var gtitle = parts[0];
+    var key = parts.slice(1).join("|");
+    var item = pdFindField(gtitle, key);
+    if (!item) return;
+    var st = pdState();
+    if (st.busy) { toast("warn", "上一次操作还在处理，稍等一下", ""); return; }
+    var input = document.querySelector('[data-pd2="' + String(dk).replace(/"/g, '\\"') + '"]');
+    var raw = input ? String(input.value || "").trim() : "";
+    var typed = Number(raw);
+    // 框里填了数字 -> 把它当「倍数」；填 0 / 空 / 乱写 -> 退回默认 1
+    var step = isFinite(typed) && typed > 0 ? typed : 1;
+    var base = Number((st.drafts[dk] !== undefined ? st.drafts[dk] : item.value) || 0);
+    if (!isFinite(base)) base = 0;
+    var next = base + dir * step;
+    if (item.kind === "ratio") {
+      next = Math.round(next * 10000) / 10000;
+      if (next < 0) next = 0;
+    } else {
+      if (next < 0) next = 0;                       // 和插件侧一致：减到 0 为止
+      if (next > 1000000000) next = 1000000000;     // 上限 10 亿（插件侧也会拦）
+    }
+    pdSetDraft(gtitle, key, String(next));
+    if (input) input.value = String(next);          // 就地刷新，不整页重绘（保住滚动位置）
+    pdRefreshCalc(dk);
+    renderPlayerDataDirty();
+    toast("info", item.label + " → " + fmtNum(next), "已经记进草稿，别忘了点「✔ 保存修改」");
+  }
+
   /** 枚举项 -> ``{id, name}``（兼容旧的纯字符串形态）。 */
   function pdEnumEntry(item) {
     if (item && typeof item === "object") {
@@ -5880,14 +5999,27 @@ table.grid td.actions .btn { vertical-align: middle; }
       };
     }
     if (kind === "count" || kind === "int") {
-      /* 站长（v1.18.58 反馈）：「只有加上和减去按钮，哪里输入数值呢」——
-         说明光给一个输入框不够，得**明说哪里填数字、填完会变成多少**。
-         所以：①「改成 / 加减」放前面并说明作用 ②输入框前面写「数字」
-              ③旁边「算一下」实时算出结果（不用先保存才知道对不对）。 */
+      /* 站长（v1.18.58/59 反馈）：「只有加上和减去按钮，哪里输入数值呢」
+         「没有修改前后的预览，也没有方便的修改方式」。
+         所以这一格给三层，从最省事到最灵活：
+           ① ＋ / −  按钮：点一下就改（默认 ±1，倍数可调）—— 不用打字
+           ② 数字输入框 + 「改成 / 加减」：想填精确值就打字
+           ③ 算式预览：填完立刻看到「当前 X → Y」（敲字时实时更新） */
       var text = pdDraft(gtitle, item);
       var preview = pdCalcText(item.value, text, "set", false);
       return {
-        control: '<div class="pd-line">' +
+        control: '<div class="pd-line pd-quick">' +
+          '<span class="hint">快改</span>' +
+          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+          '" data-mult="-1" title="减一倍（默认 1；先在上面填个倍数就能按倍数减）">−1</button>' +
+          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+          '" data-mult="1" title="加一倍（默认 1；先在上面填个倍数就能按倍数加）">＋1</button>' +
+          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+          '" data-mult="-10" title="减十倍">−10</button>' +
+          '<button type="button" class="btn btn-sm" data-act="pd2:bump" data-key="' + esc(dk) +
+          '" data-mult="10" title="加十倍">＋10</button>' +
+          "</div>" +
+          '<div class="pd-line">' +
           '<select class="cell-input" data-act="pd2:add" data-pd2add="' + esc(dk) + '" title="改成：填一个新的数值直接覆盖；加减：填要加多少（填负数就是减，减到 0 为止）">' +
           '<option value="set">改成</option><option value="add">加减</option></select>' +
           '<span class="hint">数字</span>' +
@@ -6024,20 +6156,19 @@ table.grid td.actions .btn { vertical-align: middle; }
       var fishes = items.filter(function (i) { return i.kind === "fish_list"; });
       if (normal.length) {
         html += '<h3 class="mini-head">' + esc(group.title) + "（" + normal.length + " 项）</h3>";
-        /* is-stack + stack：窄面板（插件页经常只有 700~1100px）下自动变成
-           「一个字段一张卡、每项一行」—— 这正是「挤在一起」的根治办法。 */
-        html += '<div class="table-wrap is-stack pd-plain"><table class="grid stack pd-grid wrap-cells"><thead><tr>' +
-          '<th style="width:170px">项目</th><th style="width:190px">现在是多少</th>' +
-          '<th style="width:320px">改成</th><th>说明</th></tr></thead><tbody>';
+        /* 任何宽度都用卡片（v1.18.60）：站长面板约 900px，4 列表格会把控件压成一条缝。
+           卡片里：字段名 | 现在是多少 | 在这改 | 说明（说明另起一行，不抢控件的宽度）。 */
+        html += '<div class="table-wrap is-stack pd-plain"><table class="grid pd-card">' +
+          "<thead><tr><th>字段</th><th>现在是多少</th><th>在这改</th><th>说明</th></tr></thead><tbody>";
         normal.forEach(function (item) {
           var ctl = pdFieldControl(group.title, item);
           html += "<tr>" +
-            '<td data-label="项目">' + esc(item.label) + ctl.mark + "</td>" +
+            '<td class="pd-name" data-label="字段">' + esc(item.label) + ctl.mark + "</td>" +
             '<td class="pd-now" data-label="现在是多少">' + (ctl.now
               ? '<span class="cut">' + esc(ctl.now) + "</span>"
-              : '<span class="faint">（见右侧）</span>') + "</td>" +
-            '<td class="pd-ctl" data-label="改成">' + ctl.control + "</td>" +
-            '<td class="faint" data-label="说明">' + esc(item.desc || "") + "</td>" +
+              : '<span class="faint">见右侧</span>') + "</td>" +
+            '<td class="pd-ctl" data-label="在这改">' + ctl.control + "</td>" +
+            (item.desc ? '<td class="pd-desc" data-label="说明">' + esc(item.desc) + "</td>" : "") +
             "</tr>";
         });
         html += "</tbody></table></div>";
@@ -8650,6 +8781,12 @@ table.grid td.actions .btn { vertical-align: middle; }
       case "pd2:calc": {   // 「算一下」：只更新那一行的算式，不整页重绘（不丢焦点）
         var calcKey = el.getAttribute("data-key");
         if (calcKey) pdRefreshCalc(calcKey);
+        break;
+      }
+      case "pd2:bump": {   // ＋1 / −1 / ±10：点一下就改，不用打字
+        var bumpKey = el.getAttribute("data-key");
+        var bumpMult = Number(el.getAttribute("data-mult") || 1) || 1;
+        if (bumpKey) pdBumpField(bumpKey, bumpMult);
         break;
       }
       /* 下面三个都是「发一次请求 + 重新读一遍」的动作：必须挡住连点。

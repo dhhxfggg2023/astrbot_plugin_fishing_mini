@@ -177,7 +177,7 @@ const hookNames = [
   "renderPlayerDataTab", "pdState", "pdPlayerOptions", "pdFindField", "pdDraft", "pdSetDraft",
   "pdFieldControl", "pdFishTable", "pdFishRow", "pdEnumOptions", "pdEnumSelect", "loadPlayerFull",
   "submitPlayerFull", "collectPlayerEdits", "collectFishDrafts", "collectNewFish",
-  "pdCalcText", "pdRefreshCalc",
+  "pdCalcText", "pdRefreshCalc", "pdBumpField",
 ];
 const hookSrc = "window.__T = {" + hookNames.map(n => n + ":" + n).join(",") + "};";
 if (!/\}\)\(\);\s*$/.test(js)) {
@@ -1894,10 +1894,38 @@ async function configKeysCoverage() {
     T.pdCalcText(12800, "-500", "add"));
   /* v1.18.58：站长反馈「改数据不好改啊，怎么是一堆的挤在一起」——
      控件必须各自成行、表头列宽收敛、分组不要再套内部滚动（那会让它变成一个小窗口）。 */
-  check(pdHtml.indexOf('class="pd-line"') > 0 && pdHtml.indexOf("grid stack pd-grid wrap-cells") > 0,
-    "字段控件包在 pd-line 里、表格用收敛列宽的 pd-grid（不再挤成一条缝）");
+  check(pdHtml.indexOf('class="pd-line"') > 0 && pdHtml.indexOf('class="grid pd-card"') > 0 &&
+    pdHtml.indexOf('class="pd-name"') > 0,
+    "字段用「一个字段一张卡」渲染（任何宽度都不再压成一条缝）");
   check(/class="table-wrap is-stack pd-plain/.test(pdHtml) && pdHtml.indexOf('class="mini-head"') > 0,
-    "窄面板下自动变「一个字段一张卡」，组表也不再套内部滚动");
+    "卡片模式 + 分组小标题 + 不再套内部滚动");
+  check(pdHtml.indexOf('data-act="pd2:bump" data-key="基础|gold" data-mult="-1"') > 0 &&
+    pdHtml.indexOf('data-mult="10"') > 0,
+    "数字字段有「＋1 / −1 / ＋10 / −10」快改按钮（不用打字也能改）");
+  /* 快改按钮真的改到草稿上：没填倍数 = ±1；框里填了数字 = 按那个数加减；
+     减到负数夹成 0（和插件侧口径一致）。 */
+  T.pdState().drafts = {};
+  T.pdBumpField("基础|gold", 1);
+  check(T.pdState().drafts["基础|gold"] === "12801",
+    "点「＋1」= 当前值 +1 记进草稿", JSON.stringify(T.pdState().drafts["基础|gold"]));
+  T.pdBumpField("基础|gold", 10);
+  check(T.pdState().drafts["基础|gold"] === "12811", "再点「＋10」= 再 +10");
+  T.pdBumpField("基础|gold", -1);
+  T.pdBumpField("基础|gold", -1);
+  check(T.pdState().drafts["基础|gold"] === "12809", "点「−1」两次 = 退回 12809");
+  const savedQSBump = documentStub.querySelector;
+  documentStub.querySelector = function (sel) {
+    if (String(sel).indexOf('data-pd2="基础|gold"') >= 0) {
+      return { value: "1000", getAttribute: function () { return "基础|gold"; } };
+    }
+    return savedQSBump.apply(documentStub, arguments);
+  };
+  T.pdBumpField("基础|gold", 1);
+  check(T.pdState().drafts["基础|gold"] === "13809",
+    "框里先填 1000，再点「＋1」就是加 1000（框里的数字当倍数用）",
+    JSON.stringify(T.pdState().drafts["基础|gold"]));
+  documentStub.querySelector = savedQSBump;
+  T.pdState().drafts = {};
   // 逐条改鱼：鱼种/品质/异色下拉里只能是中文，而且**不能**是 [object Object]
   const fishRowHtml = T.pdFishRow("inventory", 0, pds.groups[0].items[4].value[0]);
   check(fishRowHtml.indexOf("[object Object]") < 0,
