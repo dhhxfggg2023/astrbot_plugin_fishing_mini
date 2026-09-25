@@ -266,7 +266,9 @@ def _daily_line(
         parts.append(f"{label} {_daily_used(player, key)}/{cap}")
     if not parts:
         return ""
-    return "📅 今日额度：" + "・".join(parts) + "（每天 0 点重置；也可以 /钓鱼 重置额度 立刻清）"
+    # ⚠️ 这里**不许再提任何指令**（v1.18.69）：重置额度只有编辑器 UI 那条按钮，
+    # 玩家侧没有这条命令，写在档案里就是骗人（站长：「怎么档案里面还写着重置额度命令提示」）。
+    return "📅 今日额度：" + "・".join(parts) + "（每天 0 点自动重置）"
 
 
 def _pond_income(

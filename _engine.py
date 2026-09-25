@@ -873,13 +873,10 @@ class EngineMixin:
                     #   判定侥幸通过的鱼会接着掉进互动分支，等于开关没关掉 —— 踩过。
                     escape = _multi_escape_chance(spec, cfg)
                     if random.random() < escape:
+                        # ⚠️ v1.18.69：连钓里跑掉的鱼**不再逐条列一行**（站长：「连钓钓鱼跑了
+                        # 不要提示，免得占用一次信息回复次数导致更有可能没有按钮」）。
+                        # 跑了多少条在下面的战报「跑掉 N 条」里照样看得见，信息不丢。
                         stats["escaped"] += 1
-                        lines.append(
-                            f"{display}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
-                            f"（{self._rarity_name(fish['rarity'])}，"
-                            f"连钓不拉线，逃脱率 {escape:.0%}）"
-                        )
-                        display += 1
                         continue
 
                 elif spec is not None:
@@ -922,12 +919,8 @@ class EngineMixin:
                     catch = result.get("catch")
                     rating = str(result.get("rating") or "失败")
                     if catch is None:
+                        # 同上（v1.18.69）：连钓里跑了的不逐条播报，只记进「跑掉 N 条」。
                         stats["escaped"] += 1
-                        lines.append(
-                            f"{display}. 💨 {_fish_emoji(fish)}{fish['name']} 跑了"
-                            f"（{self._rarity_name(fish['rarity'])}，{rating}）"
-                        )
-                        display += 1
                         continue
                     # 拉线技巧计数（成就「神之一手 / 惊险一刻」等）与单竿同一套。
                     # ⚠️ 必须写在「鱼跑了」的 continue **之后**：脱钩的那条不算拉上来

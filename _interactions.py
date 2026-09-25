@@ -833,12 +833,17 @@ class InteractionsMixin:
                 {"deadline": None, "quiet": quiet},
                 "timeout",
             )
-            async for _r in self._say_msg(
-                    event, "pull.timeout", event.plain_result(
-                        f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
-                        f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
-                    ), buttons=False, keyboard_own=False):
-                yield _r
+            if not quiet:
+                # ⚠️ v1.18.69：**连钓（quiet_ack）不再逐条播报「吐钩跑了」**。
+                #    QQ 官方平台对一条入站消息的被动回复有次数上限（站长说的一次 5 条），
+                #    连钓里每跑一条就占掉一次，最后那条**带按钮的渔获/战报**就容易发不出去
+                #    （「更有可能没有按钮」）。单竿照旧提示 —— 那边只有一条鱼，不差这一次。
+                async for _r in self._say_msg(
+                        event, "pull.timeout", event.plain_result(
+                            f"💨 超时了——{fish['name']} 吐钩跑了（这一竿的鱼饵已经用掉了）\n"
+                            f"　下次在提示的时间内发 /钓鱼 拉 就能拉住它"
+                        ), buttons=False, keyboard_own=False):
+                    yield _r
             yield {"catch": None, "rating": "失败", "bonus": 0.0}
             return
 
@@ -851,11 +856,14 @@ class InteractionsMixin:
             # 记下「这一下确实拉到了、但鱼挣脱了」：之后玩家再补一发「拉」时，
             # 提示会说「这一下拉晚了」而不是「没有鱼咬钩」
             self._note_pull_window(user_id, {"quiet": quiet}, "escape")
-            async for _r in self._say_msg(
-                    event, "pull.escape", event.plain_result(
-                        f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
-                    ), buttons=False, keyboard_own=False):
-                yield _r
+            if not quiet:
+                # 同上（v1.18.69）：连钓里「挣脱跑了」也不逐条播报，省下被动回复次数
+                # 给最后那条带按钮的战报；跑了多少条在战报的「跑掉 N 条」里看得见。
+                async for _r in self._say_msg(
+                        event, "pull.escape", event.plain_result(
+                            f"{mark} {rating}　但线一松——{fish['name']} 挣脱跑了"
+                        ), buttons=False, keyboard_own=False):
+                    yield _r
             yield {"catch": None, "rating": rating, "bonus": 0.0}
             return
 

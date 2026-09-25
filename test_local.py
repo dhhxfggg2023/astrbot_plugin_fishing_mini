@@ -3404,8 +3404,15 @@ async def main():
     out = await cmd(esc_plugin, FakeEvent("89032"), "4", "", "")
     body = text_of(out)
     check(
-        "跑了" in body and "跑掉" in body,
-        f"连钓里高稀有度按逃脱率直接判定 -> {[l for l in body.splitlines() if '跑' in l][:2]}",
+        "跑掉" in body,
+        f"连钓里高稀有度按逃脱率直接判定（战报里有「跑掉 N 条」）-> "
+        f"{[l for l in body.splitlines() if '跑' in l][:2]}",
+    )
+    # v1.18.69：连钓里跑掉的鱼**不再逐条列一行**（省被动回复次数给带按钮的战报）
+    check(
+        "跑了（" not in body and "💨" not in body,
+        f"连钓战报里不再逐条写「跑了」（只留汇总）-> "
+        f"{[l for l in body.splitlines() if '跑' in l][:2]}",
     )
     check(
         not esc_plugin._pending_pulls,
@@ -3879,13 +3886,35 @@ async def main():
     p_esc["equipped_bait"] = "worm"
     p_esc["baits"] = {"worm": 40}
     await real_esc_plugin._save_player(p_esc)
-    out = await cmd(real_esc_plugin, FakeEvent("89120"), "20", "", "")
+    # ⚠️ 这一节比较的是「两个系数的相对松紧」，靠真随机会在小样本上翻车
+    #    （实测每 20 竿的跑鱼数 6~15 波动，曾经偶发红）。所以**钉死随机序列**：
+    #    用一个确定性的 LCG 顶掉 random.random()，同一条序列喂给两个配置 ——
+    #    这样两次的差异只反映系数，不反映运气。
+    _real_random = mod.random.random
+    _seed_state = {"v": 123456789}
+
+    def _lcg() -> float:
+        _seed_state["v"] = (_seed_state["v"] * 1103515245 + 12345) % (2 ** 31)
+        return _seed_state["v"] / float(2 ** 31)
+
+    mod.random.random = _lcg
+    try:
+        out = await cmd(real_esc_plugin, FakeEvent("89120"), "20", "", "")
+    finally:
+        mod.random.random = _real_random
     body = text_of(out)
-    ran = body.count("跑了")
+    # v1.18.69：连钓里跑掉的鱼**不再逐条列一行**，只在汇总里报条数（省被动回复次数）。
+    # 所以这里从「数 body 里 跑了 出现几次」改成解析汇总里的「跑掉 N 条」。
+    import re as _re
+
+    def _escaped_count(text: str) -> int:
+        m = _re.search(r"跑掉 (\d+) 条", text)
+        return int(m.group(1)) if m else -1
+
+    ran = _escaped_count(body)
     check(
-        "逃脱率 64%" in body,
-        f"跑掉的每一条都写出连钓实际用的逃脱率 -> "
-        f"{[l for l in body.splitlines() if '跑了' in l][:1]}",
+        "跑了" not in body,
+        f"连钓战报里不再逐条写「跑了」-> {[l for l in body.splitlines() if '跑了' in l][:1]}",
     )
     check(
         5 <= ran <= 19,
@@ -3908,9 +3937,15 @@ async def main():
     p_old["equipped_bait"] = "worm"
     p_old["baits"] = {"worm": 40}
     await old_esc_plugin._save_player(p_old)
-    out = await cmd(old_esc_plugin, FakeEvent("89125"), "20", "", "")
+    # 同一个种子、同一条随机序列，只换系数 —— 差异只反映系数
+    _seed_state["v"] = 123456789
+    mod.random.random = _lcg
+    try:
+        out = await cmd(old_esc_plugin, FakeEvent("89125"), "20", "", "")
+    finally:
+        mod.random.random = _real_random
     body_old = text_of(out)
-    ran_old = body_old.count("跑了")
+    ran_old = _escaped_count(body_old)
     # 常见鱼 diff = 0 → 单竿逃脱率 = 0.40 × (0.8 + 0.4×0) = 32%（难度权重 0.4 之后）
     _w = mod._safe_number(real_esc_cfg.get("escape_difficulty_weight"), 0.4)
     _single = 0.40 * ((1.0 - 0.5 * _w) + _w * 0.0)
@@ -3919,13 +3954,8 @@ async def main():
         f"难度权重 0.4：diff=0 的常见鱼，单竿口径 = 0.40 × 0.8 = {_single:.0%}",
     )
     check(
-        f"逃脱率 {_single:.0%}" in body_old,
-        f"系数填 1.0 时用标称逃脱率（{_single:.0%}）-> "
-        f"{[l for l in body_old.splitlines() if '跑了' in l][:1]}",
-    )
-    check(
-        ran_old <= 12,
-        f"系数 1.0 = 最宽松：20 竿只跑 {ran_old} 条（期望 6，明显比默认的 {ran} 条松）",
+        ran_old < ran,
+        f"系数 1.0 明显比默认 2.0 松：同一条随机序列下 {ran_old} 条 < {ran} 条",
     )
 
     # --- 5) 空竿扣饵：单竿说「白搭了」就真扣，深水不开口就不扣 ---
@@ -4124,10 +4154,10 @@ async def main():
     _esc_body = text_of(out)
     pep = await _ep._load_player("89208")
     check(
-        pulls == 2 and _esc_body.count("跑了（") == 2
-        and "跑掉 2 条" in _esc_body,
-        f"两条都拉了、但都脱钩（pulls={pulls}，战报跑了×{_esc_body.count('跑了（')}）-> "
-        f"{[l for l in _esc_body.splitlines() if '跑了（' in l][:2]}"
+        # v1.18.69：连钓里「挣脱跑了」也不再逐条播报，只在战报的「跑掉 2 条」里体现
+        pulls == 2 and "跑掉 2 条" in _esc_body and "跑了（" not in _esc_body,
+        f"两条都拉了、但都脱钩（pulls={pulls}）-> "
+        f"战报跑了行×{_esc_body.count('跑了（')}"
         f"　{[l for l in _esc_body.splitlines() if '跑掉' in l][:1]}",
     )
     check(
@@ -4188,8 +4218,10 @@ async def main():
     out, pulls, _pf = await _multi_pull_run(_tc, FakeEvent("89203"), 2, max_pulls=1)
     body = text_of(out)
     check(
-        pulls == 1 and "超时" in body,
-        f"没拉的鱼超时跑掉（不再替玩家自动判定）-> 响应 {pulls} 次　"
+        # v1.18.69：连钓里超时跑掉的那条也**不再单独发一条「超时了」**
+        # （那会占掉一次被动回复，站长要省给最后那条带按钮的战报）
+        pulls == 1 and "超时" not in body,
+        f"没拉的鱼超时跑掉（不再替玩家自动判定，也不再单独播报）-> 响应 {pulls} 次　"
         f"{[l for l in body.splitlines() if '超时' in l][:1]}",
     )
     check(
@@ -4219,9 +4251,9 @@ async def main():
         "关掉开关后一条互动都不弹（回到一次判定）",
     )
     check(
-        "连钓不拉线" in body,
-        f"跑掉的写明「连钓不拉线」+ 实际概率 -> "
-        f"{[l for l in body.splitlines() if '连钓不拉线' in l][:1]}",
+        "连钓不拉线" not in body and "跑掉" in body,
+        f"跑掉的连一行都不写了（v1.18.69），只在汇总里报数 -> "
+        f"{[l for l in body.splitlines() if '跑掉' in l][:1]}",
     )
 
     # --- 5) 真实分派链：整批持仓时「/钓鱼 拉」照样进得来 ---
