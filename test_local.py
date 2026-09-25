@@ -9498,6 +9498,92 @@ async def main():
         f"整批只说一次「扣了几竿」-> {[x for x in _lb2_out.splitlines() if '本批' in x][:1]}",
     )
 
+    # --- v1.18.82：**限定竿的特权在连钓里也必须生效**（站长：「必定完美拉线还是跑了三条」）---
+    # 以前 `_rod_fx` / `special` 只在单竿 `_do_cast` 里用过，`_do_multi_cast` 一次都没用 ——
+    # 四种竿的特权在连钓里全部失效，但凭证照样扣次数（审计实测）。
+    def _rod_cfg(**over):
+        base = dict(
+            _CFG,
+            interactive_rarities="稀有,传说,神话",
+            rarity_spawn_weights="常见:0,少见:0,稀有:100,传说:0,神话:0",
+            bait_hook_rates="abyss_bait:1.0",
+            multi_pull_enabled=False,
+            multi_escape_mult=5.0,      # 狠惩罚：没特权的竿几乎必跑
+            auto_supply_bait=False,
+        )
+        base.update(over)
+        return base
+
+    async def _rod_run(tag, pass_id, times, cfg, casts=None):
+        plug = make_plugin(cfg)
+        pl = mod._default_player(tag)
+        pl["gold"] = 10 ** 6
+        pl["stamina"] = -1
+        pl["items"] = {pass_id: 1}
+        pl["limited_uses"] = {pass_id: 30}
+        pl["baits"] = {"abyss_bait": 99}
+        pl["equipped_bait"] = "abyss_bait"
+        if casts is not None:
+            pl["limited_rod_casts"] = casts
+        await plug._save_player(pl)
+        out = text_of(await cmd(plug, FakeEvent(tag), str(times)))
+        return plug, await plug._load_player(tag), out
+
+    _q_plug, _q_pl, _q_out = await _rod_run("89711", "quick_rod_pass", 6, _rod_cfg())
+    check(
+        len(_q_pl["inventory"]) == 6 and "跑掉" not in _q_out,
+        f"瞬手竿连钓：必完美 -> 一条都不跑（实得 {len(_q_pl['inventory'])} 条）",
+    )
+    check(
+        _q_plug._limited_item_left(_q_pl, "quick_rod_pass") == 24,
+        f"并且照常扣次数 -> {_q_plug._limited_item_left(_q_pl, 'quick_rod_pass')}",
+    )
+
+    _t_plug, _t_pl, _t_out = await _rod_run(
+        "89712", "twin_rod_pass", 4, _rod_cfg(multi_escape_mult=0.0)
+    )
+    check(
+        len(_t_pl["inventory"]) == 8,
+        f"双尾竿连钓：4 竿出 8 条（一竿两条）-> {len(_t_pl['inventory'])} 条",
+    )
+
+    _s_plug, _s_pl, _s_out = await _rod_run(
+        "89713", "star_rod_pass", 3, _rod_cfg(multi_escape_mult=0.0), casts=10
+    )
+    check(
+        "星陨之赐" in _s_out,
+        f"星陨竿连钓：第 12 竿触发神品并播报 -> {[x for x in _s_out.splitlines() if '星陨' in x][:1]}",
+    )
+    check(
+        _s_pl.get("limited_rod_casts") == 1,
+        f"星陨计数器跨竿累加（10+3 -> 出一次后归 1）-> {_s_pl.get('limited_rod_casts')}",
+    )
+
+    # 潮汐「异色多掷」：把基础异色率压到 0，多掷翻不出来是正常的，
+    # 这里只钉「它确实多掷了」（掷的次数 > 竿数）
+    _v_calls = {"n": 0}
+    _v_plug = make_plugin(_rod_cfg(variant_chance=0.0, multi_escape_mult=0.0))
+    _v_real = _v_plug._roll_variant
+
+    def _v_spy(*a, **kw):
+        _v_calls["n"] += 1
+        return _v_real(*a, **kw)
+
+    _v_plug._roll_variant = _v_spy
+    _v_pl = mod._default_player("89714")
+    _v_pl["gold"] = 10 ** 6
+    _v_pl["stamina"] = -1
+    _v_pl["items"] = {"tide_rod_pass": 1}
+    _v_pl["limited_uses"] = {"tide_rod_pass": 30}
+    _v_pl["baits"] = {"abyss_bait": 99}
+    _v_pl["equipped_bait"] = "abyss_bait"
+    await _v_plug._save_player(_v_pl)
+    await cmd(_v_plug, FakeEvent("89714"), "4")
+    check(
+        _v_calls["n"] > 4,
+        f"潮汐竿连钓：异色多掷（4 竿掷了 {_v_calls['n']} 次，>4 才说明多掷生效）",
+    )
+
     # --- v1.18.71：奖池的鱼要乘系数（站长：「应该和订单鱼一样乘上系数啊，不然太低了」）---
     _fx = make_plugin()
     _fxp = mod._default_player("89501")

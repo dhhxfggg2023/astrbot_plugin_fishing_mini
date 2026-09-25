@@ -942,6 +942,24 @@ class EngineMixin:
                 else:
                     _equipped = str(player.get("equipped_bait") or "")
                     bait_id = _equipped if _equipped in self.baits else "none"
+                # ⚠️ v1.18.82：每一竿重新取「生效的竿 / 饵」的 special —— 限定竿和限定饵
+                #    都可能在批中失效（凭证扣完），特权必须跟着走。
+                _rod_now_loop = self._rod(player)
+                rod_fx = (
+                    _rod_now_loop.get("special")
+                    if isinstance(_rod_now_loop.get("special"), dict) else {}
+                )
+                # 星陨竿「每 N 竿一次神品」：计数器存在玩家身上，跨竿持续（与单竿同口径）
+                myth_every = max(0, int(_safe_number(rod_fx.get("myth_every"), 0.0)))
+                myth_hit = False
+                if myth_every > 0:
+                    _cast_no = _safe_int(player.get("limited_rod_casts"), 0, 0) + 1
+                    if _cast_no >= myth_every:
+                        _cast_no = 0
+                        myth_hit = True
+                    player["limited_rod_casts"] = _cast_no
+                elif "limited_rod_casts" in player:
+                    player.pop("limited_rod_casts", None)
                 luck = _effective_luck(player, cfg)
                 floor = _effective_floor(player, cfg)
                 _consume_luck(player)
@@ -977,6 +995,24 @@ class EngineMixin:
                 )
                 # 变异只在上钩瞬间掷一次：拉线那条路径也要带着它（单竿同款顺序）
                 variant = self._roll_variant()
+                # ⚠️ v1.18.82：**限定竿的特殊效果在连钓里也要生效**。以前这一段完全没有
+                #    `special` 的逻辑（`_rod_fx` 只在单竿用过），于是连钓里：
+                #    潮汐不多掷异色、星陨不给神品、瞬手不是必完美（站长实测：必完美还跑鱼）、
+                #    双尾只出 1 条 —— 四种竿的特权全部无效，但凭证照样扣次数。
+                # ⚠️ v1.18.82：**潮汐竿「异色猎手」在连钓里也要多掷**（见上面那段说明）。
+                for _ in range(max(0, int(_safe_number(rod_fx.get("variant_extra"), 0.0)))):
+                    if variant:
+                        break
+                    variant = self._roll_variant()
+
+                # ⚠️ v1.18.82：**瞬手竿「拉线必完美」必须在逃脱判定之前设好** ——
+                #    这是站长报的那条（「必定完美拉线还是跑了三条」）。
+                #    注意位置：判定在 `if spec is not None and not multi_pull:` 那一支，
+                #    而下面「弹拉线」是 `elif` —— 以前我只把这段写进了 elif 里，
+                #    于是不开拉线互动时**根本执行不到**，实测 escape 仍是 0.95。
+                if spec is not None and _safe_number(rod_fx.get("perfect"), 0.0) > 0:
+                    spec = dict(spec)
+                    spec["perfect_pull"] = 1.0
 
                 if spec is not None and not multi_pull:
                     # 关掉「连钓弹拉线」时的老行为：不弹互动，按
@@ -1012,6 +1048,7 @@ class EngineMixin:
                     spec["rod_value_bonus"] = rod_value
                     spec["location_mult"] = loc_value
                     spec["codex_mult"] = codex_mult
+                    # （「瞬手」的 `perfect_pull` 已经在上面设好了，这里不用重复）
                     # 窗口开头这段收到的「拉」丢掉：连钓自动接续，上一条的余震
                     # （连点 / 消息重投）会撞在这条刚弹出来的瞬间（见常量的说明）
                     spec["min_reaction"] = MULTI_PULL_MIN_REACTION
@@ -1074,6 +1111,11 @@ class EngineMixin:
                     cfg=cfg,
                     floor=floor,
                 )
+                if myth_hit:
+                    # 星陨竿「每 N 竿一次神品」（与单竿同口径：那一竿的个体品质直接神品）
+                    quality_mult = _myth_quality_mult()
+                    if "☄️ 星陨之赐" not in "\n".join(_supply_all):
+                        _supply_all.append("☄️ 星陨之赐：这一批里有一竿必出神品")
                 catch = _new_instance(
                     fish["id"],
                     quality_mult,
@@ -1101,6 +1143,34 @@ class EngineMixin:
                     display += 1
                 else:
                     self._multi_stack(stacked, fish, catch, value)
+
+                # ⚠️ v1.18.82：**双尾竿「一竿两条」在连钓里也要生效**。第二条走和第一条
+                #    完全一样的记录路径（图鉴/成就/里程碑都认），背包满了就只留一条。
+                if _safe_number(rod_fx.get("double"), 0.0) > 0:
+                    _cap2 = _backpack_capacity(player, cfg)
+                    if len(player.get("inventory") or []) < _cap2:
+                        _q2 = _roll_quality_mult(
+                            self.cfg["quality_weights"],
+                            bait_luck=bait_luck,
+                            extra_luck=luck,
+                            cfg=cfg,
+                            floor=floor,
+                        )
+                        _second = _new_instance(
+                            fish["id"], _q2,
+                            value_bonus=rod_value, location_mult=loc_value,
+                            variant=variant, codex_mult=codex_mult,
+                        )
+                        if _second is not None:
+                            self._record_catch(player, _second)
+                            stats["fish"] += 1
+                            gained += _instance_value(_second)
+                            self._multi_stack(
+                                stacked, fish, _second, _instance_value(_second),
+                                suffix="　🎣双尾",
+                            )
+                    elif "双尾" not in "\n".join(_supply_all):
+                        _supply_all.append("🎣 双尾竿本想再来一条，背包满了（先 /钓鱼 卖）")
 
             # --- 统一结算：成就 / 里程碑 / 存档 / 排行榜 ---
             # 扣饵：中鱼 / 杂物 / 被鱼咬掉的空竿都扣；只有「没咬钩」的空竿不扣

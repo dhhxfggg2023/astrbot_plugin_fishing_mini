@@ -2207,6 +2207,11 @@ def _multi_escape_chance(spec: dict[str, Any], cfg: dict[str, Any]) -> float:
     1.0 = 连钓按标称逃脱率，0 = 连钓里这些鱼永远不跑），上限 0.95。
     """
     base = _clamp(_safe_number((spec or {}).get("escape"), 0.0), 0.0, 1.0)
+    # ⚠️ v1.18.82：**「拉线必完美」的限定竿（瞬手）本来就该 0 逃脱** —— 以前这里不看
+    #    `perfect_pull`，于是连钓里那条判定照样按标称逃脱率×惩罚系数掷骰子，
+    #    站长实测「瞬手竿必定完美拉线，还是跑了三条」就是这么来的。
+    if _safe_number((spec or {}).get("perfect_pull"), 0.0) > 0:
+        return 0.0
     mult = _clamp(_safe_number((cfg or {}).get("multi_escape_mult"), 2.0), 0.0, 10.0)
     return _clamp(base * mult, 0.0, 0.95)
 
