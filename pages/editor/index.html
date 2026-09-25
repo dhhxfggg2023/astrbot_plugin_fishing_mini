@@ -1829,11 +1829,15 @@ table.grid td.actions .btn { vertical-align: middle; }
       configType: "text",
       keyField: "id",
       /* id|概率(相对权重)|类型|参数|数量|说明 */
+      // ⚠️ 这份「类型」白名单必须与 `_lottery.PRIZE_KINDS` **逐字同步**（v1.18.72 修）：
+      //    少了 `rod` / `baitpack`，站长新加的限定竿/饵奖档会被**静默丢掉** ——
+      //    页面上看不到、保存时还会把它们从配置里删掉（站长：「怎么不是全部奖品」）。
+      typeList: ["fish", "gold", "item", "bait", "rod", "baitpack", "reward", "none"],
       parse: function (line) {
         var p = splitLine(line);
         if (p.length < 3 || !p[0]) return null;
         var kind = String(p[2] || "none").trim().toLowerCase();
-        if (["fish", "gold", "item", "bait", "reward", "none"].indexOf(kind) < 0) return null;
+        if (this.typeList.indexOf(kind) < 0) return null;
         return { id: String(p[0]).trim(), weight: toNum(p[1]),
                  kind: kind, param: text(p[3]), count: toNum(p[4]),
                  desc: text(p[5]) };
@@ -3588,7 +3592,9 @@ table.grid td.actions .btn { vertical-align: middle; }
       columns: [
         { key: "id",     label: "id",     type: "text",   w: "110px" },
         { key: "weight", label: "概率",   type: "number", w: "100px", num: true, step: 0.001, valueKey: true },
-        { key: "kind",   label: "类型",   type: "text",   w: "90px" },
+        // 类型做成下拉（v1.18.72）：手打错一个字母，那一档就会被解析器丢掉
+        { key: "kind",   label: "类型",   type: "text",   w: "90px",
+          choices: ["fish", "gold", "item", "bait", "rod", "baitpack", "reward", "none"] },
         { key: "param",  label: "参数",   type: "text" },
         { key: "count",  label: "数量",   type: "number", w: "80px",  num: true, step: 1 },
         { key: "desc",   label: "说明",   type: "text" }
@@ -3790,7 +3796,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.71";
+  var PAGE_VERSION = "v1.18.72";
 
   /* ===========================================================================
      5. 状态
@@ -8663,10 +8669,18 @@ table.grid td.actions .btn { vertical-align: middle; }
       state.replies.loaded = true;
     }
 
-    markSaved();
-    state.savedAt = null;
+    // ⚠️ 顺序很重要（v1.18.72 修）：**先 render() 再 markSaved()**，最后再 render() 一次。
+    //    数字行的内容依赖 `state.userEditedKeys`（插件下发的「你改过哪些键」）、
+    //    `state.configKeys`、`state.schema` —— 而 status 是**后到的**：
+    //    以前先 markSaved() 后 render()，基线里那些行还没标「已归你」；
+    //    render() 一跑每行就多出标记字段 -> 和基线一比**全表都算「已修改」**
+    //    （站长看到「数值页面明明没改东西却显示 147 已修改」）。
+    //    现在基线取自「渲染之后真正给用户看的那份数据」，两边天然一致。
     state.loading = false;
     render();
+    markSaved();
+    state.savedAt = null;
+    render();       // 带基线再渲染一次：页面上的「已修改」应当归零
 
     if (state.loadError) {
       toast("err", ENV.online ? "读取插件配置失败" : "离线预览模式", state.loadError);

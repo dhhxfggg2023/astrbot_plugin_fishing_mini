@@ -226,6 +226,36 @@ function runAssertions() {
   check((T.state.originals.fish && Object.keys(T.state.originals.fish).length === 18),
     "初始 originals 快照建立（18 条）");
 
+  /* ⚠️ v1.18.72 回归：**刚打开、什么都没改，任何一张表都不该显示「已修改」**。
+     站长报的「数值页面明明没改东西却显示 147 已修改」就是基线建早了
+     （markSaved 在 status/userEditedKeys 到齐之前跑，render 之后行里多出标记字段）。 */
+  const bootDirty = ["fish", "locations", "rods", "baits", "items", "lottery",
+    "numbers", "buttons", "aliases"].map(function (id) {
+    const d = T.diffTab(id);
+    return d.count ? (id + ":" + d.count + "(add" + d.added + "/chg" + d.changed + ")") : "";
+  }).filter(Boolean);
+  check(bootDirty.length === 0,
+    "刚打开时每张表都是「未修改」（基线在 render 之后建立）",
+    bootDirty.length ? bootDirty.join(" ") : "全部 0");
+  check(T.dirtyTotal() === 0, "顶部「已修改」总数为 0", T.dirtyTotal());
+
+  /* ⚠️ v1.18.72 回归：大鱼乐奖表的**类型白名单**必须与插件逐字同步。
+     少了 `rod` / `baitpack`，站长新加的限定竿/饵奖档会被静默丢掉
+     （页面上看不到、保存时还会把它们从配置里删掉 ->「怎么不是全部奖品」）。 */
+  const lotTypeList = T.TABLE_DEFS.lottery.typeList || [];
+  check(["fish", "gold", "item", "bait", "rod", "baitpack", "reward", "none"]
+    .every(function (k) { return lotTypeList.indexOf(k) >= 0; }),
+    "大鱼乐奖表的类型白名单收全了（含 rod / baitpack）",
+    lotTypeList.join(","));
+  const lotKinds = ["fish", "gold", "item", "bait", "rod", "baitpack", "reward", "none"];
+  const dropped = lotKinds.filter(function (k) {
+    return !T.TABLE_DEFS.lottery.parse("x1|1|" + k + "|p|1|d");
+  });
+  check(dropped.length === 0, "每一种奖级类型都能被奖表解析器认出来",
+    dropped.length ? dropped.join(",") : "8/8 通过");
+  check(T.TABLE_DEFS.lottery.parse("tide_rod_pass|0.8|rod|tide_rod_pass|1|潮汐竿") !== null,
+    "限定竿那一档不会被丢掉（站点抽到的 6 档限定奖都要在表里看得见）");
+
   console.log("\n[1b] 演示数据自洽性（首屏不该出现任何红色报错）");
   const locKeys = T.knownLocationKeys();
   check(locKeys.length === 32, "已知钓点键 = 16 个 id + 16 个中文名", locKeys.length);

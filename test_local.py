@@ -9245,6 +9245,17 @@ async def main():
         f"认不出的饵 id 要把线索写进回复（方便对配置）-> {_bad_rec['line'][:70]}",
     )
 
+    # ⚠️ v1.18.72：编辑器的奖表**类型白名单**必须与插件逐字同步 ——
+    #    少了认不出的类型，那一档会被页面静默丢掉（看不到、保存时还被删掉）。
+    _page = (PLUGIN_DIR / "pages" / "editor" / "index.html").read_text(encoding="utf-8")
+    _m = re.search(r"typeList:\s*\[(.*?)\]", _page, re.S)
+    _page_kinds = set(re.findall(r'"([a-z_]+)"', _m.group(1))) if _m else set()
+    _plugin_kinds = {str(k) for k in mod.LOTTERY.PRIZE_KINDS}
+    check(
+        _page_kinds == _plugin_kinds,
+        f"奖表类型白名单与插件一致（页面 {sorted(_page_kinds)} vs 插件 {sorted(_plugin_kinds)}）",
+    )
+
     # --- 中奖发放：rod 档发的是一件「限用凭证」 ---
     _lot_plugin = make_plugin()
     _lp = mod._default_player("89402")
