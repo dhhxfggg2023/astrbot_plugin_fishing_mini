@@ -3713,6 +3713,16 @@ class CommandsMixin:
             #   参数留空          -> **按 variant_chance 正常掷**，和普通钓鱼同一套
             #                        （_roll_variant 读的就是同一个配置）
             allow_variant = _cfg_bool(self.cfg, "lottery_allow_variant", True)
+            # ⚠️ v1.18.71：**奖池的鱼要乘上系数**（站长：「奖池的鱼应该和订单鱼一样乘上系数啊，
+            # 不然太低了」）。以前这里只传 `fish_id + 品质`，连钓点倍率、鱼竿价值加成、
+            # 等级成长**一个都没带** —— 于是同样一条传说鱼，中奖拿到的只有正常钓上来的
+            # 几分之一（正常钓鱼在 `_engine` 里会带 rod_value / location_mult / codex_mult）。
+            # 现在直接复用订单那套动态系数 `_order_income_factor`（钓点 × 鱼竿 × 等级成长，
+            # 封顶 `order_factor_max`），再乘一个可配的 `lottery_fish_factor`（默认 1.0）。
+            _fish_gear = self._order_income_factor(player) * max(
+                0.0, _safe_number(self.cfg.get("lottery_fish_factor"), 1.0)
+            )
+            _codex_mult = self._codex_mult(player)
             made: list[str] = []
             for _ in range(count):
                 fish_id = LOTTERY.pick_fish_for_prize(rarity or "all")
@@ -3731,6 +3741,7 @@ class CommandsMixin:
                     caught_variant = self._roll_variant()     # 与普通钓鱼完全同一套概率
                 catch = _new_instance(
                     fish_id, qmult, source="lottery", variant=caught_variant,
+                    location_mult=_fish_gear, codex_mult=_codex_mult,
                 )
                 if catch is None:
                     continue
@@ -3770,11 +3781,33 @@ class CommandsMixin:
             #   有凭证道具就发凭证（限用次数、会消耗），没有就直接给这种饵 ——
             #   老配置 / 升级同步漏了 item_defs 那一行时照样能领到东西。
             _bare = _param[: -len("_pass")] if _param.endswith("_pass") else _param
+            # ⚠️ v1.18.71：**认不出来就直接把线索写进回复**（v1.18.70 只在配置齐的时候能自愈）。
+            #    站长那次「还是显示不存在」就是因为奖励行/道具行各缺一半，
+            #    到底是哪个 id 对不上只能靠猜 —— 现在回复里直接列出「已登记的凭证」和
+            #    「限定饵」的真实 id，一眼就能对上。
+            _limited_ids = [
+                bid for bid in self.baits if self._bait_is_limited(bid)
+            ]
+            _pass_ids = [
+                iid for iid, spec in self.items.items()
+                if str((spec or {}).get("bait") or "").strip()
+            ]
+            _hint = (
+                f"（已登记的限定饵：{'、'.join(_limited_ids) or '无'}；"
+                f"凭证道具：{'、'.join(_pass_ids) or '无'}）"
+            )
             _limited_target = ""
             if self._bait_is_limited(_param):
                 _limited_target = _param
             elif _bare != _param and self._bait_is_limited(_bare):
                 _limited_target = _bare
+            elif _limited_ids:
+                # 参数既不是饵也不是凭证 id：按「参数里含饵 id、或饵 id 里含参数」模糊认一次
+                # （站长手改过奖表、或 id 拼写差一点时也能领到东西）
+                for _bid in _limited_ids:
+                    if _bid in _param or _param in _bid:
+                        _limited_target = _bid
+                        break
             if not _pass_bait and _limited_target:
                 bait = self.baits.get(_limited_target) or {}
                 spec = self.items.get(f"{_limited_target}_pass") or {}
@@ -3819,7 +3852,9 @@ class CommandsMixin:
             bait_id = _param
             bait = self.baits.get(bait_id)
             if bait is None:
-                record["line"] = f"🍃 {row.get('desc')}（鱼饵 {bait_id} 不存在）"
+                record["line"] = (
+                    f"🍃 {row.get('desc')}（鱼饵 {bait_id} 不存在）{_hint}"
+                )
                 return record
             baits = player.setdefault("baits", {})
             baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + count

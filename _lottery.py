@@ -264,6 +264,29 @@ def _rarity_mean_value(rarity_spec: str) -> float:
     return sum(values) / len(values)
 
 
+def _cfg_lottery_fish_factor(plugin: Any) -> float:
+    """奖池鱼奖实际会乘的系数（**按「最好那根竿 × 最好那张图」估**，v1.18.71）。
+
+    ⚠️ 奖池发的鱼现在按订单那套动态系数估价（钓点倍率 × 鱼竿价值加成 × 等级成长，
+    封顶 ``order_factor_max``）。护栏必须按**上限**估 —— 否则后期玩家的实际期望
+    会超过票价，「期望 < 票价」那道护栏就成了摆设。
+    """
+    factor = max(0.0, _cfg_float(plugin, "lottery_fish_factor", 1.0))
+    if factor <= 0:
+        return 0.0
+    best_rod = 0.0
+    for rod in (getattr(plugin, "rods", None) or []):
+        best_rod = max(best_rod, max(0.0, _lot_float((rod or {}).get("value_bonus"), 0.0)))
+    avg_loc = _cfg_avg_location_mult(plugin)
+    growth = max(0.0, _cfg_float(plugin, "order_level_growth", 0.02))
+    cap = max(1.0, _cfg_float(plugin, "order_factor_max", 6.0))
+    # 等级那一项按「上限附近」估：等级成长封顶就在 order_factor_max，
+    # 所以取 min(cap, 装备部分 × 中后期等级)。
+    top_level = 60.0
+    gear = (1.0 + best_rod) * avg_loc
+    return min(cap, gear * (1.0 + growth * (top_level - 1))) * factor
+
+
 def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
     """一条鱼奖的期望面值（估算）。
 
@@ -292,11 +315,23 @@ def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
     else:
         mult = EV_QUALITY_MULT.get(quality, 1.0)
     variant_mult = _variant_expectation(plugin, variant)
+    # ⚠️ v1.18.71：奖池的鱼**从这一版起会乘系数**（站长：「应该和订单鱼一样乘上系数」）。
+    # 真实发放时乘的是订单那套动态系数 `_order_income_factor`（钓点 × 鱼竿 × 等级成长）；
+    # 这里按**上限**估（见 `_cfg_lottery_fish_factor`），护栏才压得住后期玩家。
+    factor = _cfg_lottery_fish_factor(plugin)
     per = (
         _rarity_mean_value(rarity) * mult * variant_mult
-        * _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
+        * _cfg_variance_mean(plugin) * factor
     )
     return per * max(1, count)
+
+
+def _cfg_float(plugin: Any, key: str, default: float) -> float:
+    """读一个数值配置（读不到就 default）。"""
+    try:
+        return _lot_float((plugin.cfg or {}).get(key), default)
+    except Exception:                                                     # pragma: no cover
+        return default
 
 
 def _variant_mult_of(item: dict[str, Any]) -> float:

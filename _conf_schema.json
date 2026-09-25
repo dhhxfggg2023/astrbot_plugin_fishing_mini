@@ -1024,5 +1024,11 @@
     "description": "凡是给鱼「投喂上限 +N 次」的道具（育灵水 +5、珍珠梳 +10，以后自己加的也算）：同一条鱼一辈子最多能用几次，同类一起算（默认 2）。填 0 = 不限",
     "type": "int",
     "default": 2
+  },
+  "lottery_fish_factor": {
+    "invisible": true,
+    "description": "奖池里的鱼乘多少系数（1.0 = 和订单鱼同价；0 = 不乘）",
+    "type": "float",
+    "default": 1.0
   }
 }

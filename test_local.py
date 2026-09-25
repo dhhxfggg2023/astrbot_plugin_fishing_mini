@@ -8394,7 +8394,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 146,
+        len(_schema) == 147,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8412,7 +8412,7 @@ async def main():
         f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode"
         f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）"
         f" + v1.18.52 的三个开关（总开关/出异色/强制奖级）"
-        f" + v1.18.62/65 的喂鱼上限道具三项（终身上限 / 叠加方式 / 加成上限）；"
+        f" + v1.18.62/65 的喂鱼上限道具三项 + v1.18.71 的奖池鱼系数；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -8421,7 +8421,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 143, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 144, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -9191,6 +9191,58 @@ async def main():
     check(
         _hpl["baits"].get("vip_bait") == 1 or _hpl["items"].get("vip_bait_pass") == 1,
         f"凭证道具没进配置时也能领到（退化成直接给饵）-> {_hrec.get('line')[:44]}",
+    )
+
+    # --- v1.18.71：奖池的鱼要乘系数（站长：「应该和订单鱼一样乘上系数啊，不然太低了」）---
+    _fx = make_plugin()
+    _fxp = mod._default_player("89501")
+    _fxp["locations"] = [l["id"] for l in _fx.locations]
+    _fxp["rods"] = [r["id"] for r in _fx.rods]
+    _fxp["equipped_rod"] = "void_rod"
+    _fxp["current_location"] = sorted(_fx.locations, key=lambda l: -l["value_mult"])[0]["id"]
+    _fxp["total_caught"] = 20000          # 拉到后期等级，等级成长才体现出来
+    _factor = _fx._order_income_factor(_fxp)
+    check(
+        _factor > 1.5,
+        f"顶配玩家的订单系数 >1.5（钓点 {_fxp['current_location']} + 归墟竿 + 高等级）-> {_factor:.2f}",
+    )
+    _myth = next(f for f in mod.FISH_POOL if f["rarity"] == "神话")
+    # ⚠️ 用**内联固定种子**对比同一条鱼的两种算法，对比完**立刻把全局种子恢复**——
+    #    不然这里会把 random 的全局状态带偏，影响后面依赖随机的用例（踩过）。
+    _saved_state = mod.random.getstate()
+    try:
+        mod.random.seed(4242)
+        _old_prize = mod._new_instance(_myth["id"], 2.0)
+        mod.random.seed(4242)
+        _new_prize = mod._new_instance(
+            _myth["id"], 2.0, location_mult=_factor, codex_mult=_fx._codex_mult(_fxp)
+        )
+    finally:
+        mod.random.setstate(_saved_state)
+    check(
+        mod._instance_value(_new_prize) >= mod._instance_value(_old_prize) * 1.5,
+        f"奖池鱼乘了系数（同一条神话鱼、同种子）-> "
+        f"旧 {mod._instance_value(_old_prize)} → 新 {mod._instance_value(_new_prize)}",
+    )
+    check(
+        mod._safe_number(_fx.cfg.get("lottery_fish_factor"), -1) == 1.0,
+        f"系数可配（默认 1.0 = 和订单鱼同价）-> {_fx.cfg.get('lottery_fish_factor')}",
+    )
+    check(
+        mod.LOTTERY._cfg_lottery_fish_factor(_fx) > 2.0,
+        f"护栏按**上限**估（不然后期玩家能把奖池刷成印钞机）-> "
+        f"{mod.LOTTERY._cfg_lottery_fish_factor(_fx):.2f}",
+    )
+    # 自愈③：param 既不认识也模糊匹配不到时，回复里要**给出线索**（已登记的 id）
+    _bad_lot = make_plugin()
+    _bad_p = mod._default_player("89502")
+    _bad_rec = _bad_lot._lottery_apply_prize(
+        _bad_p, {"id": "x", "kind": "bait", "param": "完全不相干的饵", "count": 1, "desc": "x"}
+    )
+    check(
+        "不存在" in _bad_rec["line"] and "已登记的限定饵" in _bad_rec["line"]
+        and "abyss_secret" in _bad_rec["line"],
+        f"认不出的饵 id 要把线索写进回复（方便对配置）-> {_bad_rec['line'][:70]}",
     )
 
     # --- 中奖发放：rod 档发的是一件「限用凭证」 ---

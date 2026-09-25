@@ -536,6 +536,11 @@ DEFAULTS: dict[str, Any] = {
     #: **每张票多少金币**（站长说「价格怎么不能配置」—— 它一直是可配的，但入口不好找，
     #: 所以 v1.18.52 起在 🎰 大鱼乐 页顶部也写明了它在哪，并给了一键跳转）。
     "lottery_ticket_price": 5000,
+    # ⚠️ v1.18.71：**奖池里的鱼要乘系数**（站长：「奖池的鱼应该和订单鱼一样乘上系数啊，
+    # 不然太低了」）。奖池发的鱼现在按「订单那套动态系数」估价（当前钓点倍率 ×
+    # 鱼竿价值加成 × 等级成长，封顶 order_factor_max），再乘这一项。
+    # 1.0 = 和订单鱼同价；嫌太肥就往下调（0.5 = 一半），调完记得发 /钓鱼 大鱼乐 概率 核对期望。
+    "lottery_fish_factor": 1.0,
     "lottery_daily_limit": 50,          # 每天最多买几张（0 = 不限）
     "lottery_max_per_call": 30,         # 一次最多连抽多少张（挡消息过长）
     "lottery_pity_count": 15,           # 连输多少张后保底给一张（0 = 不保底）
@@ -3399,6 +3404,10 @@ class FishingPlugin(
         cfg["feed_bonus_mode"] = (
             "best" if str(cfg.get("feed_bonus_mode") or "").strip().lower() in ("best", "max", "只取最好")
             else "add"
+        )
+        # 奖池里的鱼乘多少系数（v1.18.71）：0 = 不乘（回到老行为），1 = 和订单鱼同价
+        cfg["lottery_fish_factor"] = _clamp(
+            _safe_number(cfg.get("lottery_fish_factor"), 1.0), 0.0, 100.0
         )
         cfg["offering_daily_limit"] = int(
             _clamp(_safe_int(cfg.get("offering_daily_limit"), 1, 0), 0, 1000)
