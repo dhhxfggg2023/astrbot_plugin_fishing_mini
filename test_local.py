@@ -9897,6 +9897,13 @@ async def main():
         _ok_sel and "手气道具" in _msg_sel,
         f"编辑器也能只重置指定项目 -> {_msg_sel[:56]}",
     )
+    # ⚠️ 页面不知道「我」是谁：scope=me 但没给 user_id 时必须**拒绝**，
+    # 绝不能默默退化成「全群都清」（那比报错更糟）。
+    _ok_no_one, _msg_no_one = await _q2._editor_reset_quota({"scope": "me"})
+    check(
+        not _ok_no_one and "要重置哪个玩家" in _msg_no_one,
+        f"没给玩家 ID 就拒绝并说清（不退化成全群）-> {_msg_no_one[:34]}",
+    )
     _ok_bad, _msg_bad = await _q2._editor_reset_quota(
         {"scope": "me", "user_id": "96009", "what": "臭豆腐"}
     )

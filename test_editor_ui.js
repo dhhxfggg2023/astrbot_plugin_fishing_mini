@@ -1796,10 +1796,17 @@ async function configKeysCoverage() {
     "默认只给一个「重置次数…」按钮（先问一次，不乱清）");
   T.state.quotaReset = { confirm: true, what: "buff" };
   const quotaAsk = T.renderQuotaResetStrip();
-  check(quotaAsk.indexOf("data-scope='all'") > 0 && quotaAsk.indexOf("data-scope='me'") > 0,
-    "确认后才出现「全群所有人 / 只要我自己」两个范围");
+  check(quotaAsk.indexOf("data-scope='all'") > 0 && quotaAsk.indexOf("data-scope='one'") > 0,
+    "确认后才出现「全群所有人 / 只重置这个玩家」两个范围");
   check((quotaAsk.match(/selected/g) || []).length >= 1,
     "下拉里选中的还是刚才那个项目（重绘不会回到「全部」）");
+  // ⚠️ 站长指出的：页面**不知道「我」是谁** —— 所以单人要填 ID，不能有「我自己」这种假选项
+  check(quotaAsk.indexOf("id='quotaUserId'") > 0 && quotaAsk.indexOf("只要我自己") < 0,
+    "单人重置是「填玩家 ID」而不是「我自己」（编辑器根本不知道当前用户是谁）");
+  T.state.playerData = { user_id: "777" };
+  T.state.quotaReset = { confirm: true, what: "" };
+  check(T.renderQuotaResetStrip().indexOf('value=\'777\'') > 0,
+    "默认带上「🧰 玩家数据」页正在看的那个玩家 ID");
   T.state.quotaReset = {};
 
   /* ---- v1.18.64：枚举型字符串键不能被当成数字格（否则一进页就红框）---- */

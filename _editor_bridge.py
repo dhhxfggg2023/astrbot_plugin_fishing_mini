@@ -1871,7 +1871,14 @@ class EditorBridgeMixin(EditorApiMixin):
         want_all = scope != "me"
         target = str(payload.get("user_id") or "").strip()
         if not want_all and not target:
-            want_all = True
+            # ⚠️ 页面**不知道「我」是谁**（这个平台 API 没有「当前登录用户」），
+            # 所以「只重置一个人」必须给出 user_id。以前这里会**默默退化成全群** ——
+            # 那比报错更糟（站长以为只清自己，结果把全群清了）。现在直接拒绝。
+            return False, (
+                "要重置哪个玩家？页面上没有「当前玩家」这个概念（编辑器不知道你是谁），"
+                "请在输入框里填玩家 ID，或者先去「🧰 玩家数据」页选中他再回来点。"
+                "只想清全群就选「全群所有人」。"
+            )
         which = str(payload.get("what") or "").strip()
         quota_keys = list(QUOTA_RESET_ALIASES[which]) if which in QUOTA_RESET_ALIASES else None
         fish_only = which == "fish"

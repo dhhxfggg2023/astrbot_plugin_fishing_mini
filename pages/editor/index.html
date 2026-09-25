@@ -3786,7 +3786,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.66";
+  var PAGE_VERSION = "v1.18.67";
 
   /* ===========================================================================
      5. 状态
@@ -4734,6 +4734,12 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   function renderQuotaResetStrip() {
     var s = state.quotaReset || {};
+    // ⚠️ 页面**不知道「我」是谁**（站长指出的）：这个平台 API 里没有「当前登录用户」。
+    // 所以「只重置一个玩家」必须**填 ID**（默认帮你带上「🧰 玩家数据」页正在看的那个人）。
+    var remembered = toText(s.user_id);
+    if (!remembered) {
+      try { remembered = toText(pdState().user_id); } catch (e) { remembered = ""; }
+    }
     var html = '<div class="toolbar" style="background:var(--primary-soft);border-bottom-color:var(--primary)">';
     html += "<span class='nowrap'>♻️ <b>重置每日次数</b>　" +
       "<span class='faint'>只清「用掉多少」，上限一个都不改</span></span>";
@@ -4749,7 +4755,11 @@ table.grid td.actions .btn { vertical-align: middle; }
     } else {
       html += "<span class='nowrap'>对谁：</span>";
       html += "<button class='btn btn-sm btn-primary' data-act='quota:run' data-scope='all'>全群所有人</button>";
-      html += "<button class='btn btn-sm' data-act='quota:run' data-scope='me'>只要我自己</button>";
+      html += "<input class='cell-input mono' id='quotaUserId' style='width:170px' " +
+        "placeholder='玩家 ID（重置一个人）' value='" + esc(remembered) + "' />";
+      html += "<button class='btn btn-sm' data-act='quota:run' data-scope='one'>只重置这个玩家</button>";
+      html += "<span class='faint'>（页面不知道「我」是谁，所以重置单人要么填 ID，" +
+        "要么先去「🧰 玩家数据」页选中他）</span>";
       html += "<button class='btn btn-sm' data-act='quota:cancel'>取消</button>";
     }
     html += "</div>";
@@ -8795,10 +8805,18 @@ table.grid td.actions .btn { vertical-align: middle; }
       case "quota:run": {
         var scope = toText(el.getAttribute("data-scope")) || "all";
         var what = toText((state.quotaReset || {}).what);
-        state.quotaReset = { confirm: false, what: what, busy: true };
+        var box = document.getElementById("quotaUserId");
+        var one = box ? toText(box.value).trim() : toText((state.quotaReset || {}).user_id);
+        if (scope === "one" && !one) {
+          toast("warn", "要填玩家 ID", "页面不知道「我」是谁；填上玩家 ID，或去「🧰 玩家数据」页选中他再回来");
+          break;
+        }
+        state.quotaReset = { confirm: false, what: what, user_id: one, busy: true };
         render();
-        sendCommand("reset_quota", { scope: scope, what: what }).then(function (res) {
-          state.quotaReset = { confirm: false, what: what, busy: false };
+        sendCommand("reset_quota", {
+          scope: scope === "one" ? "me" : "all", what: what, user_id: one
+        }).then(function (res) {
+          state.quotaReset = { confirm: false, what: what, user_id: one, busy: false };
           if (res && res.ok) {
             toast("ok", "已重置次数", res.message || "只清了用掉的次数，上限没动");
           } else {
