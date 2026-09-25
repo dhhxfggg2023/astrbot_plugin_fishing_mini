@@ -127,6 +127,8 @@ const hookNames = [
   "tabHasError", "problemsInTab", "problemWhere", "gotoProblem", "doSave", "tabHealth",
   // v1.18.64：大鱼乐标题上的「改票价 → / 功能开关 →」要靠它反查入口
   "gotoConfigKey", "tabForConfigKey",
+  // v1.18.74：基线钉在行上（seedBaseline/diffTab）
+  "seedBaseline", "reseedAllBaselines",
   // v1.18.65：大鱼乐页的「♻️ 重置每日次数」条（含「重置什么」下拉）
   "renderQuotaResetStrip",
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
@@ -223,12 +225,17 @@ function runAssertions() {
   check((T.state.data.locations || []).length === 16, "演示钓点 16 个（离线演示数据，与线上 19 个无关）", (T.state.data.locations || []).length);
   check((T.state.snapshots || []).length === 4, "演示存档 4 份", (T.state.snapshots || []).length);
   check(T.state.loading === false, "载入流程已结束");
-  check((T.state.originals.fish && Object.keys(T.state.originals.fish).length === 18),
-    "初始 originals 快照建立（18 条）");
+  // v1.18.74：基线改成「数据自带」（每行一个不可枚举的 __base），
+  // 不再依赖 state.originals —— 那份快照晚了/丢了就会整页变成「全都改过」。
+  check((T.state.data.fish || []).every(function (r) {
+    return typeof r.__base === "string" && r.__base.length > 0;
+  }), "每行都钉了自带基线（18 条鱼）");
+  check(Object.keys(T.state.originals || {}).length === 0,
+    "旧口径 state.originals 已清空（不再参与判定）");
 
-  /* ⚠️ v1.18.72 回归：**刚打开、什么都没改，任何一张表都不该显示「已修改」**。
-     站长报的「数值页面明明没改东西却显示 147 已修改」就是基线建早了
-     （markSaved 在 status/userEditedKeys 到齐之前跑，render 之后行里多出标记字段）。 */
+  /* ⚠️ v1.18.72/74 回归：**刚打开、什么都没改，任何一张表都不该显示「已修改」**。
+     站长报的「数值页面明明没改东西却显示 147 已修改」= 147 行全被判成 added
+     （基线快照晚了/丢了）。现在基线和数据绑在一起，从结构上不可能整页标黄。 */
   const bootDirty = ["fish", "locations", "rods", "baits", "items", "lottery",
     "numbers", "buttons", "aliases"].map(function (id) {
     const d = T.diffTab(id);
@@ -238,6 +245,30 @@ function runAssertions() {
     "刚打开时每张表都是「未修改」（基线在 render 之后建立）",
     bootDirty.length ? bootDirty.join(" ") : "全部 0");
   check(T.dirtyTotal() === 0, "顶部「已修改」总数为 0", T.dirtyTotal());
+
+  /* ⚠️ v1.18.74：**真实时序回归** —— 以前的基线是另一份 state（state.originals），
+     只要它晚了/丢了（真机上确实发生了），整页 147 行就全被判成 added。
+     这里把两件事都钉住：①基线丢了不能误判；②reloadAll 那种「重建 rows」必须
+     顺手把新基线钉上（否则新对象没基线，只能走旧口径兜底）。 */
+  (function () {
+    const savedOrig = T.state.originals;
+    T.state.originals = {};                    // ① 基线快照整个丢了
+    check(T.diffTab("numbers").count === 0,
+      "基线快照丢了也不会整页标「已改」（基线现在钉在行上）",
+      String(T.diffTab("numbers").count));
+    T.state.originals = savedOrig;
+    // ② 像 reloadAll 那样重建 rows（新对象没有基线）-> seedBaseline 后应当归零
+    const rebuilt = T.state.data.numbers.map(function (r) {
+      const o = {}; Object.keys(r).forEach(function (k) { o[k] = r[k]; }); return o;
+    });
+    T.state.data.numbers = rebuilt;
+    check(T.diffTab("numbers").count > 0, "（重建后的新对象没有基线，先如实算成「新增」）",
+      String(T.diffTab("numbers").count));
+    T.seedBaseline("numbers", rebuilt);
+    check(T.diffTab("numbers").count === 0,
+      "seedBaseline 之后归零（reloadAll 就是这么做的）",
+      String(T.diffTab("numbers").count));
+  })();
 
   /* ⚠️ v1.18.72 回归：大鱼乐奖表的**类型白名单**必须与插件逐字同步。
      少了 `rod` / `baitpack`，站长新加的限定竿/饵奖档会被静默丢掉
@@ -3589,7 +3620,9 @@ async function saveScope() {
   // 6) 改别名 + 表里有一处「没动过的历史红格子」-> 保存照常进行，只额外提醒
   const staleRow = { scene: "cast.typo_scene", label: "历史遗留", data: "/钓鱼", style: "default" };
   F.state.data.buttons.push(staleRow);
-  F.state.originals.buttons[F.rowKey(F.TAB_BY_ID.buttons, staleRow)] = JSON.stringify(staleRow);
+  // v1.18.74：基线钉在行上 -> 直接把这一行当基线（等于「没动过」）
+  Object.defineProperty(staleRow, "__base", {
+    value: JSON.stringify(staleRow), enumerable: false, writable: true, configurable: true });
   const aliasRow = (F.state.data.aliases || []).filter(function (r) { return r.canonical === "排行"; })[0];
   check(!!aliasRow, "别名表里有「排行」这一行");
   aliasRow.aliases = aliasRow.aliases + ",排名";
@@ -3612,7 +3645,6 @@ async function saveScope() {
 
   // 7) 真的改错了 -> 拦下来，但要说清「哪张表第几行哪一列」
   aliasRow.aliases = "排行|带竖线|的别名";
-  F.state.originals.aliases = {};
   toastFrom = (documentStub.getElementById("toasts").children || []).length;
   captured.calls = [];
   await F.doSave();
@@ -3641,10 +3673,8 @@ async function saveScope() {
     "跳转到不存在的表返回 false（不炸）");
 
   // 9) 干净数据下不该无中生有地报警
-  F.state.originals.aliases = null;
   F.state.data.aliases = [];
   F.state.data.buttons = [];
-  F.state.originals.buttons = {};
   toastFrom = (documentStub.getElementById("toasts").children || []).length;
   captured.calls = [];
   await F.doSave();
@@ -3656,7 +3686,8 @@ async function saveScope() {
   // 10) 标签上的问题标记：红=改错的行（会拦保存），黄=历史遗留（不拦）
   const histRow = { scene: "cast.typo_scene", label: "历史遗留", data: "/钓鱼", style: "default" };
   F.state.data.buttons.push(histRow);
-  F.state.originals.buttons[F.rowKey(F.TAB_BY_ID.buttons, histRow)] = JSON.stringify(histRow);
+  Object.defineProperty(histRow, "__base", {
+    value: JSON.stringify(histRow), enumerable: false, writable: true, configurable: true });
   const h1 = F.tabHealth(["buttons"]);
   check(h1.stale === 1 && h1.bad === 0, "只有历史问题时记在 stale 上（不拦保存）", JSON.stringify(h1));
   F.renderTabs();

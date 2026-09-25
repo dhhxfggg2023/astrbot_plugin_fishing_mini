@@ -9256,6 +9256,23 @@ async def main():
         f"奖表类型白名单与插件一致（页面 {sorted(_page_kinds)} vs 插件 {sorted(_plugin_kinds)}）",
     )
 
+    # ⚠️ **半截行补齐**（站长配置里那几条限定凭证只有 7 段 -> `uses` 读成 0，
+    #    于是「抽到限定饵/竿」不生效、还报「鱼饵 xxx 不存在」）。
+    #    这里把出厂 item_defs 里那条凭证砍掉后 4 段，看插件读配置时会不会自动补回来。
+    _half_cfg = dict(_CFG)
+    _half_cfg["item_defs"] = [
+        "|".join(_line.split("|")[:7]) if "tide_rod_pass" in _line else _line
+        for _line in mod.DEFAULTS["item_defs"]
+    ]
+    _half_p = make_plugin(_half_cfg)
+    _half_item = _half_p.items.get("tide_rod_pass") or {}
+    check(
+        mod._safe_int(_half_item.get("uses"), 0, 0) == 20
+        and str(_half_item.get("rod") or "") == "tide_rod",
+        f"半截行被自动补齐（缺字段会让新功能直接失效）-> "
+        f"uses={_half_item.get('uses')} rod={_half_item.get('rod')!r}",
+    )
+
     # --- 中奖发放：rod 档发的是一件「限用凭证」 ---
     _lot_plugin = make_plugin()
     _lp = mod._default_player("89402")
@@ -11630,6 +11647,9 @@ async def main():
         lottery_pity_count=0,
         # 奖表钉死成「必中一档」方便断言（期望也不超票价）
         lottery_prizes="prize|1|gold||500|中 500 金\nblank|0|none||0|空",
+        # ⚠️ v1.18.73：改票价会让插件按比例缩放奖表里的现金档（保持配平）。
+        # 这一节要的是「我写的 500 就是 500」，所以把参照价设成同一个票价 -> 不缩放。
+        lottery_cash_base_price=1000,
     )
     _lp = make_plugin(_lot_cfg)
     _lplayer = mod._default_player("89641")
@@ -11678,6 +11698,7 @@ async def main():
     _pity_cfg = dict(
         _CFG,
         lottery_ticket_price=100,
+        lottery_cash_base_price=100,   # 同上：这一节自己钉死奖表，别让插件缩放
         lottery_daily_limit=100,
         lottery_pity_count=3,
         lottery_pity_prize="prize",
@@ -11742,6 +11763,7 @@ async def main():
     _custom_cfg = dict(
         _CFG,
         lottery_ticket_price=2000,
+        lottery_cash_base_price=2000,   # 同上：这一节自己钉死奖表，别让插件缩放
         lottery_jackpot_prize="mine",
         lottery_prizes=(
             "mine|1|fish|all:神品|1|自定头奖\n"

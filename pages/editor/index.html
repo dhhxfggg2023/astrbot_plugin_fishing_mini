@@ -2029,6 +2029,8 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["lottery_force_prize", "大鱼乐强制奖级", "奖表 id", "**调试用**：填一个奖级 id（例如 jackpot）= 每次开奖都强制出这一档。⚠️ 会让期望彻底失控（必中头奖 = 印钞机），用完记得清空。留空 = 正常按概率抽。", true, "大鱼乐", ""],
     // v1.18.71：奖池发的鱼会乘「订单那套动态系数」（钓点 × 鱼竿 × 等级成长），
     // 这一项是额外的倍数：1.0 = 和订单鱼同价，0 = 不乘（回到老行为）
+    // v1.18.73：奖表现金档是**按票价反解**出来的，这一项记住「上次照哪个票价算的」——
+    // 改票价时插件会把现金面额等比缩放一次，让期望继续停在「票价的 78%」
     ["lottery_fish_factor", "奖池鱼的系数", "倍", "奖池发的鱼按**订单鱼那套动态系数**估价（当前钓点倍率 × 鱼竿价值加成 × 等级成长，封顶 order_factor_max），再乘这一项。1.0 = 和订单鱼同价；嫌奖池太肥就往下调（0.5 = 一半）；填 0 = 不乘系数（回到 v1.18.70 的老行为）。⚠️ 改完会影响「期望回报 < 票价」那道护栏，记得发 /钓鱼 大鱼乐 概率 核对。", false, "大鱼乐"],
     ["lottery_ticket_price", "大鱼乐票价", "金币", "每张彩票多少金币。定价参照：后期顶配玩家一竿鱼约 300~400 金、每天手气额度 120 竿，所以一天满额收益约 4~5 万金 —— 5,000 金/张 大致是「一天能买 8~10 张」。⚠️ 改这个数会直接改变期望回报率（庄家优势），改完请发 /钓鱼 大鱼乐 概率 复核一眼。", false, "大鱼乐"],
     ["lottery_daily_limit", "大鱼乐每日限购", "张", "每天最多买几张，跨天 0 点重置；填 0 = 不限。⚠️ 这道闸门很重要：不限购的话，一个几亿金币的号可以一次性买两万张，期望上必然摸到头奖，几十天的进度一夜被抹平。", false, "大鱼乐", ""],
@@ -3796,7 +3798,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.72";
+  var PAGE_VERSION = "v1.18.74";
 
   /* ===========================================================================
      5. 状态
@@ -3985,6 +3987,52 @@ table.grid td.actions .btn { vertical-align: middle; }
 
 
   /* 计算某个标签页的改动情况：{ dirtyRows:Set<index>, added, removed, total } */
+  /**
+   * 「这一行从配置里读进来时是什么样」——**唯一**的基线来源。
+   *
+   * ⚠️ v1.18.74：以前基线放在 `state.originals` 里，**必须有人在正确时机调用
+   * `markSaved()` 才会有**。于是只要那份快照晚了/丢了/被后来的重建覆盖
+   * （站长报的「数值页面明明没改东西却显示 147 已修改」= 147 行全被判成 added），
+   * 整页就变成「全都改过」。
+   *
+   * 现在改成**数据自带基线**：每次从配置里读进来时，顺手在行对象上钉一个
+   * 不可枚举的 `__base`（等于那一刻的 JSON）。判断改动就是把当前 JSON 和它比 ——
+   * 基线再也不可能"没建过"，也不可能和当前这份数据对不上。
+   */
+  var BASE_FIELD = "__base";
+
+  function seedBaseline(tabId, rows) {
+    var tab = TAB_BY_ID[tabId];
+    if (!tab || !tab.columns) return;
+    (rows || []).forEach(function (row) {
+      if (!row || typeof row !== "object") return;
+      var snapshot = JSON.stringify(row);
+      try {
+        Object.defineProperty(row, BASE_FIELD, {
+          value: snapshot, enumerable: false, writable: true, configurable: true,
+        });
+      } catch (e) {
+        row[BASE_FIELD] = snapshot;      // 极端情况下退化成可枚举字段
+      }
+    });
+  }
+
+  function baselineOf(row) {
+    if (row && typeof row === "object" && typeof row[BASE_FIELD] === "string") {
+      return row[BASE_FIELD];
+    }
+    return null;
+  }
+
+  /** 把当前所有行当成「已保存」（保存成功后调用）。 */
+  function reseedAllBaselines() {
+    Object.keys(state.data || {}).forEach(function (tabId) {
+      seedBaseline(tabId, state.data[tabId]);
+    });
+    // 旧机制（state.originals）不再参与判定，但清空避免别处误用
+    state.originals = {};
+  }
+
   function diffTab(tabId) {
     var tab = TAB_BY_ID[tabId];
     var rows = state.data[tabId] || [];
@@ -3997,6 +4045,13 @@ table.grid td.actions .btn { vertical-align: middle; }
     rows.forEach(function (row, i) {
       var k = rowKey(tab, row);
       seen[k] = true;
+      var base = baselineOf(row);
+      if (base !== null) {
+        // 新口径：和行自带的基线比（基线永远存在）
+        if (JSON.stringify(row) !== base) { dirty[i] = true; changed++; }
+        return;
+      }
+      // 兜底：老口径（新加的行、或无法钉基线的对象）
       if (!k || !(k in orig)) { dirty[i] = true; added++; return; }
       if (JSON.stringify(row) !== orig[k]) { dirty[i] = true; changed++; }
     });
@@ -4684,11 +4739,14 @@ table.grid td.actions .btn { vertical-align: middle; }
       var errs = validateRow(tab, row);
       var invalid = Object.keys(errs).length > 0;
       var isSel = state.selected.indexOf(index) >= 0;
-      var isDirty = !!(state.originals[tab.id] && (function () {
-        var k = rowKey(tab, row);
-        var o = state.originals[tab.id][k];
-        return !o || o !== JSON.stringify(row);
-      })());
+      // v1.18.74：改成和「行自带基线」比（基线永远存在，不会再整页标黄）
+      var _base = baselineOf(row);
+      var isDirty = _base === null
+        ? !!(state.originals[tab.id] && (function () {
+            var o = state.originals[tab.id][rowKey(tab, row)];
+            return !o || o !== JSON.stringify(row);
+          })())
+        : (JSON.stringify(row) !== _base);
 
       var tds = tab.columns.map(function (col) {
         var cls = [];
@@ -7145,6 +7203,7 @@ table.grid td.actions .btn { vertical-align: middle; }
       if (row) rows.push(row);
     });
     state.data.buttons = rows;
+    seedBaseline("buttons", rows);      // v1.18.74：数据自带基线
     var map = {};
     rows.forEach(function (row) {
       map[rowKey(TAB_BY_ID.buttons, row)] = JSON.stringify(row);
@@ -8496,15 +8555,9 @@ table.grid td.actions .btn { vertical-align: middle; }
   }
 
   function markSaved() {
-    TABS.forEach(function (t) {
-      if (t.kind) return;
-      var map = {};
-      (state.data[t.id] || []).forEach(function (row) {
-        var k = rowKey(t, row);
-        if (k) map[k] = JSON.stringify(row);
-      });
-      state.originals[t.id] = map;
-    });
+    // v1.18.74：基线改成「数据自带」——把当前所有行重新钉一遍基线即可，
+    // 不再依赖「谁在什么时机往 state.originals 里塞快照」。
+    reseedAllBaselines();
     state.autoBackupDirty = false;
     state.savedAt = nowText();
   }
@@ -8639,6 +8692,9 @@ table.grid td.actions .btn { vertical-align: middle; }
     TABS.forEach(function (t) {
       if (t.kind) return;
       state.data[t.id] = deepClone(cfg[t.id] || []);
+      // v1.18.74：**读完就钉基线** —— 不必等后面的异步步骤，
+      // 从这一刻起「有没有改过」就能正确判断。
+      seedBaseline(t.id, state.data[t.id]);
     });
     if (cfg.autoBackup) state.autoBackup = deepClone(cfg.autoBackup);
     state.loadNotes = (cfg._notes || []).slice();

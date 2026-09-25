@@ -515,10 +515,6 @@ DEFAULTS: dict[str, Any] = {
         "gold_small|8|gold||5000|回本 5,000 金　🪙 五等奖",
         "fish_rare|3|fish|稀有:珍品|1|稀有鱼 · 珍品　🐡 六等奖",
         "bait_pack|2|baitpack|worm:20,bread:30|1|鱼饵包：蚯蚓 ×20 + 面包屑 ×30　🪱",
-        # ---- v1.18.63：大鱼乐限定竿/饵（站长：「每件都要有被用的价值」+「不能正收入」）----
-        # 概率按**配置现算的名义价值**分池：值越多张票，概率越低，
-        # 而且每一档单看也是亏的（最贵的双尾竿名义 ≈3 张票 < 它出现所需的期望张数）。
-        # 这 6 档加起来只占期望 ~20 金/张，整套期望仍 < 票价。
         "tide_rod_pass|0.8|rod|tide_rod_pass|1|🌊 潮汐竿（异色猎手，20 次）",
         "quick_rod_pass|0.25|rod|quick_rod_pass|1|🪶 瞬手竿（必完美拉线，25 次）",
         "abyss_bait_pass|1.5|bait|abyss_bait_pass|1|🕳️ 深渊秘饵（全图鱼口，8 次）",
@@ -5535,6 +5531,37 @@ class FishingPlugin(
             current = self.config.get(key)
             if not isinstance(current, list) or not current:
                 continue  # 空/损坏的交给配置兜底逻辑处理
+            # ⚠️ **补齐「半截行」**：合并只按 id 判「有没有」，所以**早期版本生成过的行
+            #    永远补不上后来新增的字段**。实测站长配置里那几条限定竿/饵凭证只有 7 段
+            #    （`uses` / `rod` / `bait` 全缺），于是 `uses` 读成 0 ——
+            #    「抽到限定饵/竿」根本不生效，还会报「鱼饵 xxx 不存在」。
+            #    规则：**这一行的段数比新默认少**就整行换成新默认（多出来的段一律是我们
+            #    后加的字段，不存在「站长自己删过字段」的合法情况）。
+            _default_by_id = {
+                str(line).split("|", 1)[0].strip(): str(line)
+                for line in default
+                if isinstance(line, str)
+            }
+            _fixed = 0
+            _new_current: list[Any] = []
+            for line in current:
+                if not isinstance(line, str):
+                    _new_current.append(line)
+                    continue
+                _want = _default_by_id.get(line.split("|", 1)[0].strip())
+                if _want is not None and line.count("|") < _want.count("|"):
+                    _new_current.append(_want)
+                    _fixed += 1
+                else:
+                    _new_current.append(line)
+            if _fixed:
+                self.config[key] = _new_current
+                current = _new_current
+                changed = True
+                logger.info(
+                    f"配置自动升级：{key} 有 {_fixed} 行是早期版本的半截数据，已按新版默认"
+                    "补齐字段（缺字段会让新功能直接失效）"
+                )
             have = {
                 str(line).split("|", 1)[0].strip()
                 for line in current
