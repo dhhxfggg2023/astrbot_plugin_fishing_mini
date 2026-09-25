@@ -8428,7 +8428,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 147,
+        len(_schema) == 148,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8455,7 +8455,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 144, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 145, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -9275,6 +9275,46 @@ async def main():
         _dup._limited_item_left(_dup_p, "abyss_bait_pass") == 8,
         f"用光后再抽一张 = 满额 8 次（不会因为残留状态算错）-> "
         f"{_dup._limited_item_left(_dup_p, 'abyss_bait_pass')}",
+    )
+
+    # --- v1.18.77：站长把全局投喂上限调低时，已喂超的鱼要「记债」而不是被白吃 ---
+    _cap_p = make_plugin(dict(_CFG, feed_max_uses=30))
+    _cap_p.cfg.pop("feed_cap_applied", None)
+    _cap_pl = mod._default_player("89501")
+    _cap_fish = mod._new_instance("carp", 1.0, value_override=1000,
+                                  attrs={"meat": 60, "spirit": 60, "sheen": 60})
+    _cap_fish["feed_uses"] = 30
+    _cap_fish["live_bonus"] = 600
+    _cap_pl["aquarium"] = [_cap_fish]
+    await _cap_p._save_player(_cap_pl)
+    await _cap_p._load_player("89501")        # 第一次：只记录上限，不动数据
+    _cap_pl = await _cap_p._load_player("89501")
+    check(
+        not mod._safe_int(_cap_pl["aquarium"][0].get("feed_debt"), 0, 0),
+        "首次记录上限时不会给鱼记债（不能对历史数据动手）",
+    )
+    _cap_value_before = mod._instance_value(_cap_pl["aquarium"][0])
+    _cap_p.cfg["feed_max_uses"] = 25          # 站长把上限调低
+    _cap_pl = await _cap_p._load_player("89501")
+    _cap_f = _cap_pl["aquarium"][0]
+    check(
+        mod._safe_int(_cap_f.get("feed_debt"), 0, 0) == 5,
+        f"上限 30→25：喂到 30 的那条鱼记 5 次债 -> {_cap_f.get('feed_debt')}",
+    )
+    check(
+        mod._instance_value(_cap_f) == _cap_value_before,
+        f"**已喂出来的价值一点没少** -> {mod._instance_value(_cap_f)}（原 {_cap_value_before}）",
+    )
+    check(
+        mod._feed_cap(_cap_f, _cap_p.cfg) == 30,
+        f"上限算上债还是 30，所以它「不能再喂」但也没被削 -> "
+        f"{mod._feed_cap(_cap_f, _cap_p.cfg)}",
+    )
+    _cap_p.cfg["feed_max_uses"] = 30          # 站长又调回去
+    _cap_pl = await _cap_p._load_player("89501")
+    check(
+        not mod._safe_int(_cap_pl["aquarium"][0].get("feed_debt"), 0, 0),
+        "上限调回 30：债自动清零（鱼又能喂了）",
     )
 
     # --- v1.18.71：奖池的鱼要乘系数（站长：「应该和订单鱼一样乘上系数啊，不然太低了」）---

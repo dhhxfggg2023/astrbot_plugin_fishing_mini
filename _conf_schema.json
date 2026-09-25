@@ -1030,5 +1030,11 @@
     "description": "奖池里的鱼乘多少系数（1.0 = 和订单鱼同价；0 = 不乘）",
     "type": "float",
     "default": 1.0
+  },
+  "feed_cap_applied": {
+    "invisible": true,
+    "description": "内部：上次生效的全局投喂上限（调低上限时给已喂超的鱼记债用）",
+    "type": "int",
+    "default": 30
   }
 }

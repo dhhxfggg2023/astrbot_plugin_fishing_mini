@@ -1574,13 +1574,34 @@ def _compute_value(
 
 
 def _feed_cap(instance: dict[str, Any], cfg: dict[str, Any]) -> int:
-    """这条鱼的投喂上限 = 全局基础值 + 育灵水加成（加成再按 feed_bonus_cap 收口）。"""
+    """这条鱼的投喂上限 = 全局基础值 + 育灵水加成（加成再按 feed_bonus_cap 收口）。
+
+    ⚠️ v1.18.77：再加上 ``feed_debt`` ——「站长把全局上限调低」时，已经喂超的那些
+    鱼**不该被白吃**（站长：「超过上限提高的价值怎么办呢，总不能不变吧」）。
+    喂进去的属性与价值是**固化**的（`attrs` / `live_bonus`），钳制次数不会让它们消失；
+    这里把「超出的次数」记成债，抵在原上限上，于是那条鱼**保持原样、只是不能再喂**，
+    等站长哪天把上限调回去，债自然就抵掉了（或者鱼被卖掉/取出一并消失）。
+    """
     base = max(0, _safe_int((cfg or {}).get("feed_max_uses"), 10, 0))
     bonus = max(0, _safe_int(instance.get("feed_bonus"), 0, 0))
     cap = _feed_bonus_cap(cfg)
     if cap > 0:
         bonus = min(bonus, cap)
-    return base + bonus
+    debt = _clamp_debt(instance, base + bonus)
+    return base + bonus + debt
+
+
+def _clamp_debt(instance: dict[str, Any], cap: int) -> int:
+    """按当前上限把 ``feed_debt`` 收口到合理范围（并会把过期的债清掉）。
+
+    * 上限被**调高**到超过已喂次数 -> 债自动归零（鱼重新可以喂）；
+    * 上限被**调低**（读档迁移算出来的债）-> 原样保留。
+    """
+    used = max(0, _safe_int(instance.get("feed_uses"), 0, 0))
+    debt = max(0, _safe_int(instance.get("feed_debt"), 0, 0))
+    if used <= cap:
+        return 0
+    return min(debt, used - cap)
 
 
 def _prune_decorations(player: dict[str, Any], now: int | None = None) -> int:
@@ -2147,6 +2168,9 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "attrs": attrs,
         "feed_uses": _safe_int(raw.get("feed_uses"), 0, 0),
         "feed_bonus": int(_clamp(_safe_int(raw.get("feed_bonus"), 0, 0), 0, FEED_BONUS_HARD_MAX)),
+        # v1.18.77：站长把全局投喂上限调低时，已经喂超的鱼记一笔「债」抵在原上限上
+        # —— 那条鱼保持原样不能再喂，但**已喂出来的属性与价值一点不少**
+        "feed_debt": max(0, _safe_int(raw.get("feed_debt"), 0, 0)),
         # 洗髓丹的「今天吃了几颗」：跨天自动作废（只记日期 + 次数，不需要定时任务）
         # ⚠️ 同样必须列在白名单里，否则每次读档都把当天次数清零，限制就失效了
         "reroll_day": str(raw.get("reroll_day") or ""),

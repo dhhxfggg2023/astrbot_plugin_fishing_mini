@@ -368,6 +368,10 @@ DEFAULTS: dict[str, Any] = {
     "feed_bonus_mode": "add",
     # 单条鱼的投喂上限加成最多堆到多少（育灵水 +5、珍珠梳 +10 都堆在这一项上）
     "feed_bonus_cap": 20,
+    #: 内部用：上次生效过的**全局投喂上限**（v1.18.77）。站长把 ``feed_max_uses`` 调低时，
+    #: 已经喂超的鱼会记一笔「债」抵在原上限上 —— 鱼保持原样、不能再喂，但已喂出来的
+    #: 属性与价值**一点不少**；上限调回去时债自动清零。由插件自己维护，不用手改。
+    "feed_cap_applied": 30,
     # 洗髓丹洗出「神品」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
     # 所以只能靠洗髓丹拿到，自然上钩永远不出（quality_weights 最后一位是 0）
     "quality_myth_chance": 0.0025,
@@ -3764,10 +3768,64 @@ class FishingPlugin(
         # 老存档：缸里已在养的鱼补上入缸时间（一次性），否则它们会因为「没有计时」
         # 永远不产出 —— 收益是严格按计时算的
         migrated = self._migrate_tank_clocks(player) or migrated
+        # v1.18.77：站长调低全局投喂上限时，给已经喂超的鱼记债（不吃掉已喂的价值）
+        migrated = self._migrate_feed_cap(player) or migrated
         if migrated:
             logger.info(f"玩家 {user_id} 数据已迁移到 v{DATA_VERSION}")
             await self._save_player(player)
         return player
+
+    def _migrate_feed_cap(self, player: dict[str, Any]) -> bool:
+        """站长把「全局投喂上限」调低后，给已经喂超的鱼记一笔债（v1.18.77）。
+
+        为什么需要：上限是**配置**（`feed_max_uses`，默认 30），而 `feed_uses` 是
+        **固化在鱼身上**的。站长把 30 改成 25 以后，老档里那些喂到 30 的鱼就永远
+        「超限」了 —— 不处理的话它们只是不能再喂（已喂的价值还在），但站长会疑惑
+        「那些多出来的次数/value 怎么算」。
+
+        处理办法（见 `_feed_cap`）：把超出的次数记进 `feed_debt`，抵在原上限上。
+        * 那条鱼**保持原样、不能再喂**（`feed_uses` 不动，界面也不显示负数）；
+        * 已喂出来的属性与 `live_bonus` 一点不少（它们本来就是固化的）；
+        * 站长哪天把上限调回去，`_clamp_debt` 会把债自动归零，鱼又能喂了。
+
+        只在**上限变小**的那一次生效；配置里用 `feed_cap_applied` 记住上次生效值。
+        """
+        target = max(0, _safe_int(self.cfg.get("feed_max_uses"), 10, 0))
+        applied = self.cfg.get("feed_cap_applied")
+        if applied is not None and _safe_int(applied, target, 0) == target:
+            return False                      # 上限没变：什么都不用做
+        if applied is not None and _safe_int(applied, target, 0) > target:
+            # 上限**变小**：这一次要给所有鱼记债；标记直接推到最后，避免每条鱼都重来
+            self._feed_cap_pending = True
+            self.cfg["feed_cap_applied"] = target
+            changed = False
+            for fish in player.get("aquarium") or []:
+                if not isinstance(fish, dict):
+                    continue
+                used = max(0, _safe_int(fish.get("feed_uses"), 0, 0))
+                bonus = max(0, _safe_int(fish.get("feed_bonus"), 0, 0))
+                cap = _safe_int(self.cfg.get("feed_bonus_cap"), 20, 0)
+                eff = target + (min(bonus, cap) if cap > 0 else bonus)
+                if used > eff:
+                    fish["feed_debt"] = used - eff
+                    changed = True
+            if changed:
+                logger.info(
+                    f"投喂上限从 {applied} 调低到 {target}：已经喂超的鱼记了「债」"
+                    "（已喂出来的属性与价值一点没少，只是暂时不能再喂）"
+                )
+            return changed
+        # 其余情况（首次记录 / 上限变大）：只更新标记，不动玩家的鱼
+        self.cfg["feed_cap_applied"] = target
+        for fish in player.get("aquarium") or []:
+            if isinstance(fish, dict) and _safe_int(fish.get("feed_debt"), 0, 0):
+                used = max(0, _safe_int(fish.get("feed_uses"), 0, 0))
+                bonus = max(0, _safe_int(fish.get("feed_bonus"), 0, 0))
+                cap = _safe_int(self.cfg.get("feed_bonus_cap"), 20, 0)
+                eff = target + (min(bonus, cap) if cap > 0 else bonus)
+                if used <= eff:
+                    fish["feed_debt"] = 0     # 上限调回去了：债清零，鱼又能喂了
+        return False
 
     def _migrate_tank_clocks(self, player: dict[str, Any]) -> bool:
         """给「已经在缸里但没有入缸时间」的鱼补计时（老存档迁移，返回是否有改动）。
