@@ -224,6 +224,7 @@ SUBCOMMAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     "供奉": ("供奉", "香火", "上香", "offering"),
     # 大鱼乐（v1.18.51）：现实彩票玩法。别名挑的是玩家真会打的词
     "大鱼乐": ("大鱼乐", "彩票", "抽奖", "lottery", "lotto", "买彩票", "乐透"),
+    "重置额度": ("重置额度", "重置次数", "重置", "重置每日", "清空额度", "reset"),
 }
 
 #: 全部内置写法（含规范名本身）：自定义命令不许与它们重名（内置永远优先）
@@ -357,16 +358,13 @@ DEFAULTS: dict[str, Any] = {
     # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复）
     #   **默认 0 = 不限**（v1.18.29 起）；想恢复「一条鱼一天最多 3 颗」就填 3
     "reroll_daily_limit": 0,
-    # 育灵水 / 珍珠梳这类「加投喂上限」的道具（v1.18.62 加，v1.18.64 改口径）：
-    #   feed_bonus_daily_limit = **同一条鱼一辈子最多能用几次**（默认 2）。
-    #     ⚠️ 键名里那个 daily 是历史遗留（v1.18.62 原本按天重置），**现在是终身上限**：
-    #     站长要求「不是每天，而是这条鱼永远只能喂几次加上限的道具（同类一起算）」——
-    #     按天重置等于每天都能再堆，鱼的投喂上限迟早被堆满。
+    # 育灵水 / 珍珠梳 / 任何带「喂鱼上限 +N 次」的道具（v1.18.62 加，v1.18.64 改口径）：
+    #   feed_bonus_lifetime_limit = **同一条鱼一辈子最多能用几次**（默认 2）；
+    #     同类道具（育灵水 +5、珍珠梳 +10、以后自己加的）**一起算**，喂满就不再给喂。
+    #     ⚠️ 键名 v1.18.62 叫 feed_bonus_daily_limit（当时按天重置）—— v1.18.65 起
+    #     只保留这一个键，_refresh_config 会把老键的值搬过来并删掉老键。
     #     填 0 = 不限（只受 feed_bonus_cap 约束）。
     #   feed_bonus_mode = add 每次叠加 / best 只取最好的一次
-    "feed_bonus_daily_limit": 2,
-    # v1.18.64：终身上限的**新名字**（语义改了就顺便正名）。两个键**都认**，
-    # 新键优先；老配置里只有老键时照旧生效（见 _calc._feed_bonus_daily_limit）。
     "feed_bonus_lifetime_limit": 2,
     "feed_bonus_mode": "add",
     # 单条鱼的投喂上限加成最多堆到多少（育灵水 +5、珍珠梳 +10 都堆在这一项上）
@@ -2820,6 +2818,9 @@ DEFAULT_ESCAPE_RATE: float = 0.25
 #: 单竿不设这道护栏（spec 里没有 min_reaction 就是 0）：它没有「上一条的余震」，
 #: 一次过早的点击是玩家自己的选择，不该被吞掉。
 MULTI_PULL_MIN_REACTION: float = 0.25
+#: 「用 <道具> <栏位>×次数」一次最多重复几次（v1.18.65）——
+#: 防手滑写个天文数字把 CPU 与道具一次抽干。
+MAX_REPEAT: int = 999
 #: 发「拉」落空后，多久之内还认为「这是刚才那个窗口晚了一步」
 #: （连钓逐条弹提示，玩家点了上一条遗留的按钮很常见；超过这个时间就别再提它了）
 PULL_MISS_WINDOW: float = 8.0
@@ -3381,6 +3382,18 @@ class FishingPlugin(
             )
         cfg["feed_bonus_cap"] = int(
             _clamp(_safe_int(cfg.get("feed_bonus_cap"), 20, 0), 0, 1000)
+        )
+        # v1.18.65：**只保留一个键**（feed_bonus_lifetime_limit）。
+        # 老键 feed_bonus_daily_limit 是 v1.18.62 的「每天几次」，语义已经变成终身上限 ——
+        # 站长明确不要「旧键 / 新键两个都摆着、还有一个只读」那种烂摊子。
+        # 这里做一次性迁移：老键有值就搬到新键（新键为准），然后把老键**从配置里删掉**。
+        _old_fb = cfg.get("feed_bonus_daily_limit")
+        if _old_fb is not None:
+            if cfg.get("feed_bonus_lifetime_limit") is None:
+                cfg["feed_bonus_lifetime_limit"] = _old_fb
+            cfg.pop("feed_bonus_daily_limit", None)
+        cfg["feed_bonus_lifetime_limit"] = int(
+            _clamp(_safe_int(cfg.get("feed_bonus_lifetime_limit"), 2, 0), 0, 10000)
         )
         cfg["feed_bonus_mode"] = (
             "best" if str(cfg.get("feed_bonus_mode") or "").strip().lower() in ("best", "max", "只取最好")
@@ -4601,6 +4614,49 @@ class FishingPlugin(
         # 去重、排序、过滤越界
         return sorted({i for i in result if 1 <= i <= total})
 
+    def _parse_repeat_spec(self, spec: str, pool: list[Any]) -> list[tuple[int, int]]:
+        """把 ``"1×20"`` / ``"1*20"`` / ``"1x20"`` 解析成 ``[(1, 20)]``（v1.18.65）。
+
+        站长：「水族馆可以使用的道具增加一次性多次使用道具功能，比如说一次喂鱼十几包
+        龙涎饲料这种」。这就是给「用 <道具> <栏位>」加一个**重复次数**。
+
+        * 不写次数 = 1 次（``1 2 3`` 等价于 ``1×1 2×1 3×1``）；
+        * 区间写法 ``1-3`` 展开成 1、2、3，各 1 次；``1-3×5`` = 三条各 5 次；
+        * 写 ``全部`` = 全缸各 1 次；
+        * 次数上限 ``MAX_REPEAT``（防止手滑写个 999999 把 CPU 和道具一次抽干）；
+        * 同一个栏位写多次会**合并**（``1×5 1×3`` = 1 号鱼 8 次）。
+        """
+        tokens = self._tokens(spec)
+        if not tokens:
+            return []
+        total = len(pool)
+        if any(t in ("全部", "所有", "all", "全") for t in tokens):
+            return [(i, 1) for i in range(1, total + 1)]
+
+        merged: dict[int, int] = {}
+        for token in tokens:
+            body = token.replace("×", "*").replace("✕", "*").replace("✖", "*")
+            body = body.replace("x", "*").replace("X", "*").replace("ｘ", "*")
+            times = 1
+            if "*" in body:
+                head, _, tail = body.partition("*")
+                body = head
+                times = max(1, min(_to_int(tail, 1), MAX_REPEAT))
+            if "-" in body or "~" in body or "－" in body:
+                sep = "-" if "-" in body else ("~" if "~" in body else "－")
+                left, _, right = body.partition(sep)
+                start, end = _to_int(left, 0), _to_int(right, 0)
+                if start and end and start <= end:
+                    for i in range(start, end + 1):
+                        if 1 <= i <= total:
+                            merged[i] = min(MAX_REPEAT, merged.get(i, 0) + times)
+                continue
+            if body.isdigit():
+                i = int(body)
+                if 1 <= i <= total:
+                    merged[i] = min(MAX_REPEAT, merged.get(i, 0) + times)
+        return sorted(merged.items())
+
     def _find_fish_by_name(self, name: str) -> dict[str, Any] | None:
         """按名字找鱼，支持模糊匹配。
 
@@ -5023,6 +5079,9 @@ class FishingPlugin(
             handler = self._cmd_gold_renamed(event, user_id)
         elif key in ("签到", "sign"):
             handler = self._cmd_sign(event, user_id)
+        elif key in ("重置额度", "重置次数", "重置", "reset", "重置每日", "清空额度"):
+            # v1.18.65：把「今天用掉的次数」清零（只清计数，不动任何上限）
+            handler = self._cmd_reset_quota(event, user_id, a2, after_first)
         elif key in ("订单", "任务", "order", "orders"):
             handler = self._cmd_orders(event, user_id, a2, after_first)
         elif key in ("钓点", "地点", "地图", "map", "location"):

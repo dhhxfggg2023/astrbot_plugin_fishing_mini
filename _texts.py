@@ -51,6 +51,9 @@ TEXTS: dict[str, str] = {
     # v1.18.63：限定竿「双尾」触发时那条「又上来一条」
     "cast.double": "{原文}",  # 动态文本
     "cast.double_full": "{原文}",  # 动态文本
+    # v1.18.65：管理员重置每日额度
+    "reset.done": "{原文}",  # 动态文本
+    "reset.bad": "{原文}",  # 动态文本
     "cast.multi_limit": "{原文}",  # 动态文本
     "cast.multi_busy": "🎣 上一竿还等着收\n　先 /钓鱼 拉，再谈连钓",
     "cast.multi_summary": "{原文}",  # 动态文本
@@ -287,6 +290,8 @@ SAMPLE_ORIGINAL: dict[str, str] = {
     "cast.hit": "🎣 🐟鲤鱼　💰 1,240　⚪普通　余额 3,800",
     "cast.double": "🎣 双尾竿：同一竿又上来一条 —— 🐟鲫鱼　💰 320",
     "cast.double_full": "🎣 双尾竿本想再来一条，背包满了（先 /钓鱼 卖）",
+    "reset.done": "♻️ 已重置全群的今日次数（上限一个都没改）",
+    "reset.bad": "🤔 不认识「那个」\n　可写：手气 / 姜汤 / 洗髓 / 供奉 / 彩票 / 鱼",
     "cast.junk": "🪝 钩上来一只旧鞋（杂物 +1）",
     "cast.miss_none": "🪝 空钩在水里漂了半天，鱼碰了碰就游走了",
     "cast.miss_bait": "🎣 咬了一口又吐掉了——🪱蚯蚓 白搭了",

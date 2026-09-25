@@ -2979,13 +2979,17 @@ class CommandsMixin:
                     return
                 if not (a3 or "").strip():
                     async for _r in self._say_msg(event, "item.breed_usage", event.plain_result(
-                            f"📖 /钓鱼 用 {item.get('name', item_id)} <水族馆栏位>\n"
-                            "　写上要培育的那条鱼的栏位号（1 2 3 / 1-3 都行）"
+                            f"📖 /钓鱼 用 {item.get('name', item_id)} <水族馆栏位> [×次数]\n"
+                            "　栏位号：1 2 3 / 1-3 都行\n"
+                            f"　想一次多喂几包就写 ×次数：/钓鱼 用 "
+                            f"{item.get('name', item_id)} 1×20（同一条鱼连用 20 次）"
                         )):
                         yield _r
                     return
                 self._sort_aquarium(tank)
-                picked = self._parse_indices(a3, tank)
+                # v1.18.65：**一次多次使用**（站长：「一次喂鱼十几包龙涎饲料这种」）。
+                # 认 `1×20` / `1*20` / `1x20`；多个栏位可以各带次数 `1×5 2×10`。
+                picked = self._parse_repeat_spec(a3, tank)
                 if not picked:
                     async for _r in self._say_msg(event, "item.breed_bad_slot", event.plain_result("🤔 栏位号不对，/钓鱼 水族馆 看看序号")):
                         yield _r
@@ -2996,34 +3000,42 @@ class CommandsMixin:
                 limit = _feed_bonus_daily_limit(self.cfg)
                 lines = []
                 used = 0
-                for idx in picked:
-                    if _safe_int(items.get(item_id), 0, 0) <= 0:
-                        break
+                for idx, times in picked:
                     instance = tank[idx - 1]
-                    # 两道闸门（v1.18.62）：单鱼加成上限 + **同一条鱼每天几次**
-                    # （站长：「一条鱼能用的加喂养上限的道具应该是有限并且可配置的」）
-                    blocked = _feed_bonus_block(instance, self.cfg, today)
-                    if blocked:
-                        lines.append(f"　{idx}. {blocked}")
-                        continue
-                    gain = _feed_bonus_gain(instance, bonus, self.cfg)
-                    if gain <= 0:
-                        lines.append(f"　{idx}. 这次没有提升（{_feed_bonus_mode(self.cfg)} 模式：只取最好的一次）")
-                        continue
-                    before = _safe_int(instance.get("feed_bonus"), 0, 0)
-                    instance["feed_bonus"] = min(cap, before + gain)
-                    _feed_bonus_mark(instance, today, _feed_bonus_used(instance) + 1)
-                    self._note_item_used(player, item_id, 1, items)
-                    used += 1
-                    lines.append(
-                        f"　{idx}. {_instance_line(instance, with_value=False)}"
-                        f"　投喂上限 {_feed_cap(instance, self.cfg)} 次"
-                        + (
-                            f"（这条鱼终身第 {_feed_bonus_used(instance)}/{limit} 次）"
-                            if limit > 0
-                            else ""
+                    got = 0
+                    stop_reason = ""
+                    for _round in range(times):
+                        if _safe_int(items.get(item_id), 0, 0) <= 0:
+                            stop_reason = f"{self._item_label(item_id)}用完了"
+                            break
+                        # 两道闸门（v1.18.62 / v1.18.64）：单鱼加成上限 +
+                        # **这条鱼一辈子几次**（同类「喂鱼上限」道具一起算）
+                        blocked = _feed_bonus_block(instance, self.cfg, today)
+                        if blocked:
+                            stop_reason = blocked
+                            break
+                        gain = _feed_bonus_gain(instance, bonus, self.cfg)
+                        if gain <= 0:
+                            stop_reason = f"没有提升（{_feed_bonus_mode(self.cfg)} 模式：只取最好的一次）"
+                            break
+                        before = _safe_int(instance.get("feed_bonus"), 0, 0)
+                        instance["feed_bonus"] = min(cap, before + gain)
+                        _feed_bonus_mark(instance, today, _feed_bonus_used(instance) + 1)
+                        self._note_item_used(player, item_id, 1, items)
+                        used += 1
+                        got += 1
+                    if got:
+                        lines.append(
+                            f"　{idx}. {_instance_line(instance, with_value=False)}"
+                            f"　连用 {got} 次　投喂上限 {_feed_cap(instance, self.cfg)} 次"
+                            + (
+                                f"（这条鱼终身第 {_feed_bonus_used(instance)}/{limit} 次）"
+                                if limit > 0
+                                else ""
+                            )
                         )
-                    )
+                    if stop_reason:
+                        lines.append(f"　{idx}. 停在这里：{stop_reason}")
                 if used <= 0:
                     async for _r in self._say_msg(event, "item.breed_failed", event.plain_result(
                             "🌱 没能用出去：\n" + "\n".join(lines or ["　（没有可用目标）"])
@@ -3056,13 +3068,15 @@ class CommandsMixin:
             self._sort_aquarium(aquarium)
             # 不带栏位 = 喂全缸（「喂养对所有鱼生效」）
             if not (a3 or "").strip():
-                slots = list(range(1, len(aquarium) + 1))
+                slots = [(i, 1) for i in range(1, len(aquarium) + 1)]
             else:
-                slots = self._parse_indices(a3, aquarium)
+                # v1.18.65：饲料同样支持「一次多次」——`1×5` / `全部×3`
+                slots = self._parse_repeat_spec(a3, aquarium)
             if not slots:
                 async for _r in self._say_msg(event, "item.feed_usage", event.plain_result(
-                        f"📖 /钓鱼 用 {item.get('name', item_id)} [水族馆栏位]\n"
-                        f"　不写栏位就是喂全缸；也可以写 1 2 3 / 1-3"
+                        f"📖 /钓鱼 用 {item.get('name', item_id)} [水族馆栏位] [×次数]\n"
+                        f"　不写栏位就是喂全缸；也可以写 1 2 3 / 1-3\n"
+                        f"　想一次多喂几包：/钓鱼 用 {item.get('name', item_id)} 1×20"
                     )):
                     yield _r
                 return
@@ -3073,24 +3087,32 @@ class CommandsMixin:
             grown: list[str] = []
             skipped_full: list[int] = []
             value_gain = 0
-            for idx in slots:
-                if stock <= 0:
-                    break
+            for idx, times in slots:
                 instance = aquarium[idx - 1]
-                if _safe_int(instance.get("feed_uses"), 0, 0) >= _feed_cap(
-                    instance, self.cfg
-                ):
-                    skipped_full.append(idx)
-                    continue
-                # ⚠️ 走统一的消耗口：它同时扣库存 + 记「今日用量」
-                # （每件道具的每日上限就靠这个计数；v1.18.46）
-                stock = self._note_item_used(player, item_id, 1, items)
-                used += 1
-                _, delta = _apply_feed(instance, effects)
-                value_gain += delta
-                grown.append(f"　{idx}. {_instance_line(instance, with_value=False)}"
-                             f"　{_safe_int(instance.get('feed_uses'), 0, 0)}"
-                             f"/{_feed_cap(instance, self.cfg)}")
+                got = 0
+                for _round in range(times):
+                    if stock <= 0:
+                        break
+                    if _safe_int(instance.get("feed_uses"), 0, 0) >= _feed_cap(
+                        instance, self.cfg
+                    ):
+                        if not got and idx not in skipped_full:
+                            skipped_full.append(idx)
+                        break
+                    # ⚠️ 走统一的消耗口：它同时扣库存 + 记「今日用量」
+                    # （每件道具的每日上限就靠这个计数；v1.18.46）
+                    stock = self._note_item_used(player, item_id, 1, items)
+                    used += 1
+                    got += 1
+                    _, delta = _apply_feed(instance, effects)
+                    value_gain += delta
+                if got:
+                    grown.append(
+                        f"　{idx}. {_instance_line(instance, with_value=False)}"
+                        f"　{_safe_int(instance.get('feed_uses'), 0, 0)}"
+                        f"/{_feed_cap(instance, self.cfg)}"
+                        + (f"（连喂 {got} 次）" if got > 1 else "")
+                    )
 
             if used <= 0:
                 if skipped_full:
@@ -3595,6 +3617,101 @@ class CommandsMixin:
         async for _r in self._say_msg(event, "lottery.switches", event.plain_result(
                 f"🎰 大鱼乐「{name}」= {new_value}\n\n{self._lottery_switches_text()}"
             )):
+            yield _r
+
+    # ------------------------------------------------------------ 每日额度重置
+    async def _cmd_reset_quota(
+        self, event: AstrMessageEvent, user_id: str, scope: str = "", what: str = ""
+    ):
+        """``/钓鱼 重置额度 [大家|我] [项目]`` —— 把**今天用掉的次数**清零（v1.18.65）。
+
+        站长要的是「方便的全局次数重置，不用去加上限」：
+
+        * 只清**用掉多少**（``daily_used``、每天日期标记、以及每条鱼自己的
+          洗髓次数 / 加投喂上限次数），**一个上限配置都不改**；
+        * ``大家`` = 全群每个玩家都清（默认）；``我`` = 只清自己；
+        * 项目可选：手气 / 姜汤 / 洗髓 / 供奉 / 彩票 / 鱼（只清每条鱼那两项）；
+          不写 = 全清。
+        """
+        raw = f"{scope or ''} {what or ''}".strip()
+        parts = [p for p in raw.replace("　", " ").split() if p]
+        target_all = True
+        if parts and parts[0] in ("我", "自己", "me"):
+            target_all = False
+            parts = parts[1:]
+        elif parts and parts[0] in ("大家", "全群", "所有人", "all", "全体"):
+            target_all = True
+            parts = parts[1:]
+        which = (parts[0] if parts else "").strip()
+
+        quota_map = {
+            "手气": ["buff"], "buff": ["buff"],
+            "姜汤": ["heal"], "回体力": ["heal"], "heal": ["heal"],
+            "洗髓": ["reroll"], "洗髓丹": ["reroll"], "reroll": ["reroll"],
+            "供奉": ["offering"], "香火": ["offering"], "offering": ["offering"],
+            "彩票": ["lottery"], "大鱼乐": ["lottery"], "lottery": ["lottery"],
+        }
+        keys = quota_map.get(which) if which else None
+        fish_only = which in ("鱼", "每条鱼", "鱼身上", "fish")
+        if which and keys is None and not fish_only:
+            async for _r in self._say_msg(event, "reset.bad", event.plain_result(
+                    f"🤔 不认识「{which}」\n"
+                    "　可写：手气 / 姜汤 / 洗髓 / 供奉 / 彩票 / 鱼（每条鱼那份）\n"
+                    "　不写就是全清。例：/钓鱼 重置额度 大家　/钓鱼 重置额度 我 手气"
+            )):
+                yield _r
+            return
+
+        done_players = 0
+        cleared_total: dict[str, int] = {}
+        fish_total = 0
+        try:
+            users = (
+                [str(x) for x in await self._player_ids()] if target_all else [str(user_id)]
+            )
+            for uid in users:
+                player = await self._load_player(uid)
+                changed = False
+                if not fish_only:
+                    if keys is None:
+                        cleared = _daily_quota_reset(player)
+                    else:
+                        used = player.get("daily_used")
+                        cleared = {}
+                        if isinstance(used, dict):
+                            for key in keys:
+                                value = max(0, _safe_int(used.get(key), 0, 0))
+                                if value:
+                                    cleared[key] = value
+                                used.pop(key, None)
+                        player["daily_date"] = ""      # 让下次结算重新开账
+                    for key, value in cleared.items():
+                        cleared_total[key] = cleared_total.get(key, 0) + value
+                    changed = changed or bool(cleared)
+                if keys is None or fish_only:
+                    touched = _per_fish_limit_reset(player)
+                    fish_total += touched
+                    changed = changed or touched > 0
+                if changed:
+                    await self._save_player(player)
+                    done_players += 1
+        except Exception as e:                                            # pragma: no cover
+            logger.warning(f"重置额度失败：{e}")
+
+        name_of = {k: label for k, label, _cfg in DAILY_QUOTA_KEYS}
+        detail = "、".join(
+            f"{name_of.get(k, k)} {v} 次" for k, v in cleared_total.items()
+        ) or "没有用掉的次数"
+        who = "全群" if target_all else "你"
+        async for _r in self._say_msg(event, "reset.done", event.plain_result(
+                f"♻️ 已重置{who}的今日次数（上限一个都没改）\n"
+                f"　清掉的额度：{detail}\n"
+                f"　每条鱼的洗髓 / 喂上限次数也清了：{fish_total} 条\n"
+                f"　动到数据的玩家：{done_players} 个\n"
+                "💡 只清「今天用掉多少」和「每条鱼用掉几次」；上限（手气额度 / 姜汤次数 /"
+                " 洗髓次数 / 供奉次数 / 彩票张数 / 每条鱼的喂上限道具次数）照旧，"
+                "要改上限去编辑器「⚙️ 数值」页。"
+        )):
             yield _r
 
     def _lottery_buy_tickets(self, player: dict[str, Any], want: int) -> tuple[int, int, int]:

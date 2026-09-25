@@ -176,6 +176,65 @@ def _daily_used(player: dict[str, Any], key: str) -> int:
     return max(0, _safe_int(used.get(key), 0, 0))
 
 
+#: 所有「按天算」的额度：key -> (中文名, 对应的配置上限键)。
+#: 站点重置按钮、档案里的「今日额度」行、测试都读这一张表（只此一处）。
+DAILY_QUOTA_KEYS: tuple[tuple[str, str, str], ...] = (
+    ("buff", "手气道具", "buff_daily_cast_limit"),
+    ("heal", "回体力（姜汤）", "hot_soup_daily_limit"),
+    ("reroll", "洗髓丹", "reroll_daily_total"),
+    ("offering", "香火供奉", "offering_daily_limit"),
+    ("lottery", "大鱼乐购票", "lottery_daily_limit"),
+)
+
+
+def _daily_quota_reset(player: dict[str, Any]) -> dict[str, int]:
+    """把玩家**今天用掉的额度**清零（v1.18.65）。
+
+    ⚠️ 只清「用掉多少」，**不动任何上限配置**
+    （``buff_daily_cast_limit`` / ``hot_soup_daily_limit`` / ``reroll_daily_total`` /
+    ``offering_daily_limit`` / ``lottery_daily_limit`` 一个都不改）——
+    站长要的是「重置每日的次数」，不是「把上限调大」。
+    返回 ``{额度键: 这次清掉了多少}``（只含非零项，用来给一句人话回执）。
+    """
+    used = player.get("daily_used")
+    cleared: dict[str, int] = {}
+    if isinstance(used, dict):
+        for key, _label, _cfg_key in DAILY_QUOTA_KEYS:
+            left = max(0, _safe_int(used.get(key), 0, 0))
+            if left:
+                cleared[key] = left
+        player["daily_used"] = {}
+    else:
+        player["daily_used"] = {}
+    # 日期标记也一起清：下一次 ``_daily_roll`` 会当成全新的一天重新开账
+    player["daily_date"] = ""
+    return cleared
+
+
+def _per_fish_limit_reset(player: dict[str, Any]) -> int:
+    """把「每条鱼自己的次数」也清掉（洗髓丹次数 + 加投喂上限次数）。
+
+    ⚠️ 这两项**不在** ``daily_used`` 里，而是记在鱼身上
+    （``reroll_day/reroll_today``、``feed_bonus_used``），所以要逐条清。
+    同样只清计数，不动 ``reroll_daily_limit`` / ``feed_bonus_lifetime_limit`` 这些上限。
+    返回清过几条鱼。
+    """
+    touched = 0
+    for fish in (player.get("aquarium") or []):
+        if not isinstance(fish, dict):
+            continue
+        had = (
+            _safe_int(fish.get("reroll_today"), 0, 0) > 0
+            or _safe_int(fish.get("feed_bonus_used"), 0, 0) > 0
+        )
+        fish["reroll_day"] = ""
+        fish["reroll_today"] = 0
+        fish["feed_bonus_used"] = 0
+        if had:
+            touched += 1
+    return touched
+
+
 def _daily_left(player: dict[str, Any], key: str, limit: Any) -> int | None:
     """今天这个额度还剩多少；``limit <= 0`` 表示不限额（返回 ``None``）。"""
     cap = _safe_int(limit, 0, 0)
@@ -200,19 +259,14 @@ def _daily_line(
 ) -> str:
     """档案里那行「今日额度」（没开任何限额时返回空串，不占版面）。"""
     parts: list[str] = []
-    for key, label, unit, cfg_key in (
-        ("buff", "手气", "竿", "buff_daily_cast_limit"),
-        ("heal", "回体力", "次", "hot_soup_daily_limit"),
-        ("reroll", "洗髓丹", "颗", "reroll_daily_total"),
-        ("offering", "供奉", "次", "offering_daily_limit"),
-    ):
+    for key, label, cfg_key in DAILY_QUOTA_KEYS:
         cap = _safe_int((cfg or {}).get(cfg_key), 0, 0)
         if cap <= 0:
             continue
-        parts.append(f"{label} {_daily_used(player, key)}/{cap} {unit}".rstrip())
+        parts.append(f"{label} {_daily_used(player, key)}/{cap}")
     if not parts:
         return ""
-    return "📅 今日额度：" + "・".join(parts) + "（每天 0 点重置）"
+    return "📅 今日额度：" + "・".join(parts) + "（每天 0 点重置；也可以 /钓鱼 重置额度 立刻清）"
 
 
 def _pond_income(
@@ -1974,28 +2028,16 @@ def _feed_bonus_cap(cfg: dict[str, Any]) -> int:
 
 
 def _feed_bonus_daily_limit(cfg: dict[str, Any]) -> int:
-    """**同一条鱼一辈子**最多能用几次育灵水/珍珠梳。
+    """**同一条鱼一辈子**最多能用几次「加投喂上限」的道具（喂鱼上限道具）。
 
-    ⚠️ 为什么这么绕（v1.18.64 踩过的坑）：新键 ``feed_bonus_lifetime_limit`` 一旦进了
-    DEFAULTS，升级时就会被同步进配置（值 = 默认 2），于是**老键被永久压住** ——
-    站长的老键明明写着 0（不限），却忽然变成终身 2 次。所以这里按优先级取：
+    配置键 ``feed_bonus_lifetime_limit``（v1.18.64 正名；v1.18.62 叫
+    ``feed_bonus_daily_limit``，语义当时是「每天几次」）。
 
-    1. 新键被**站长亲手改过**（在 ``user_edited_keys`` 里）-> 用新键；
-    2. 否则有老键 ``feed_bonus_daily_limit`` -> 用老键（老配置的口径就是他想要的）；
-    3. 都没有 -> 默认 2。
-
+    v1.18.65 起**只认新键**：``main._refresh_config`` 会把老键的值迁移过来并删掉老键，
+    所以这里读一个键就够了（不再有「两个键谁优先」那种历史遗留）。
     填 0 = 不限（只受 ``feed_bonus_cap`` 约束）。
     """
-    data = cfg or {}
-    edited = data.get("user_edited_keys")
-    edited_set = {str(x) for x in edited} if isinstance(edited, (list, tuple, set)) else set()
-    if "feed_bonus_lifetime_limit" in edited_set and "feed_bonus_lifetime_limit" in data:
-        return max(0, _safe_int(data.get("feed_bonus_lifetime_limit"), 2, 0))
-    if "feed_bonus_daily_limit" in data:
-        return max(0, _safe_int(data.get("feed_bonus_daily_limit"), 2, 0))
-    if "feed_bonus_lifetime_limit" in data:
-        return max(0, _safe_int(data.get("feed_bonus_lifetime_limit"), 2, 0))
-    return 2
+    return max(0, _safe_int((cfg or {}).get("feed_bonus_lifetime_limit"), 2, 0))
 
 
 def _feed_bonus_mode(cfg: dict[str, Any]) -> str:
@@ -2906,6 +2948,9 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("cast.hit", "cast", "钓到鱼之后那条结果", "cast"),
     ("cast.double", "cast", "双尾竿触发：同一竿又上来一条（v1.18.63）", "cast"),
     ("cast.double_full", "cast", "双尾竿触发但背包满了", "cast"),
+    # v1.18.65：管理员重置每日额度（/钓鱼 重置额度）
+    ("reset.done", "cast", "重置掉玩家今日次数之后那条回执", "cast"),
+    ("reset.bad", "cast", "重置额度时项目名写错了", "cast"),
     ("cast.junk", "cast", "这一竿钩上的是杂物", "cast"),
     ("cast.miss_none", "cast", "空竿：空钩没鱼理", ""),
     ("cast.miss_bait", "cast", "空竿：咬了一口又吐掉", ""),

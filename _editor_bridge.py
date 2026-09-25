@@ -1816,6 +1816,8 @@ class EditorBridgeMixin(EditorApiMixin):
             "legacy_import": self._editor_legacy_import,
             # 只是收起页面那块面板（+ 让插件忘掉缓存的扫描结果），不碰任何数据
             "legacy_clear": self._editor_legacy_clear,
+            # ♻️ 重置每日次数（v1.18.65）：只清「今天用掉多少」，不动任何上限配置
+            "reset_quota": self._editor_reset_quota,
         }
         handler = handlers.get(str(action or "").strip())
         if handler is None:
@@ -1826,6 +1828,47 @@ class EditorBridgeMixin(EditorApiMixin):
         except Exception as e:  # pragma: no cover - 单条指令失败不该拖垮轮询
             _log_warning(f"编辑器动作「{action}」执行失败：{e}")
             return False, f"动作「{action}」执行失败：{e}"
+
+    # ---------------------------------------------------------- reset_quota
+    async def _editor_reset_quota(self, payload: dict[str, Any]) -> tuple[bool, str]:
+        """♻️ 重置**每日次数**（v1.18.65）—— 只清计数，**不动任何上限配置**。
+
+        站长：「给大鱼乐加全局次数重置按钮功能，方便重置每日的次数而且不用直接加上限」。
+        ``scope``：``all``（默认）= 全群每个玩家；``me`` = 只清页面当前选中的玩家
+        （没选中就退化成 all，并在回执里说清）。
+        """
+        scope = str(payload.get("scope") or "all").strip().lower()
+        want_all = scope != "me"
+        target = str(payload.get("user_id") or "").strip()
+        if not want_all and not target:
+            want_all = True
+        ids = [str(x) for x in await self._player_ids()] if want_all else [target]
+        stored = 0
+        fish_reset = 0
+        quota_reset: dict[str, int] = {}
+        from _calc import DAILY_QUOTA_KEYS, _daily_quota_reset, _per_fish_limit_reset
+
+        for uid in ids:
+            try:
+                player = await self._load_player(uid)
+            except Exception:                                             # pragma: no cover
+                continue
+            cleared = _daily_quota_reset(player)
+            touched = _per_fish_limit_reset(player)
+            if cleared or touched:
+                for key, value in cleared.items():
+                    quota_reset[key] = quota_reset.get(key, 0) + value
+                fish_reset += touched
+                stored += 1
+                await self._save_player(player)
+        name_of = {k: label for k, label, _cfg in DAILY_QUOTA_KEYS}
+        detail = "、".join(f"{name_of.get(k, k)} {v} 次" for k, v in quota_reset.items())
+        who = "全群" if want_all else f"玩家 {target}"
+        return True, (
+            f"已重置{who}的每日次数（上限一个都没改）。"
+            f"清掉的额度：{detail or '本来就没用掉'}；"
+            f"每条鱼的洗髓/喂上限次数也清了 {fish_reset} 条；动到数据 {stored} 人。"
+        )
 
     # ------------------------------------------------------------ save_content
     async def _editor_save_content(self, payload: dict[str, Any]) -> tuple[bool, str]:

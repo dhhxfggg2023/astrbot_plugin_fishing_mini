@@ -7952,7 +7952,7 @@ async def main():
     # ---- 14.1 内置写法总表：自检 + 与真实分派链的一致性 ----
     kw = mod.SUBCOMMAND_KEYWORDS
     check(
-        len(kw) == 33,
+        len(kw) == 34,
         f"子命令总表 {len(kw)} 行（v1.18.13 商店拆成鱼竿/道具/鱼饵，外加「买」；"
         f"v1.18.17 又加了 自动/称号/供奉；v1.18.51 加了大鱼乐）",
     )
@@ -8352,7 +8352,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 147,
+        len(_schema) == 146,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8370,7 +8370,7 @@ async def main():
         f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode"
         f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）"
         f" + v1.18.52 的三个开关（总开关/出异色/强制奖级）"
-        f" + v1.18.62/64 的育灵水四项（终身上限 / 旧键 / 叠加方式 / 加成上限）；"
+        f" + v1.18.62/65 的喂鱼上限道具三项（终身上限 / 叠加方式 / 加成上限）；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -8379,7 +8379,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 144, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 143, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -9708,7 +9708,7 @@ async def main():
     # --- v1.18.62：育灵水/珍珠梳的「每条鱼每天几次」闸门（站长报的数值膨胀）---
     # 站长原话：「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
     #             之前就不能配置导致数值膨胀了」。
-    plugin_fb = make_plugin(dict(_CFG, feed_bonus_daily_limit=2, feed_bonus_cap=20))
+    plugin_fb = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=2, feed_bonus_cap=20))
     ev_fb = FakeEvent("96004")
     p_fb = await plugin_fb._load_player("96004")
     p_fb["aquarium"] = [mod._new_instance("carp", 1.0)]
@@ -9745,7 +9745,7 @@ async def main():
         f"{p_fb['aquarium'][0].get('feed_bonus_used')}",
     )
     # 0 = 不限（回到旧行为，给想放开的人留口子）
-    plugin_free_fb = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_cap=20))
+    plugin_free_fb = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=0, feed_bonus_cap=20))
     p_free = await plugin_free_fb._load_player("96005")
     p_free["aquarium"] = [mod._new_instance("carp", 1.0)]
     p_free["items"]["growth_tonic"] = 9
@@ -9755,11 +9755,124 @@ async def main():
     p_free = await plugin_free_fb._load_player("96005")
     check(
         mod._safe_int(p_free["aquarium"][0].get("feed_bonus"), 0, 0) == 20,
-        f"feed_bonus_daily_limit=0 = 不限（一路喂到加成上限 20）-> "
+        f"feed_bonus_lifetime_limit=0 = 不限（一路喂到加成上限 20）-> "
         f"{p_free['aquarium'][0].get('feed_bonus')}",
     )
+    # ---- v1.18.65：一次性多次使用（站长：「一次喂鱼十几包龙涎饲料这种」）----
+    _tank3 = [mod._new_instance("carp", 1.0) for _ in range(3)]
+    check(
+        plugin_fb._parse_repeat_spec("1×20", _tank3) == [(1, 20)]
+        and plugin_fb._parse_repeat_spec("1*20", _tank3) == [(1, 20)]
+        and plugin_fb._parse_repeat_spec("1x20", _tank3) == [(1, 20)],
+        f"三种写法都认 -> {plugin_fb._parse_repeat_spec('1×20', _tank3)}",
+    )
+    check(
+        plugin_fb._parse_repeat_spec("1-3", _tank3) == [(1, 1), (2, 1), (3, 1)]
+        and plugin_fb._parse_repeat_spec("1-3×5", _tank3) == [(1, 5), (2, 5), (3, 5)],
+        "区间照旧；区间还能各带次数（1-3×5）",
+    )
+    check(
+        plugin_fb._parse_repeat_spec("1×5 1×3", _tank3) == [(1, 8)]
+        and plugin_fb._parse_repeat_spec("全部", _tank3) == [(1, 1), (2, 1), (3, 1)],
+        "同一栏位写多次会合并；「全部」= 全缸各一次",
+    )
+    check(
+        plugin_fb._parse_repeat_spec("999x2", _tank3) == []
+        and plugin_fb._parse_repeat_spec("0", _tank3) == [],
+        "越界/坏写法一律解析成空（不会误喂）",
+    )
+    # 真跑一次：上限 20、育灵水 +5 -> `1×20` 应该用掉 4 个、堆到 20 就停
+    plugin_many = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=0, feed_bonus_cap=20))
+    p_many = await plugin_many._load_player("96007")
+    p_many["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_many["items"]["growth_tonic"] = 30
+    await plugin_many._save_player(p_many)
+    _out_many = text_of(await cmd(plugin_many, FakeEvent("96007"), "用", "育灵水", "1×20"))
+    p_many = await plugin_many._load_player("96007")
+    check(
+        mod._safe_int(p_many["aquarium"][0].get("feed_bonus"), 0, 0) == 20
+        and mod._safe_int(p_many["items"].get("growth_tonic"), 0, 0) == 26,
+        f"一次 1×20：堆到加成上限 20 就停，只用掉 4 个 -> "
+        f"加成 {p_many['aquarium'][0].get('feed_bonus')}、剩 {p_many['items'].get('growth_tonic')}",
+    )
+    check(
+        "连用" in _out_many and "停在这里" in _out_many,
+        f"回执里写清连用了几次、停在哪 -> {[l for l in _out_many.splitlines() if '连用' in l or '停在这里' in l][:2]}",
+    )
+    # 库存不够时停下（先把加成清零，否则会先撞「加成已满」那道闸门）
+    p_many["aquarium"][0]["feed_bonus"] = 0
+    p_many["items"]["growth_tonic"] = 1
+    await plugin_many._save_player(p_many)
+    _out_short = text_of(await cmd(plugin_many, FakeEvent("96007"), "用", "育灵水", "1×20"))
+    p_many = await plugin_many._load_player("96007")
+    check(
+        mod._safe_int(p_many["items"].get("growth_tonic"), 0, 0) == 0
+        and "用完了" in _out_short,
+        f"道具用光就停，不会扣成负数 -> 剩 {p_many['items'].get('growth_tonic')}",
+    )
+
+    # ---- v1.18.65：♻️ 重置每日次数（只清计数，不动上限）----
+    _qlim = dict(
+        _CFG,
+        buff_daily_cast_limit=20,
+        hot_soup_daily_limit=3,
+        reroll_daily_total=5,
+        offering_daily_limit=1,
+        lottery_daily_limit=50,
+    )
+    plugin_q = make_plugin(_qlim)
+    p_q = await plugin_q._load_player("96008")
+    p_q["daily_date"] = "2026-01-01"
+    p_q["daily_used"] = {"buff": 20, "heal": 3, "lottery": 7}
+    p_q["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_q["aquarium"][0]["feed_bonus_used"] = 2
+    p_q["aquarium"][0]["reroll_day"] = "2026-01-01"
+    p_q["aquarium"][0]["reroll_today"] = 5
+    await plugin_q._save_player(p_q)
+    _out_q = text_of(await cmd(plugin_q, FakeEvent("96008"), "重置额度", "我"))
+    p_q = await plugin_q._load_player("96008")
+    check(
+        mod._daily_used(p_q, "buff") == 0
+        and mod._daily_used(p_q, "heal") == 0
+        and mod._daily_used(p_q, "lottery") == 0,
+        f"额度计数清零 -> {p_q.get('daily_used')}",
+    )
+    check(
+        mod._safe_int(p_q["aquarium"][0].get("feed_bonus_used"), 0, 0) == 0
+        and mod._safe_int(p_q["aquarium"][0].get("reroll_today"), 0, 0) == 0,
+        "每条鱼自己的洗髓次数 / 喂上限次数也清了",
+    )
+    check(
+        mod._safe_int(plugin_q.cfg.get("buff_daily_cast_limit"), 0, 0) == 20
+        and mod._safe_int(plugin_q.cfg.get("hot_soup_daily_limit"), 0, 0) == 3
+        and mod._safe_int(plugin_q.cfg.get("reroll_daily_total"), 0, 0) == 5
+        and mod._safe_int(plugin_q.cfg.get("offering_daily_limit"), 0, 0) == 1
+        and mod._safe_int(plugin_q.cfg.get("lottery_daily_limit"), 0, 0) == 50,
+        "**上限一个都没改**（这是站长特意要的：重置次数不等于加上限）",
+    )
+    check(
+        "已重置" in _out_q and "手气" in _out_q and "上限一个都没改" in _out_q,
+        f"回执说清清了什么 -> {_out_q.strip().splitlines()[:2]}",
+    )
+    # 项目过滤：只清手气
+    p_q["daily_used"] = {"buff": 9, "heal": 2}
+    await plugin_q._save_player(p_q)
+    await cmd(plugin_q, FakeEvent("96008"), "重置额度", "我", "手气")
+    p_q = await plugin_q._load_player("96008")
+    check(
+        mod._daily_used(p_q, "buff") == 0 and mod._daily_used(p_q, "heal") == 2,
+        f"只清指定项目 -> {p_q.get('daily_used')}",
+    )
+    # 项目写错给指路，不乱清
+    _out_bad_q = text_of(await cmd(plugin_q, FakeEvent("96008"), "重置额度", "臭豆腐"))
+    p_q = await plugin_q._load_player("96008")
+    check(
+        "不认识" in _out_bad_q and mod._daily_used(p_q, "heal") == 2,
+        f"项目名写错只说一句、不清数据 -> {_out_bad_q.strip().splitlines()[0][:30]}",
+    )
+
     # best 模式：只取最好的一次，同档重复不再涨
-    plugin_best = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_mode="best"))
+    plugin_best = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=0, feed_bonus_mode="best"))
     p_best = await plugin_best._load_player("96006")
     p_best["aquarium"] = [mod._new_instance("carp", 1.0)]
     p_best["items"]["growth_tonic"] = 5
@@ -9790,14 +9903,19 @@ async def main():
         f"{p_cap['aquarium'][0].get('feed_bonus')}",
     )
     check("上限" in _out_cap, f"到加成上限时给出原因 -> {_out_cap.strip().splitlines()[-1][:50]}")
-    # 默认值：每条鱼每天 2 次（这是这次「数值膨胀」的修复口径）
+    # 默认值：每条鱼**一辈子** 2 次（这是「数值膨胀」的修复口径；v1.18.65 起只有一个键）
     check(
-        mod.DEFAULTS["feed_bonus_daily_limit"] == 2
+        mod.DEFAULTS["feed_bonus_lifetime_limit"] == 2
         and mod.DEFAULTS["feed_bonus_cap"] == 20
         and mod.DEFAULTS["feed_bonus_mode"] == "add",
-        f"默认 = 每条鱼每天 2 次 / 加成上限 20 / 叠加 -> "
-        f"{mod.DEFAULTS['feed_bonus_daily_limit']}/{mod.DEFAULTS['feed_bonus_cap']}/"
+        f"默认 = 每条鱼终身 2 次 / 加成上限 20 / 叠加 -> "
+        f"{mod.DEFAULTS['feed_bonus_lifetime_limit']}/{mod.DEFAULTS['feed_bonus_cap']}/"
         f"{mod.DEFAULTS['feed_bonus_mode']}",
+    )
+    check(
+        "feed_bonus_daily_limit" not in mod.DEFAULTS
+        and "feed_bonus_lifetime_limit" in mod.DEFAULTS,
+        "v1.18.65 起只留一个键（feed_bonus_lifetime_limit），不再有「旧键/新键」两个都摆着",
     )
 
     # --- 锦鲤玉佩：持续 20 竿的**品质保底**（v1.18.23 改成 quality_floor）---
@@ -10828,6 +10946,9 @@ async def main():
             hot_soup_daily_limit=0,
             reroll_daily_total=0,
             offering_daily_limit=0,
+            # ⚠️ v1.18.65：大鱼乐购票也算「每日额度」了（DAILY_QUOTA_KEYS），别忘了它，
+            # 否则档案那行会因为它默认 50 而显示出来。
+            lottery_daily_limit=0,
         )
     )
     check(
@@ -12133,6 +12254,8 @@ async def main():
                    "pull.hook", "story.prompt",
                    # v1.18.63：限定竿「双尾」的两条回复也继承 cast 的按钮
                    "cast.double", "cast.double_full",
+                   # v1.18.65：重置额度的两条回执
+                   "reset.done", "reset.bad",
                    # v1.18.13：商店拆成三家，两家货架 / 两条用法说明 / 拆店提示
                    # 都继承「共用按钮组」，所以老配置里给 shop.list 配的按钮照样生效
                    "shop.bait_list", "shop.item_list",
