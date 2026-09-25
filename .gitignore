@@ -49,3 +49,5 @@ _task*.ps1
 
 _t.txt
 _d_*.txt
+_audit*.py
+_probe*.py
