@@ -1773,7 +1773,151 @@ def _apply_feed(instance: dict[str, Any], effects: dict[str, float]) -> tuple[di
     instance["feed_uses"] = _safe_int(instance.get("feed_uses"), 0, 0) + 1
 
     gained = {key: attrs[key] - before[key] for key in ATTR_WEIGHTS}
-    return gained, _instance_value(instance) - old_value
+    delta = _instance_value(instance) - old_value
+    # v1.18.78：**只有直接改数值的道具**才记台账（洗髓丹不记）
+    if _item_changes_numbers(effects):
+        _ledger(
+            instance, "feed",
+            item=str(effects.get("__item__") or ""),
+            value_delta=delta,
+            attrs_delta=gained,
+        )
+    return gained, delta
+
+
+# ---------------------------------------------------------------------------
+# 水族馆「道具台账」（v1.18.78）：每条鱼被**哪件道具**改了多少数值
+# ---------------------------------------------------------------------------
+# 站长：「以后每条水族馆的鱼被执行的操作都要记下来，这样方便削减数值之类的」
+# 　　→「洗髓不需要记，因为数值不一定会变，**只有直接改变数值的道具**需要注意，
+# 　　　 这样也许可以在更新之后退回使用的道具」。
+#
+# 所以台账**只记「直接加数值」的道具**：`meat/spirit/sheen/value_up`（饲料、仙露、
+# 龙涎饲料）与 `feed_bonus`（育灵水、珍珠梳）。洗髓丹不记 —— 它改的是重掷结果，
+# 数值变不变看运气，记了也退不回去。缸级道具（装饰/香/玉佩/姜汤）也不记在这本账上。
+#
+# 记账口径是**增量 + 来源**：能按道具精确回退（「把某件道具加的价值/次数扣回来」），
+# 而不是只知道一个总数。
+#
+# ⚠️ 只留最近 `LEDGER_KEEP` 笔（存档是 KV JSON，不能无限长）。淘汰旧记录时把它们
+# 的增量并进 `carry`，所以**按道具的累计永远对得上**。
+LEDGER_KEEP = 40
+
+#: 「会直接改一条鱼数值」的效果键 —— 只有用了带这些效果的道具才记台账
+DIRECT_VALUE_KEYS: tuple[str, ...] = (
+    "meat", "spirit", "sheen", "value_up", "feed_bonus",
+)
+
+
+def _item_changes_numbers(effects: dict[str, Any]) -> bool:
+    """这件道具是不是「直接改数值」的那一类（决定要不要记台账）。"""
+    for key in DIRECT_VALUE_KEYS:
+        try:
+            if int(round(_safe_number(effects.get(key), 0))) != 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _ledger(
+    instance: dict[str, Any],
+    action: str,
+    *,
+    item: str = "",
+    value_delta: int = 0,
+    attrs_delta: dict[str, int] | None = None,
+    note: str = "",
+) -> None:
+    """给一条鱼记一笔台账（原地写 ``instance["log"]``）。
+
+    * ``action``：`feed`（投喂，直接加属性/价值）/ `cap`（加上限）
+    * ``item``  ：**必须写清是哪件道具** —— 以后要「把道具退回去」全靠它
+    * 每条记录带 ``ts`` 与当时的累计 ``value`` / ``attrs``（方便对账）
+    """
+    if not item:
+        return                      # 没有来源就不记（退不回去的记录没有意义）
+    try:
+        log = instance.get("log")
+        if not isinstance(log, list):
+            log = []
+        entry: dict[str, Any] = {
+            "ts": int(time.time()),
+            "do": str(action),
+            "item": str(item),
+        }
+        if value_delta:
+            entry["dvalue"] = int(value_delta)
+        if attrs_delta:
+            real = {k: int(v) for k, v in attrs_delta.items() if int(v)}
+            if real:
+                entry["dattrs"] = real
+        if note:
+            entry["note"] = str(note)[:40]
+        # 累计口径：和上一笔的累计相加，保证「最后一条 = 当前状态」
+        entry["value"] = _safe_int(instance.get("value"), 0, 0)
+        entry["attrs"] = {
+            k: _safe_int((instance.get("attrs") or {}).get(k), int(ATTR_PAR), 0)
+            for k in ATTR_WEIGHTS
+        }
+        if log and isinstance(log[-1], dict) and log[-1].get("do") == entry["do"] \
+                and log[-1].get("item") == entry["item"] \
+                and entry["ts"] - _safe_int(log[-1].get("ts"), 0, 0) <= 1:
+            # 同一秒内同一道具（比如「用 龙涎饲料 1-5」连喂）合并成一笔，别刷屏
+            prev = log[-1]
+            prev["dvalue"] = _safe_int(prev.get("dvalue"), 0, 0) + int(value_delta)
+            merged = prev.get("dattrs")
+            merged = dict(merged) if isinstance(merged, dict) else {}
+            for k, v in (attrs_delta or {}).items():
+                if int(v):
+                    merged[k] = _safe_int(merged.get(k), 0, 0) + int(v)
+            if merged:
+                prev["dattrs"] = merged
+            prev["n"] = _safe_int(prev.get("n"), 1, 1) + 1
+            prev["value"] = entry["value"]
+            prev["attrs"] = entry["attrs"]
+            if note:
+                prev["note"] = str(note)[:40]
+        else:
+            log.append(entry)
+        if len(log) > LEDGER_KEEP:
+            # 淘汰最旧的一笔：把它的增量并进新的第一笔（按道具的累计不丢）
+            dropped = log.pop(0)
+            log[0]["carry"] = _safe_int(log[0].get("carry"), 0, 0) + _safe_int(
+                dropped.get("dvalue"), 0, 0
+            )
+            if isinstance(dropped.get("dattrs"), dict):
+                first = log[0].get("dattrs")
+                first = dict(first) if isinstance(first, dict) else {}
+                for k, v in dropped["dattrs"].items():
+                    first[k] = _safe_int(first.get(k), 0, 0) + _safe_int(v, 0, 0)
+                log[0]["dattrs"] = first
+        instance["log"] = log
+    except Exception:                                                     # pragma: no cover
+        pass          # 记账失败绝不能影响玩法本身
+
+
+def _ledger_by_item(instance: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """按**道具**汇总这条鱼被喂出来的价值与次数（含被淘汰记录里的 carry）。
+
+    以后站长要「削减数值 / 退回道具」时，看这一份就知道：
+    哪件道具、用了几次、一共给它加了多少价值。
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for entry in instance.get("log") or []:
+        if not isinstance(entry, dict):
+            continue
+        item = str(entry.get("item") or "")
+        if not item:
+            continue
+        row = out.setdefault(item, {"count": 0, "value": 0, "attrs": {}})
+        row["count"] += max(1, _safe_int(entry.get("n"), 1, 1))
+        row["value"] += _safe_int(entry.get("dvalue"), 0, 0) + _safe_int(
+            entry.get("carry"), 0, 0
+        )
+        for k, v in (entry.get("dattrs") or {}).items():
+            row["attrs"][k] = _safe_int(row["attrs"].get(k), 0, 0) + _safe_int(v, 0, 0)
+    return out
 
 def _quality_label(multiplier: float) -> tuple[str, str]:
     """根据品质倍率反推个体品质名与 emoji。"""
@@ -2171,6 +2315,12 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         # v1.18.77：站长把全局投喂上限调低时，已经喂超的鱼记一笔「债」抵在原上限上
         # —— 那条鱼保持原样不能再喂，但**已喂出来的属性与价值一点不少**
         "feed_debt": max(0, _safe_int(raw.get("feed_debt"), 0, 0)),
+        # v1.18.78：**道具台账** —— 每条鱼被「直接改数值的道具」改了多少（按道具可回退）。
+        # ⚠️ 必须在白名单里：漏了的话每次读档就把台账清空，等于没记（踩过这个坑的字段不止一个）
+        "log": [
+            e for e in (raw.get("log") or [])
+            if isinstance(e, dict) and e.get("item")
+        ][-40:],
         # 洗髓丹的「今天吃了几颗」：跨天自动作废（只记日期 + 次数，不需要定时任务）
         # ⚠️ 同样必须列在白名单里，否则每次读档都把当天次数清零，限制就失效了
         "reroll_day": str(raw.get("reroll_day") or ""),
@@ -3095,6 +3245,7 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("orders.submit_result", "orders", "交单结果", ""),
     # ---- 水族馆 ----
     ("aquarium.view", "aquarium", "水族馆总览", ""),
+    ("aquarium.log", "aquarium", "道具台账（哪件道具改了多少数值）", ""),
     ("aquarium.usage", "aquarium", "水族馆用法说明", ""),
     ("aquarium.max", "aquarium", "水族馆已经扩到最大", ""),
     ("aquarium.no_gold", "aquarium", "扩建金币不足", ""),

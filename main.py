@@ -236,6 +236,13 @@ BUILTIN_COMMAND_WORDS: frozenset[str] = frozenset(
 #: 会被当成「点了没反应的死按钮」丢掉（写按钮表时还看不到任何报错）。
 CALC.BUTTON_COMMAND_WORDS.update(BUILTIN_COMMAND_WORDS)
 
+#: v1.18.78：**凡是在分派链里单独认的短写法，也要进按钮白名单** ——
+#: 「台账」不在 SUBCOMMAND_KEYWORDS 里（那是「内置写法保护」表，台账不需要保护），
+#: 所以上面那一句同步不到它，得在这里补一次。漏了的话 `/钓鱼 台账` 按钮会被
+#: `_button_command_ok` 当死按钮丢掉（表现：按钮表里明明写了，界面上没有）。
+AQUARIUM_LOG_WORDS: tuple[str, ...] = ("台账", "明细", "log")
+CALC.BUTTON_COMMAND_WORDS.update(AQUARIUM_LOG_WORDS)
+
 #: 运行时的「别名 → 规范子命令」表：**只装站长新加的别名**，
 #: 内置写法一个都不装（分派链自己认），所以默认配置下它是空的、行为零变化。
 COMMAND_ALIASES: dict[str, str] = {}
@@ -3775,6 +3782,31 @@ class FishingPlugin(
             await self._save_player(player)
         return player
 
+    def _ledger(
+        self, instance: dict[str, Any], action: str, **kwargs: Any
+    ) -> None:
+        """给一条鱼记台账（薄包装：真正的实现在 `_calc._ledger`）。
+
+        为什么要包一层：`_calc` 是**纯函数模块**，它的成员只注入 main 的命名空间，
+        兄弟模块（`_commands` / `_engine`）里 `_ledger(...)` 是**取不到的**（会 NameError，
+        这类坑踩过不止一次）。走实例方法就永远不会错。
+        """
+        if CALC is None:                                                  # pragma: no cover
+            return
+        try:
+            CALC._ledger(instance, action, **kwargs)
+        except Exception:                                                 # pragma: no cover
+            pass          # 记账失败绝不能影响玩法
+
+    def _ledger_by_item(self, instance: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        """按道具汇总这条鱼被改了哪些数值（薄包装，同 `_ledger`）。"""
+        if CALC is None:                                                  # pragma: no cover
+            return {}
+        try:
+            return CALC._ledger_by_item(instance)
+        except Exception:                                                 # pragma: no cover
+            return {}
+
     def _migrate_feed_cap(self, player: dict[str, Any]) -> bool:
         """站长把「全局投喂上限」调低后，给已经喂超的鱼记一笔债（v1.18.77）。
 
@@ -5209,6 +5241,9 @@ class FishingPlugin(
             handler = self._cmd_sell(event, user_id, *tokens)
         elif key in ("图鉴", "收集", "collection"):
             handler = self._cmd_collection(event, user_id, after_sub)
+        elif key in AQUARIUM_LOG_WORDS:
+            # v1.18.78：鱼的「道具台账」——`/钓鱼 台账 [栏位]` 直接看，不用进缸里再点
+            handler = self._cmd_aquarium(event, user_id, "台账", after_sub)
         elif key in ("水族馆", "馆", "aquarium", "缸"):
             handler = self._cmd_aquarium(event, user_id, a2, after_first)
         # 背包扩容（排在「商店」之前，否则「商店 扩容」会被商店吞掉）
@@ -6082,9 +6117,12 @@ NAME_ARG_WORDS = {
     "喂", "投喂", "装备", "换竿", "换鱼竿",
 }
 AQUARIUM_ACTIONS = (
-    "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
+    "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出", "台账", "明细",
     "升级", "放", "取", "卖", "喂", "领",
 )
+#: 「道具台账」的写法（v1.18.78）：`/钓鱼 台账 [栏位]`，也能 `水族馆 台账 1`。
+#: 单列成一张词表，是为了让「分派链认的写法」测试能像 PULL_WORDS / CAST_WORDS 那样扫到它。
+AQUARIUM_LOG_WORDS: tuple[str, ...] = ("台账", "明细", "log")
 #: 三家店都只认「买」；「扩容」不再挂在商店下面（老写法由 shop.moved 指路）
 SHOP_ACTIONS = ("购买", "买")
 ROD_ACTIONS = ("购买", "装备", "买", "用", "换")

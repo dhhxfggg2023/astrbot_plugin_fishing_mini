@@ -1976,6 +1976,7 @@ orders.locked|再来一竿|/钓鱼|default
 aquarium.view|领收益|/钓鱼 领|primary
 aquarium.view|放全部|/钓鱼 放 全部|default
 aquarium.view|取全部|/钓鱼 取 全部|default
+aquarium.view|📒 台账|/钓鱼 台账|default
 aquarium.view|扩建|/钓鱼 水族馆 扩建|default
 aquarium.full|扩建|/钓鱼 水族馆 扩建|primary
 aquarium.full|取全部|/钓鱼 取 全部|default

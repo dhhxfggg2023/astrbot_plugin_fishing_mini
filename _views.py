@@ -628,6 +628,53 @@ class ViewsMixin:
         """
         _sort_tank(aquarium)
 
+    def _ledger_view(self, player: dict[str, Any], spec_text: str = "") -> str:
+        """鱼的「道具台账」：**哪件道具、用了几次、一共改了多少数值**（v1.18.78）。
+
+        站长要这个是为了「以后削减数值 / 退回道具」时有据可查。只记**直接改数值的道具**
+        （饲料、仙露、龙涎、育灵水、珍珠梳）；洗髓丹不记（数值变不变看运气，退了也不对）。
+
+        ``spec_text`` 给栏位号：``/钓鱼 台账 2`` 只看第 2 条；留空看全部。
+        """
+        aquarium = player.get("aquarium") or []
+        if not aquarium:
+            return "🪸 水族馆是空的　/钓鱼 放 全部 先把鱼放进去"
+        picks = self._parse_indices(spec_text, aquarium) if spec_text else []
+        if spec_text and not picks:
+            return "🔢 栏位号看不懂　例：/钓鱼 台账 2　或 /钓鱼 台账（看全部）"
+        targets = [i - 1 for i in picks] if picks else list(range(len(aquarium)))
+        lines = ["📒 水族馆道具台账（只记「直接改数值」的道具）"]
+        for idx in targets:
+            instance = aquarium[idx]
+            by_item = self._ledger_by_item(instance)
+            lines.append(f"{idx + 1:>2}.{_instance_line(instance)}")
+            if not by_item:
+                lines.append("　　还没用过会改数值的道具")
+                continue
+            feed = _safe_int(instance.get("feed_uses"), 0, 0)
+            lines.append(
+                f"　　已喂 {feed}/{_feed_cap(instance, self.cfg)} 次"
+                f"　当前价值 {_fmt_gold(_instance_value(instance))}"
+            )
+            for item_id, row in sorted(
+                by_item.items(), key=lambda kv: -_safe_int(kv[1].get("value"), 0, 0)
+            ):
+                bits = [f"×{_safe_int(row.get('count'), 0, 0)}"]
+                gain = _safe_int(row.get("value"), 0, 0)
+                if gain:
+                    bits.append(f"价值 +{_fmt_gold(gain)}")
+                attrs = row.get("attrs") or {}
+                shown = [
+                    (f"投喂上限+{_safe_int(v, 0, 0)}" if k == "feed_bonus"
+                     else f"{ATTR_LABELS.get(k, k)}+{_safe_int(v, 0, 0)}")
+                    for k, v in attrs.items() if _safe_int(v, 0, 0)
+                ]
+                if shown:
+                    bits.append("、".join(shown))
+                lines.append(f"　　{self._item_label(item_id)}　" + "　".join(bits))
+        lines.append("💡 这里只记「会直接改数值」的道具；洗髓丹改的是重掷结果，不记")
+        return "\n".join(lines)
+
     def _aquarium_view(self, player: dict[str, Any]) -> str:
         aquarium: list[dict[str, Any]] = player.get("aquarium") or []
         self._sort_aquarium(aquarium)

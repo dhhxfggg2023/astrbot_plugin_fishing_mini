@@ -45,7 +45,8 @@ class EngineMixin:
             logger.debug(f"更新最佳渔获记录失败：{e}")
 
     def _auto_supply(
-        self, player: dict[str, Any], *, times: int = 1, wanted: str = ""
+        self, player: dict[str, Any], *, times: int = 1, wanted: str = "",
+        batch: bool = False,
     ) -> tuple[str, list[str]]:
         """下竿前的**自动补给**（v1.18.17，站长要的「用完了自动花钱补 + 自动装备」）。
 
@@ -116,7 +117,11 @@ class EngineMixin:
         #    那款普通饵再补货（站长：「这种限定鱼饵不能自动购买补饵，应该自动补换
         #    之前的可以购买的鱼饵」）。换完之后这一竿就按普通饵钓，凭证不扣。
         if bait_id != "none" and self._bait_is_limited(bait_id):
-            need = max(1, times)
+            # ⚠️ v1.18.79：**连钓的起飞前检查用 `batch=True`** —— 限定饵不够整批时
+            #    也不该在这里换掉（那会白扔凭证）；真正的"够不够整批"由
+            #    `_do_multi_cast` 用剩余次数判断并如实告诉玩家。这里只在**一次都用不了**
+            #    时才换成普通饵。
+            need = 1 if batch else max(1, times)
             if stock_of(bait_id) < need:
                 fallback = self._purchasable_fallback_bait(equipped or wanted)
                 notes.append(
@@ -739,8 +744,36 @@ class EngineMixin:
                     return
 
             # --- 鱼饵：当前装备的那一种（用完会自动补货 / 补不到就退回空钩）---
-            bait_id, _supply_notes = self._auto_supply(player, times=times)
-            if bait_id != "none":
+            # ⚠️ v1.18.79 修（站长：「连钓的时候限定鱼饵用完了居然提示让我去买，你这不是
+            #    严重错误吗，明明只能抽出来」）：以前这里直接读 `player["baits"]`，于是
+            #    「凭证还剩 5 次」被算成 0 个，整批连钓被拦下、还让人去买**买不到**的限定饵。
+            #    现在按「哪一种饵真的会被用」分别算：
+            #      * **抽到的限定饵优先**（`_active_limited_bait`）—— 算它的**剩余次数**，
+            #        不够时如实说「还能抛 N 竿」（绝不提示购买），并说明后面会换成哪种普通饵；
+            #      * 玩家**点名**了某种普通饵（`/钓鱼 蚯蚓 10`）—— 只算那种饵的库存；
+            #      * 其余按装备的普通饵算库存。
+            #    ⚠️ 这里**没有** `wanted`（那是单竿 `_do_cast` 的形参）：连钓本来就不支持
+            #    「点名饵」，所以限定饵优先的口径在这里恒成立。
+            _lim_bait = self._active_limited_bait(player)
+            bait_id, _supply_notes = self._auto_supply(player, times=times, batch=True)
+            if _lim_bait and bait_id == _lim_bait:
+                _avail = self._limited_bait_left(player, _lim_bait)
+                _fb = self._purchasable_fallback_bait(player.get("equipped_bait") or "")
+                _other = _safe_int((player.get("baits") or {}).get(_fb or ""), 0, 0)
+                # ⚠️ v1.18.79：按**合计**判断，别只看限定饵那几次 ——
+                #    凭证 2 次 + 普通饵 5 个 = 7 竿，连钓 5 明明是够的（踩过）。
+                if _avail + _other < times:
+                    async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
+                            f"🎒 抽到的「{self.baits[_lim_bait]['name']}」还能抛 {_avail} 竿"
+                            f"（买不到，只能靠大鱼乐抽）\n"
+                            f"　连钓 {times} 竿不够，"
+                            + (f"后面会改用能买到的「{self.baits[_fb]['name']}」（还有 {_other} 个）"
+                               if _fb and _other else "后面会改用空钩（/钓鱼 换饵 空钩）")
+                            + f"\n　先 /钓鱼 {_avail + _other} 把这 {_avail + _other} 竿用掉"
+                        )):
+                        yield _r
+                    return
+            elif bait_id != "none":
                 owned = _safe_int((player.get("baits") or {}).get(bait_id), 0, 0)
                 if owned < times:
                     async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
@@ -812,6 +845,11 @@ class EngineMixin:
             #    现在整批的补给说明攒进 `_supply_all`，等渔获清单 + 汇总都列完，
             #    统一贴到最末尾（见下面 `_supply_all` 那段）。
             _supply_all = list(_supply_notes)
+            #: v1.18.79：整批开始前每件限用道具还剩几次（收尾时算「这一批扣了几次」）
+            _lim_before = {
+                _lid: self._limited_item_left(player, _lid)
+                for _lid in self._limited_item_list()
+            }
             if truncated:
                 lines.append(
                     f"⚠️ 背包只剩 {free} 个位置，本次只钓 {planned} 次"
@@ -830,6 +868,9 @@ class EngineMixin:
             cast_factor = self._location_hook_factor(loc.get("id"))
             #: 「buff 刚用光」是否已经尝试补过（补不到就不再每竿刷提示，见循环开头）
             _buff_refill_tried = False
+            #: v1.18.79：抽到的限定饵**中途用完**时提示一次 —— 站长要的是
+            #: 「写清楚还能连钓多少次 / 后面换什么」，**不是**让他去买（那东西买不到）。
+            _lim_bait_run_out = bool(_lim_bait) and bait_id == _lim_bait
 
             for index in range(1, planned + 1):
                 # buff 在这一批**中途**用光了：照「自动补给」再补一个（v1.18.37）。
@@ -853,8 +894,32 @@ class EngineMixin:
                             if "额度用完" in _refill_note and _refill_note in _supply_all:
                                 continue
                             _supply_all.append(_refill_note)
+                    # v1.18.79：抽到的限定饵在这一竿之前用完了 —— 如实说一次
+                    # 「还能抛几竿用完了 / 后面换成了什么」，绝不提示购买（买不到）。
+                    if _lim_bait_run_out and not self._bait_is_limited(bait_id):
+                        _lim_bait_run_out = False
+                        _fb_name = (
+                            self.baits[bait_id]["name"] if bait_id != "none"
+                            else "空钩"
+                        )
+                        _supply_all.append(
+                            f"🕳️ 抽到的「{self.baits[_lim_bait]['name']}」的额度用完了，"
+                            f"后面 {planned - index + 1} 竿改用「{_fb_name}」"
+                            f"（它买不到，只能靠大鱼乐抽）"
+                        )
                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
+                # ⚠️ v1.18.79：**连钓也要扣限用道具的次数**（限定竿/限定饵的凭证）。
+                #    以前只有单竿 `_do_cast` 调了 `_use_limited_items`，连钓循环里没有 ——
+                #    于是「深渊秘饵/潮汐竿」在连钓时**次数永远不扣**，等于无限白用
+                #    （站长报的「限定鱼饵用完了还在让我买」背后就是这个）。
+                #    口径与单竿一致：抛一竿算一次。
+                #    ⚠️ 它返回的行里有「每次还剩 N 次」，逐竿贴进战报会刷屏
+                #    （实测连钓 3 竿刷 3 行），所以这里**只留「用完了」这种一次性事件**，
+                #    「这一批一共扣了几次」等整批结束后统一说一次（见 `_limited_batch_note`）。
+                for _lim_note in _use_limited_items(player, self.items):
+                    if "用完" in _lim_note and _lim_note not in _supply_all:
+                        _supply_all.append(_lim_note)
                 luck = _effective_luck(player, cfg)
                 floor = _effective_floor(player, cfg)
                 _consume_luck(player)
@@ -1099,6 +1164,16 @@ class EngineMixin:
             # 站长的两条要求：位置别插在渔获中间、同一种补货只提示一次。
             # 所以这里对「完全相同的句子」去重后再贴（不同竿补了两次玉髓灯 →
             # 两句话一模一样，合成一条 + ×2 更省字；鱼饵和道具都走这一套）。
+            # v1.18.79：限用道具（限定竿/限定饵凭证）**整批只说一次**「扣了几次、还剩几次」
+            # —— 逐竿刷「还可用 N 次」会把战报撑爆（实测连钓 3 竿刷 3 行）。
+            for _lid in self._limited_item_list():
+                _left = self._limited_item_left(player, _lid)
+                _used_now = _lim_before.get(_lid, 0) - _left
+                if _used_now > 0:
+                    _supply_all.append(
+                        f"{self._item_label(_lid)} 本批抛了 {_used_now} 竿，"
+                        + (f"还剩 {_left} 次" if _left > 0 else "额度已用完")
+                    )
             if _supply_all:
                 merged: list[str] = []
                 counts: dict[str, int] = {}

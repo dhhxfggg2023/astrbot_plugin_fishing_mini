@@ -5396,7 +5396,7 @@ async def main():
         "location": ["再来一竿", "查图鉴", "水族馆", "看天气"],
         "location.unlock_need": ["查图鉴", "钓点", "签到", "看背包"],
         "orders.list": ["看背包", "再来一竿", "卖光光", "帮助"],
-        "aquarium.view": ["领收益", "放全部", "取全部", "扩建"],
+        "aquarium.view": ["领收益", "放全部", "取全部", "📒 台账", "扩建"],
         "aquarium.full": ["扩建", "取全部", "卖光光", "看背包"],
         "aquarium.take_done": ["卖光光", "看背包", "放全部", "再来一竿"],
         "item.used": ["再来一竿", "看背包", "水族馆", "道具店"],
@@ -8073,7 +8073,7 @@ async def main():
                 if isinstance(_e, ast.Constant) and isinstance(_e.value, str):
                     _dispatch.add(_e.value)
     # 两个模块级词表也是分派链的一部分（在 elif 链之前拦下来）
-    for _name in ("PULL_WORDS", "CAST_WORDS"):
+    for _name in ("PULL_WORDS", "CAST_WORDS", "AQUARIUM_LOG_WORDS"):
         for _n in _tree.body:
             if isinstance(_n, ast.Assign) and any(
                 getattr(_t, "id", None) == _name for _t in _n.targets
@@ -9315,6 +9315,112 @@ async def main():
     check(
         not mod._safe_int(_cap_pl["aquarium"][0].get("feed_debt"), 0, 0),
         "上限调回 30：债自动清零（鱼又能喂了）",
+    )
+
+    # --- v1.18.78：水族馆「道具台账」——哪件道具改了多少数值（方便以后削减/退道具）---
+    _lg = make_plugin()
+    _lg_pl = mod._default_player("89701")
+    _lg_pl["gold"] = 10 ** 6
+    _lg_pl["items"] = {"feed_premium": 2, "feed_divine": 1, "growth_tonic": 1, "pill_quality": 1}
+    _lg_pl["inventory"] = [
+        mod._new_instance("carp", 1.0, value_override=1000,
+                          attrs={"meat": 60, "spirit": 60, "sheen": 60})
+    ]
+    await _lg._save_player(_lg_pl)
+    await cmd(_lg, FakeEvent("89701"), "水族馆", "放", "全部")
+    for _args in (("用", "高级饲料", "1"), ("用", "仙露", "1"),
+                  ("用", "育灵水", "1"), ("用", "洗髓丹", "1")):
+        await cmd(_lg, FakeEvent("89701"), *_args)
+    _lg_pl = await _lg._load_player("89701")
+    _lg_fish = _lg_pl["aquarium"][0]
+    _lg_log = _lg_fish.get("log") or []
+    _lg_items = [str(e.get("item")) for e in _lg_log if isinstance(e, dict)]
+    check(
+        "feed_premium" in _lg_items and "feed_divine" in _lg_items
+        and "growth_tonic" in _lg_items,
+        f"改数值的道具都记了台账（含来源）-> {_lg_items}",
+    )
+    check(
+        "pill_quality" not in _lg_items,
+        f"**洗髓丹不记**（站长：数值不一定会变）-> {_lg_items}",
+    )
+    _lg_divine = [e for e in _lg_log if e.get("item") == "feed_divine"][0]
+    check(
+        mod._safe_int(_lg_divine.get("dvalue"), 0, 0) == 600
+        and mod._safe_int((_lg_divine.get("dattrs") or {}).get("meat"), 0, 0) == 10,
+        f"记下了「仙露 +600 价值 / 肉质 +10」-> {_lg_divine.get('dvalue')} "
+        f"{_lg_divine.get('dattrs')}",
+    )
+    _lg_tonic = [e for e in _lg_log if e.get("item") == "growth_tonic"][0]
+    check(
+        mod._safe_int((_lg_tonic.get("dattrs") or {}).get("feed_bonus"), 0, 0) == 5,
+        f"加上限那件也记了（投喂上限 +5）-> {_lg_tonic.get('dattrs')}",
+    )
+    _lg_by = _lg._ledger_by_item(_lg_fish)
+    check(
+        mod._safe_int((_lg_by.get("feed_divine") or {}).get("value"), 0, 0) == 600
+        and mod._safe_int((_lg_by.get("growth_tonic") or {}).get("count"), 0, 0) == 1,
+        f"按道具汇总能直接看出「哪件加了多少」-> {_lg_by}",
+    )
+    check(
+        "仙露" in text_of(await cmd(_lg, FakeEvent("89701"), "台账"))
+        and "洗髓" in text_of(await cmd(_lg, FakeEvent("89701"), "台账")),
+        "`/钓鱼 台账` 能看，并说明洗髓丹不记",
+    )
+    check(
+        "仙露" in text_of(await cmd(_lg, FakeEvent("89701"), "水族馆", "台账", "1")),
+        "`/钓鱼 水族馆 台账 1` 也能看单条",
+    )
+
+    # --- v1.18.79：连钓里的限定饵（站长：「限定鱼饵用完了居然提示让我去买，你这不是严重错误吗」）---
+    # 两条都要钉住：① 绝不提示购买限定饵；② 连钓**真的扣**凭证次数（以前只在单竿里扣）。
+    _lb_p = make_plugin()
+    _lb_pl = mod._default_player("89801")
+    _lb_pl["gold"] = 500000
+    _lb_pl["stamina"] = -1
+    _lb_pl["items"] = {"abyss_bait_pass": 1}
+    _lb_pl["limited_uses"] = {"abyss_bait_pass": 5}
+    _lb_pl["baits"] = {"worm": 1}
+    _lb_pl["equipped_bait"] = "worm"
+    await _lb_p._save_player(_lb_pl)
+    _lb_out = text_of(await cmd(_lb_p, FakeEvent("89801"), "10"))
+    check(
+        "大鱼乐抽" in _lb_out and "只能靠大鱼乐抽" in _lb_out,
+        f"限定饵不够时说明它只能抽、不能买 -> {_lb_out[:80]}",
+    )
+    check(
+        "补货" not in _lb_out and "买 深渊秘饵" not in _lb_out,
+        f"**绝不提示购买限定饵**（那东西买不到）-> {_lb_out[:120]}",
+    )
+    check(
+        "还能抛 5 竿" in _lb_out,
+        f"如实写「还能抛几竿」-> {_lb_out[:120]}",
+    )
+
+    # 扣次数：凭证 2 次 + 普通饵 5 个，连钓 5 应当放行并**真的扣掉 2 次**
+    _lb2 = make_plugin()
+    _lb2_pl = mod._default_player("89802")
+    _lb2_pl["gold"] = 500000
+    _lb2_pl["stamina"] = -1
+    _lb2_pl["items"] = {"abyss_bait_pass": 1}
+    _lb2_pl["limited_uses"] = {"abyss_bait_pass": 2}
+    _lb2_pl["baits"] = {"worm": 5}
+    _lb2_pl["equipped_bait"] = "worm"
+    await _lb2._save_player(_lb2_pl)
+    _lb2_out = text_of(await cmd(_lb2, FakeEvent("89802"), "5"))
+    _lb2_pl = await _lb2._load_player("89802")
+    check(
+        "连钓 5 次" in _lb2_out,
+        f"凭证 2 + 普通饵 5 = 7 ≥ 5，**不该被拦** -> {_lb2_out[:80]}",
+    )
+    check(
+        _lb2._limited_item_left(_lb2_pl, "abyss_bait_pass") == 0,
+        f"连钓**真的扣**凭证次数（以前连钓里根本不扣，等于无限白用）-> "
+        f"{_lb2._limited_item_left(_lb2_pl, 'abyss_bait_pass')}",
+    )
+    check(
+        "本批抛了 2 竿" in _lb2_out,
+        f"整批只说一次「扣了几竿」-> {[x for x in _lb2_out.splitlines() if '本批' in x][:1]}",
     )
 
     # --- v1.18.71：奖池的鱼要乘系数（站长：「应该和订单鱼一样乘上系数啊，不然太低了」）---

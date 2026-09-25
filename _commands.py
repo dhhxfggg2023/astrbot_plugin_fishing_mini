@@ -1821,6 +1821,15 @@ class CommandsMixin:
                     yield _r
                 return
 
+            # ---- 台账（v1.18.78）：这条鱼被哪件道具改了多少数值 ----
+            if sub in ("台账", "明细", "log"):
+                async for _r in self._say_msg(
+                    event, "aquarium.log",
+                    event.plain_result(self._ledger_view(player, spec_text)),
+                ):
+                    yield _r
+                return
+
             # ---- 扩建 ----
             if sub in ("扩建", "升级", "expand"):
                 unlocked = player.setdefault("aquarium_slots", [])
@@ -2078,6 +2087,7 @@ class CommandsMixin:
                     "　/钓鱼 用 <道具> 1　　　投喂 / 洗髓 / 培育\n"
                     "　/钓鱼 水族馆 领　　　　 领取挂机收益\n"
                     "　/钓鱼 水族馆 扩建　　　 花金币扩容\n"
+                    "　/钓鱼 台账　　　　　　　查每条鱼被哪件道具改了多少数值\n"
                     "　💤 养在缸里的鱼按「各自待了多久」产出金币，养得越久越多"
                 )):
                 yield _r
@@ -3041,6 +3051,14 @@ class CommandsMixin:
                         before = _safe_int(instance.get("feed_bonus"), 0, 0)
                         instance["feed_bonus"] = min(cap, before + gain)
                         _feed_bonus_mark(instance, today, _feed_bonus_used(instance) + 1)
+                        # v1.18.78：加上限也是「直接改数值的道具」，记台账（按道具可回退）
+                        self._ledger(
+                            instance, "cap",
+                            item=item_id,
+                            note=f"投喂上限 +{_safe_int(instance.get('feed_bonus'), 0, 0) - before}",
+                            attrs_delta={"feed_bonus": _safe_int(
+                                instance.get("feed_bonus"), 0, 0) - before},
+                        )
                         self._note_item_used(player, item_id, 1, items)
                         used += 1
                         got += 1
@@ -3124,7 +3142,7 @@ class CommandsMixin:
                     stock = self._note_item_used(player, item_id, 1, items)
                     used += 1
                     got += 1
-                    _, delta = _apply_feed(instance, effects)
+                    _, delta = _apply_feed(instance, {**effects, "__item__": item_id})
                     value_gain += delta
                 if got:
                     grown.append(
