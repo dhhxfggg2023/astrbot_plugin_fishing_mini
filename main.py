@@ -3777,6 +3777,8 @@ class FishingPlugin(
         migrated = self._migrate_tank_clocks(player) or migrated
         # v1.18.77：站长调低全局投喂上限时，给已经喂超的鱼记债（不吃掉已喂的价值）
         migrated = self._migrate_feed_cap(player) or migrated
+        # v1.18.80：**清掉被误买的限定竿**（商店指令以前没挡，玩家买到了）
+        migrated = self._migrate_bought_limited_rods(player, user_id) or migrated
         if migrated:
             logger.info(f"玩家 {user_id} 数据已迁移到 v{DATA_VERSION}")
             await self._save_player(player)
@@ -3806,6 +3808,59 @@ class FishingPlugin(
             return CALC._ledger_by_item(instance)
         except Exception:                                                 # pragma: no cover
             return {}
+
+    def _migrate_bought_limited_rods(
+        self, player: dict[str, Any], user_id: str = ""
+    ) -> bool:
+        """清掉存档里**被误买**的限定竿，并把钱退回去（v1.18.80）。
+
+        背景（站长报的严重问题）：「已经有玩家能买了」。`_cmd_rods` 的「买」分支以前
+        用 `_find_rod`（在**全部**竿里找），没过 `_shop_visible_rods` —— 于是限定竿
+        （潮汐竿/星陨竿/瞬手竿/双尾竿）不仅能买，还进了 `player["rods"]` 里**永久生效**
+        （`rods` 不消耗凭证），等于把大鱼乐的奖品变成商品 + 白送永久特权。
+
+        现在两头都堵：
+          ① 买入时直接拒绝（`_cmd_rods` 里 `_rod_is_limited` 判据，见那里）；
+          ② 老存档里已经买到的，读档时**退钱删竿**（下面这段），装备也换回普通竿。
+        退款按竿的 `price` 原价退（玩家没有过错，不该让他亏）。
+        """
+        try:
+            rods_now = player.get("rods")
+            if not isinstance(rods_now, list):
+                return False
+            bad = [
+                str(rid) for rid in rods_now
+                if self._rod_is_limited(self.rod_by_id.get(str(rid)) or {})
+            ]
+            if not bad:
+                return False
+            refund = 0
+            for rid in bad:
+                # ⚠️ v1.18.80 修：**只退真花过的钱**。默认配置里这几根竿 `price = 0`
+                #    （出厂就是 0，靠抽奖拿），误买时玩家一分钱没花 —— 再"退款"等于白送钱。
+                #    站长原话：「限定鱼竿被误买的时候是 0 金币，不需要退款」。
+                price = max(
+                    0, _safe_int((self.rod_by_id.get(str(rid)) or {}).get("price"), 0, 0)
+                )
+                refund += price
+                while rid in rods_now:
+                    rods_now.remove(rid)
+            if not rods_now:
+                rods_now.append(DEFAULT_ROD)
+            player["rods"] = rods_now
+            if str(player.get("equipped_rod") or "") in bad:
+                player["equipped_rod"] = rods_now[0]
+            if refund > 0:
+                player["gold"] = _safe_int(player.get("gold"), 0, 0) + refund
+            logger.warning(
+                f"玩家 {user_id} 的存档里有 {len(bad)} 根「误买的限定竿」{bad}：已删除"
+                + (f"并退回 {refund} 金币" if refund > 0 else "（这些竿价 0，无需退款）")
+                + "（限定竿只能靠大鱼乐抽，不能买）"
+            )
+            return True
+        except Exception as e:                                            # pragma: no cover
+            logger.debug(f"清理误买限定竿失败：{e}")
+            return False
 
     def _migrate_feed_cap(self, player: dict[str, Any]) -> bool:
         """站长把「全局投喂上限」调低后，给已经喂超的鱼记一笔债（v1.18.77）。
@@ -4087,7 +4142,7 @@ class FishingPlugin(
             unlock("rod_2")
         # ⚠️ 「鱼竿买齐」只算**能买到的**竿（v1.18.63）：限定竿（潮汐竿/星陨竿）
         #    不卖、只能抽，算进去会让这个成就永远拿不到。
-        if len(rod_ids) >= len(_shop_visible_rods(self.rods)):
+        if len(rod_ids) >= len(_shop_visible_rods(self.rods, self._rod_is_limited)):
             unlock("rod_all")
         if len(loc_ids) >= 2:
             unlock("loc_2")
@@ -4279,6 +4334,31 @@ class FishingPlugin(
             if best is None or left > best[0]:
                 best = (left, bait_id)
         return best[1] if best else ""
+
+    def _rod_is_limited(self, rod: dict[str, Any]) -> bool:
+        """这根竿是不是「买不到、只能抽」的限定竿（v1.18.80）。
+
+        判据不限 `uses` 一个字段 —— 早期版本的 `rod_defs` 是**半截行**（没有第 11 段
+        `uses`），于是「潮汐竿」在商店里看不出来是限定竿、还能被买走（站长报的严重问题）。
+        三重判据，命中一个就算：
+          ① 这一行带 ``uses``（`uses > 0` = 限用体验版）；
+          ② 竿表里挂了 ``special``（异化效果，只有限定竿有）；
+          ③ **背包里有对应的凭证道具**（``<竿id>_pass`` 或某件 ``item_defs`` 的 ``rod`` 指向它）
+             —— 这条最关键：它不依赖站长那几行的段数对不对。
+        """
+        spec = rod or {}
+        if max(0, _safe_int(spec.get("uses"), 0, 0)) > 0:
+            return True
+        if spec.get("special"):
+            return True
+        rod_id = str(spec.get("id") or "").strip()
+        if rod_id and f"{rod_id}_pass" in self.items:
+            return True
+        return any(
+            str((item or {}).get("rod") or "").strip() == rod_id
+            for item in self.items.values()
+            if rod_id
+        )
 
     def _bait_is_limited(self, bait_id: str) -> bool:
         """这种饵是不是「买不到、只能抽」的限定饵（``bait_defs`` 带特殊效果）。"""

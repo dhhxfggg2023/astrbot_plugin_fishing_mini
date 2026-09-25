@@ -126,6 +126,7 @@ TEXTS: dict[str, str] = {
     "fishinfo.empty": "{原文}",  # 动态文本
     "aquarium.view": "{原文}",  # 动态文本
     "aquarium.log": "{原文}",  # 动态文本（v1.18.78 道具台账）
+    "rod.not_for_sale": "{原文}",  # 动态文本（v1.18.80 限定竿不卖）
     "aquarium.upgraded": "{原文}",  # 动态文本
     "aquarium.income": "{原文}",  # 动态文本
     "aquarium.feed_usage": "📖 投喂用「用」指令\n　/钓鱼 用 <道具名> <栏位号>\n　例：/钓鱼 用 高级饲料 1",

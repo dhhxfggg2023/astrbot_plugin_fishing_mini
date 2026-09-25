@@ -792,6 +792,20 @@ class CommandsMixin:
                     async for _r in self._say_msg(event, "rod.not_found", event.plain_result("🤔 没有这款鱼竿")):
                         yield _r
                     return
+                # ⚠️ v1.18.80 **严重修复**：限定竿（`uses > 0`，大鱼乐的奖品）**不能买**。
+                #    以前这个分支用 `_find_rod`（在**全部**竿里找），没过 `_shop_visible_rods`
+                #    —— 于是「潮汐竿 / 星陨竿 / 瞬手竿 / 双尾竿」既能买、又进了 `player["rods"]`
+                #    里**永久生效**（`rods` 不消耗凭证），等于把奖品变成商品还白送永久特权。
+                #    商店列表本来就过滤了它们，但**指令这条路一直是开的**（站长报了）。
+                if self._rod_is_limited(rod):
+                    async for _r in self._say_msg(event, "rod.not_for_sale", event.plain_result(
+                            f"🏆 {rod['emoji']}{rod['name']} 是大鱼乐的奖品，**商店不卖**\n"
+                            f"　它是限用道具（{self._limited_use_text(player, rod['id'])}），"
+                            f"只能靠 /钓鱼 大鱼乐 抽到\n"
+                            f"　抽到就自动生效，不用装备、也买不到"
+                        )):
+                        yield _r
+                    return
                 if rod["id"] in owned:
                     async for _r in self._say_msg(event, "rod.owned", event.plain_result(f"✅ 你已经有 {rod['name']} 了")):
                         yield _r
@@ -877,6 +891,13 @@ class CommandsMixin:
             lines = [f"🎣 鱼竿　当前 {self._rod_label(player)}"]
             hidden = 0
             for rod in self.rods:
+                # ⚠️ v1.18.80 **严重修复**：限定竿（大鱼乐的奖品）**绝不进商店列表**。
+                #    以前这里直接遍历 `self.rods`（全部竿），只挡了「等级没到」——
+                #    于是潮汐竿/星陨竿/瞬手竿/双尾竿就摆在货架上，玩家能买、还能永久生效
+                #    （站长：「你怎么让商店能买限定鱼竿，已经有玩家能买了」）。
+                if self._rod_is_limited(rod) and rod["id"] not in owned:
+                    hidden += 1
+                    continue
                 owned_rod = rod["id"] in owned
                 # 没解锁的竿不显示（等级够了才上架），已拥有的永远显示
                 if not owned_rod and self._unlock_shortage(player, rod):

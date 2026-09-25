@@ -9372,6 +9372,65 @@ async def main():
         "`/钓鱼 水族馆 台账 1` 也能看单条",
     )
 
+    # --- v1.18.80 **严重修复**：限定竿不许买（站长：「已经有玩家能买了」）---
+    # 以前 `_cmd_rods` 的「买」分支用 `_find_rod`（全部竿里找），没过商店过滤；
+    # 商店列表也只是遍历 `self.rods` —— 于是限定竿摆在货架上、买完还永久生效。
+    _sr = make_plugin()
+    _sr_pl = mod._default_player("89901")
+    _sr_pl["gold"] = 10 ** 9
+    await _sr._save_player(_sr_pl)
+    for _name in ("潮汐竿", "星陨竿", "瞬手竿", "双尾竿"):
+        _sr_out = text_of(await cmd(_sr, FakeEvent("89901"), "鱼竿", "买", _name))
+        _sr_pl = await _sr._load_player("89901")
+        check(
+            "商店不卖" in _sr_out and "大鱼乐" in _sr_out,
+            f"买限定竿「{_name}」被拒并说明只能抽 -> {_sr_out.splitlines()[0][:46]}",
+        )
+        check(
+            len(_sr_pl["rods"]) == 1,
+            f"「{_name}」没进背包 -> {_sr_pl['rods']}",
+        )
+        check(
+            mod._safe_int(_sr_pl["gold"], 0, 0) == 10 ** 9,
+            f"拒绝时**不扣钱** -> {_sr_pl['gold']}",
+        )
+    _sr_shop = text_of(await cmd(_sr, FakeEvent("89901"), "鱼竿"))
+    check(
+        "潮汐竿" not in _sr_shop and "星陨竿" not in _sr_shop,
+        "商店列表里也不再出现限定竿",
+    )
+    # 老存档里已经被误买的：读档时退款删竿
+    _sr2 = mod._default_player("89902")
+    _sr2["gold"] = 500
+    _sr2["rods"] = ["bamboo", "tide_rod", "star_rod"]
+    _sr2["equipped_rod"] = "tide_rod"
+    await _sr._save_player(_sr2)
+    _sr2 = await _sr._load_player("89902")
+    _expect = 500 + mod._safe_int(_sr.rod_by_id["tide_rod"]["price"], 0, 0) \
+        + mod._safe_int(_sr.rod_by_id["star_rod"]["price"], 0, 0)
+    check(
+        _sr2["rods"] == ["bamboo"] and _sr2["equipped_rod"] == "bamboo",
+        f"老存档里误买的限定竿被删掉、装备换回普通竿 -> {_sr2['rods']} / {_sr2['equipped_rod']}",
+    )
+    check(
+        mod._safe_int(_sr2["gold"], 0, 0) == _expect,
+        f"只退真花过的钱（这几根竿价 0 -> 一分不退） -> {_sr2['gold']}（期望 {_expect}）",
+    )
+    # 站长特别强调：价 0 的限定竿误买时**不需要退款**（别白送钱）
+    check(
+        _expect == 500,
+        f"默认配置里限定竿价 0，删竿后金币不变 -> {_sr2['gold']}",
+    )
+    # 抽奖那条路照旧：凭证生效、可用 20 次
+    _sr3 = mod._default_player("89903")
+    _sr._lottery_apply_prize(_sr3, {"id": "tide_rod_pass", "kind": "rod",
+                                    "param": "tide_rod_pass", "count": 1, "desc": "潮汐竿"})
+    check(
+        _sr._limited_item_left(_sr3, "tide_rod_pass") == 20,
+        f"限定竿仍然只能靠抽（抽到即 20 次）-> "
+        f"{_sr._limited_item_left(_sr3, 'tide_rod_pass')}",
+    )
+
     # --- v1.18.79：连钓里的限定饵（站长：「限定鱼饵用完了居然提示让我去买，你这不是严重错误吗」）---
     # 两条都要钉住：① 绝不提示购买限定饵；② 连钓**真的扣**凭证次数（以前只在单竿里扣）。
     _lb_p = make_plugin()

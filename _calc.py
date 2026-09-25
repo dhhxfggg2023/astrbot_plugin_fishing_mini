@@ -2058,15 +2058,26 @@ def _shop_visible_baits(baits: Any) -> list[str]:
     ]
 
 
-def _shop_visible_rods(rods: Any) -> list[dict[str, Any]]:
-    """鱼竿店里能买到的竿（``uses > 0`` 的**限定竿**排除，v1.18.63）。
+def _shop_visible_rods(rods: Any, is_limited: Any = None) -> list[dict[str, Any]]:
+    """鱼竿店里能买到的竿（**限定竿**排除，v1.18.63；判据加强于 v1.18.80）。
 
-    限定竿（潮汐竿 / 星陨竿）是大鱼乐的奖品：它们写在 rod_defs 里（数值照常用
-    编辑器改），但**不进商店**、也不该算进「鱼竿买齐」那个成就。
+    限定竿（潮汐竿 / 星陨竿 / 瞬手竿 / 双尾竿）是大鱼乐的奖品：它们写在 rod_defs 里
+    （数值照常用编辑器改），但**不进商店**、也不该算进「鱼竿买齐」那个成就。
+
+    ⚠️ v1.18.80：以前这里只看 ``uses > 0``，而早期版本的 rod_defs 是**半截行**
+    （没有第 11 段 `uses`）—— 于是限定竿在商店里「看起来是普通竿」，玩家直接买走。
+    现在允许调用方传一个 ``is_limited(rod) -> bool``（插件的 `_rod_is_limited`
+    还会看 `special` 与「背包里有没有对应凭证」），不传就退回老的 `uses` 判据。
     """
     out: list[dict[str, Any]] = []
     for rod in rods or []:
-        if max(0, _safe_int((rod or {}).get("uses"), 0, 0)) > 0:
+        if is_limited is not None:
+            try:
+                if is_limited(rod):
+                    continue
+            except Exception:
+                pass
+        elif max(0, _safe_int((rod or {}).get("uses"), 0, 0)) > 0:
             continue
         out.append(rod)
     return out
@@ -3246,6 +3257,7 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     # ---- 水族馆 ----
     ("aquarium.view", "aquarium", "水族馆总览", ""),
     ("aquarium.log", "aquarium", "道具台账（哪件道具改了多少数值）", ""),
+    ("rod.not_for_sale", "rod", "限定竿不卖（只能抽）", ""),
     ("aquarium.usage", "aquarium", "水族馆用法说明", ""),
     ("aquarium.max", "aquarium", "水族馆已经扩到最大", ""),
     ("aquarium.no_gold", "aquarium", "扩建金币不足", ""),

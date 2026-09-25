@@ -1,0 +1,758 @@
+﻿diff --git a/_commands.py b/_commands.py
+index 1a5a28c..d526f39 100644
+--- a/_commands.py
++++ b/_commands.py
+@@ -1183,11 +1183,18 @@ class CommandsMixin:
+         # ⚠️ v1.18.70：**抽到的限用凭证也要在背包里看得见**。它们是 `items` 里的
+         #    「限用道具」（限定竿 / 限定饵凭证），不属于「鱼」，所以以前背包里一条都不显示 ——
+         #    玩家中了奖却在背包找不到，只能从抛竿提示里猜（站长就是被这个搞糊涂的）。
+-        _limited_lines = [
+-            f"　{self._item_label(iid)}　{self._limited_use_text(player, iid)}"
+-            for iid in self._limited_item_list()
+-            if _safe_int((player.get("items") or {}).get(iid), 0, 0) > 0
+-        ]
++        _limited_lines = []
++        for _iid in self._limited_item_list():
++            if _safe_int((player.get("items") or {}).get(_iid), 0, 0) <= 0:
++                continue
++            _spec = self.items.get(_iid) or {}
++            _target = self.baits.get(str(_spec.get("bait") or "")) or self.rod_by_id.get(
++                str(_spec.get("rod") or "")
++            ) or {}
++            _limited_lines.append(
++                f"　{self._item_label(_iid)}　{self._limited_use_text(player, _iid)}"
++                + (f"　{self._special_brief(_target)}" if _target else "")
++            )
+         if not inventory:
+             _empty = f"🎒 背包空空的（容量 {cap}）\n💡 发 /钓鱼 下竿试试手气"
+             if _limited_lines:
+@@ -1814,6 +1821,15 @@ class CommandsMixin:
+                     yield _r
+                 return
+ 
++            # ---- 台账（v1.18.78）：这条鱼被哪件道具改了多少数值 ----
++            if sub in ("台账", "明细", "log"):
++                async for _r in self._say_msg(
++                    event, "aquarium.log",
++                    event.plain_result(self._ledger_view(player, spec_text)),
++                ):
++                    yield _r
++                return
++
+             # ---- 扩建 ----
+             if sub in ("扩建", "升级", "expand"):
+                 unlocked = player.setdefault("aquarium_slots", [])
+@@ -2071,6 +2087,7 @@ class CommandsMixin:
+                     "　/钓鱼 用 <道具> 1　　　投喂 / 洗髓 / 培育\n"
+                     "　/钓鱼 水族馆 领　　　　 领取挂机收益\n"
+                     "　/钓鱼 水族馆 扩建　　　 花金币扩容\n"
++                    "　/钓鱼 台账　　　　　　　查每条鱼被哪件道具改了多少数值\n"
+                     "　💤 养在缸里的鱼按「各自待了多久」产出金币，养得越久越多"
+                 )):
+                 yield _r
+@@ -3034,6 +3051,14 @@ class CommandsMixin:
+                         before = _safe_int(instance.get("feed_bonus"), 0, 0)
+                         instance["feed_bonus"] = min(cap, before + gain)
+                         _feed_bonus_mark(instance, today, _feed_bonus_used(instance) + 1)
++                        # v1.18.78：加上限也是「直接改数值的道具」，记台账（按道具可回退）
++                        self._ledger(
++                            instance, "cap",
++                            item=item_id,
++                            note=f"投喂上限 +{_safe_int(instance.get('feed_bonus'), 0, 0) - before}",
++                            attrs_delta={"feed_bonus": _safe_int(
++                                instance.get("feed_bonus"), 0, 0) - before},
++                        )
+                         self._note_item_used(player, item_id, 1, items)
+                         used += 1
+                         got += 1
+@@ -3117,7 +3142,7 @@ class CommandsMixin:
+                     stock = self._note_item_used(player, item_id, 1, items)
+                     used += 1
+                     got += 1
+-                    _, delta = _apply_feed(instance, effects)
++                    _, delta = _apply_feed(instance, {**effects, "__item__": item_id})
+                     value_gain += delta
+                 if got:
+                     grown.append(
+@@ -3713,6 +3738,16 @@ class CommandsMixin:
+             #   参数留空          -> **按 variant_chance 正常掷**，和普通钓鱼同一套
+             #                        （_roll_variant 读的就是同一个配置）
+             allow_variant = _cfg_bool(self.cfg, "lottery_allow_variant", True)
++            # ⚠️ v1.18.71：**奖池的鱼要乘上系数**（站长：「奖池的鱼应该和订单鱼一样乘上系数啊，
++            # 不然太低了」）。以前这里只传 `fish_id + 品质`，连钓点倍率、鱼竿价值加成、
++            # 等级成长**一个都没带** —— 于是同样一条传说鱼，中奖拿到的只有正常钓上来的
++            # 几分之一（正常钓鱼在 `_engine` 里会带 rod_value / location_mult / codex_mult）。
++            # 现在直接复用订单那套动态系数 `_order_income_factor`（钓点 × 鱼竿 × 等级成长，
++            # 封顶 `order_factor_max`），再乘一个可配的 `lottery_fish_factor`（默认 1.0）。
++            _fish_gear = self._order_income_factor(player) * max(
++                0.0, _safe_number(self.cfg.get("lottery_fish_factor"), 1.0)
++            )
++            _codex_mult = self._codex_mult(player)
+             made: list[str] = []
+             for _ in range(count):
+                 fish_id = LOTTERY.pick_fish_for_prize(rarity or "all")
+@@ -3731,6 +3766,7 @@ class CommandsMixin:
+                     caught_variant = self._roll_variant()     # 与普通钓鱼完全同一套概率
+                 catch = _new_instance(
+                     fish_id, qmult, source="lottery", variant=caught_variant,
++                    location_mult=_fish_gear, codex_mult=_codex_mult,
+                 )
+                 if catch is None:
+                     continue
+@@ -3770,11 +3806,33 @@ class CommandsMixin:
+             #   有凭证道具就发凭证（限用次数、会消耗），没有就直接给这种饵 ——
+             #   老配置 / 升级同步漏了 item_defs 那一行时照样能领到东西。
+             _bare = _param[: -len("_pass")] if _param.endswith("_pass") else _param
++            # ⚠️ v1.18.71：**认不出来就直接把线索写进回复**（v1.18.70 只在配置齐的时候能自愈）。
++            #    站长那次「还是显示不存在」就是因为奖励行/道具行各缺一半，
++            #    到底是哪个 id 对不上只能靠猜 —— 现在回复里直接列出「已登记的凭证」和
++            #    「限定饵」的真实 id，一眼就能对上。
++            _limited_ids = [
++                bid for bid in self.baits if self._bait_is_limited(bid)
++            ]
++            _pass_ids = [
++                iid for iid, spec in self.items.items()
++                if str((spec or {}).get("bait") or "").strip()
++            ]
++            _hint = (
++                f"（已登记的限定饵：{'、'.join(_limited_ids) or '无'}；"
++                f"凭证道具：{'、'.join(_pass_ids) or '无'}）"
++            )
+             _limited_target = ""
+             if self._bait_is_limited(_param):
+                 _limited_target = _param
+             elif _bare != _param and self._bait_is_limited(_bare):
+                 _limited_target = _bare
++            elif _limited_ids:
++                # 参数既不是饵也不是凭证 id：按「参数里含饵 id、或饵 id 里含参数」模糊认一次
++                # （站长手改过奖表、或 id 拼写差一点时也能领到东西）
++                for _bid in _limited_ids:
++                    if _bid in _param or _param in _bid:
++                        _limited_target = _bid
++                        break
+             if not _pass_bait and _limited_target:
+                 bait = self.baits.get(_limited_target) or {}
+                 spec = self.items.get(f"{_limited_target}_pass") or {}
+@@ -3819,7 +3877,9 @@ class CommandsMixin:
+             bait_id = _param
+             bait = self.baits.get(bait_id)
+             if bait is None:
+-                record["line"] = f"🍃 {row.get('desc')}（鱼饵 {bait_id} 不存在）"
++                record["line"] = (
++                    f"🍃 {row.get('desc')}（鱼饵 {bait_id} 不存在）{_hint}"
++                )
+                 return record
+             baits = player.setdefault("baits", {})
+             baits[bait_id] = _safe_int(baits.get(bait_id), 0, 0) + count
+diff --git a/_conf_schema.json b/_conf_schema.json
+index b57b360..6357a65 100644
+--- a/_conf_schema.json
++++ b/_conf_schema.json
+@@ -68,7 +68,7 @@
+     "invisible": true,
+     "description": "回复里的按钮（QQ 官方内联键盘）。一行一个按钮：场景|按钮文案|点击后发送|样式。插件里每条回复都有独立的场景键（共 150+ 个，见编辑器页面「💬 回复」页的场景卡片），常用的如 cast.hit=钓到鱼的结果 / cast.miss_none=空竿 / pull.hook=咬钩提示 / bag.list=背包视图 / location.list=钓点视图 / shop.list=商店货架 / story=随机插曲（模板，{label}=选项文案、{n}=第几个选项）。老的 5 个场景键（cast/pull/bag/location/story）仍然有效：没单独配置的子场景会继承它们，所以升级后默认按钮一字不变。样式：default（灰）/ primary（蓝），也可直接写数字。同一场景多行=多个按钮，顺序即显示顺序；点击后发送必须是本插件认识的指令（/钓鱼 …），否则该行会被跳过。留空或写坏=回退内置按钮。",
+     "type": "text",
+-    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|换饵|/钓鱼 换饵|default\ncast|卖光光|/钓鱼 卖光光|default\ncast.hit|再来一竿|/钓鱼|default\ncast.hit|看背包|/钓鱼 背包|default\ncast.hit|放缸|/钓鱼 放 全部|default\ncast.hit|卖光光|/钓鱼 卖光光|default\ncast.no_stamina|体力|/钓鱼 体力|default\ncast.no_stamina|喝姜汤|/钓鱼 用 姜汤|default\ncast.no_stamina|看背包|/钓鱼 背包|default\ncast.no_stamina|帮助|/钓鱼 帮助|default\n# 三种空竿：都会让人想「换饵」或「补货」（v1.18.21 补上 —— 顺便让老配置里\n# 站长自己配过的那几行仍算「官方场景」，内容合并才能把其余场景补进来）\ncast.miss_none|再来一竿|/钓鱼|default\ncast.miss_none|换饵|/钓鱼 换饵|default\ncast.miss_none|鱼饵店|/钓鱼 鱼饵|default\ncast.miss_none|看背包|/钓鱼 背包|default\ncast.miss_bait|再来一竿|/钓鱼|default\ncast.miss_bait|换饵|/钓鱼 换饵|default\ncast.miss_bait|鱼饵店|/钓鱼 鱼饵|default\ncast.miss_bait|看背包|/钓鱼 背包|default\ncast.miss_deep|再来一竿|/钓鱼|default\ncast.miss_deep|换饵|/钓鱼 换饵|default\ncast.miss_deep|钓点|/钓鱼 钓点|default\ncast.miss_deep|看背包|/钓鱼 背包|default\ncast.no_gold|签到|/钓鱼 签到|default\ncast.no_gold|卖光光|/钓鱼 卖光光|default\ncast.no_gold|看背包|/钓鱼 背包|default\ncast.bag_full|卖光光|/钓鱼 卖光光|primary\ncast.bag_full|放缸里|/钓鱼 放 全部|default\ncast.bag_full|扩建背包|/钓鱼 扩建背包|default\ncast.bag_full|看背包|/钓鱼 背包|default\ncast.multi_summary|再来一竿|/钓鱼|default\ncast.multi_summary|看背包|/钓鱼 背包|default\ncast.multi_summary|水族馆|/钓鱼 水族馆|default\ncast.multi_summary|卖光光|/钓鱼 卖光光|default\ncast.achievement|再来一竿|/钓鱼|default\ncast.achievement|我的档案|/钓鱼 档案|default\ncast.milestone|再来一竿|/钓鱼|default\ncast.milestone|我的档案|/钓鱼 档案|default\npull|再来一竿|/钓鱼|default\npull|换饵|/钓鱼 换饵|default\npull|看背包|/钓鱼 背包|default\npull|帮助|/钓鱼 帮助|default\npull.hook|拉线！|/钓鱼 拉|primary\npull.timeout|再来一竿|/钓鱼|primary\npull.timeout|换饵|/钓鱼 换饵|default\npull.timeout|看背包|/钓鱼 背包|default\npull.escape|再来一竿|/钓鱼|primary\npull.escape|换饵|/钓鱼 换饵|default\npull.escape|看背包|/钓鱼 背包|default\npull.none|下竿|/钓鱼|primary\npull.none|看背包|/钓鱼 背包|default\npull.none|帮助|/钓鱼 帮助|default\nbag|卖光光|/钓鱼 卖光光|primary\nbag|放缸里|/钓鱼 放 全部|default\nbag|扩建背包|/钓鱼 扩建背包|default\nbag|再来一竿|/钓鱼|default\nbag.empty|下竿|/钓鱼|primary\nbag.empty|鱼饵店|/钓鱼 鱼饵|default\nbag.empty|图鉴|/钓鱼 图鉴|default\nbag.empty|帮助|/钓鱼 帮助|default\nsell.result|再来一竿|/钓鱼|default\nsell.result|看背包|/钓鱼 背包|default\nsell.result|水族馆|/钓鱼 水族馆|default\nsell.result|卖光光|/钓鱼 卖光光|default\nshop.list|鱼竿店|/钓鱼 鱼竿|default\nshop.list|道具店|/钓鱼 道具|default\nshop.list|鱼饵店|/钓鱼 鱼饵|default\nshop.list|看背包|/钓鱼 背包|default\nshop.no_gold_bait|签到|/钓鱼 签到|default\nshop.no_gold_item|签到|/钓鱼 签到|default\nshop.not_found|鱼竿店|/钓鱼 鱼竿|default\nshop.not_found|道具店|/钓鱼 道具|default\nshop.not_found|鱼饵店|/钓鱼 鱼饵|default\nshop.locked|我的档案|/钓鱼 档案|default\nshop.locked|再来一竿|/钓鱼|default\nbackpack.upgraded|看背包|/钓鱼 背包|default\nbackpack.upgraded|水族馆|/钓鱼 水族馆|default\nbackpack.upgraded|再来一竿|/钓鱼|default\nbackpack.no_gold|签到|/钓鱼 签到|default\nbackpack.no_gold|卖光光|/钓鱼 卖光光|default\nrod.list|自动装备|/钓鱼 装备|primary\nrod.list|鱼饵店|/钓鱼 鱼饵|default\nrod.list|看背包|/钓鱼 背包|default\nrod.list|再来一竿|/钓鱼|default\nrod.no_gold|签到|/钓鱼 签到|default\nrod.no_gold|卖光光|/钓鱼 卖光光|default\nrod.level_low|我的档案|/钓鱼 档案|default\nrod.level_low|再来一竿|/钓鱼|default\nrod.not_owned|鱼竿店|/钓鱼 鱼竿|default\nrod.not_owned|看背包|/钓鱼 背包|default\nbait.equipped|再来一竿|/钓鱼|default\nbait.equipped|看背包|/钓鱼 背包|default\nbait.equipped|水族馆|/钓鱼 水族馆|default\nbait.empty|鱼饵店|/钓鱼 鱼饵|primary\nbait.empty|看背包|/钓鱼 背包|default\nbait.empty|帮助|/钓鱼 帮助|default\nbait.not_owned|鱼饵店|/钓鱼 鱼饵|primary\nbait.not_owned|我的档案|/钓鱼 档案|default\nbait.locked|我的档案|/钓鱼 档案|default\nbait.locked|再来一竿|/钓鱼|default\nbait.not_found|鱼饵店|/钓鱼 鱼饵|default\nbait.not_found|帮助|/钓鱼 帮助|default\nlocation|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|水族馆|/钓鱼 水族馆|default\nlocation|看天气|/钓鱼 今日|default\nlocation.unlock_need|查图鉴|/钓鱼 图鉴|default\nlocation.unlock_need|钓点|/钓鱼 钓点|default\nlocation.unlock_need|签到|/钓鱼 签到|default\nlocation.unlock_need|看背包|/钓鱼 背包|default\nlocation.moved|再来一竿|/钓鱼|primary\nlocation.moved|看订单|/钓鱼 订单|default\nlocation.moved|查图鉴|/钓鱼 图鉴|default\nlocation.moved|水族馆|/钓鱼 水族馆|default\nlocation.not_found|钓点|/钓鱼 钓点|default\nlocation.not_found|再来一竿|/钓鱼|default\norders.list|看背包|/钓鱼 背包|default\norders.list|再来一竿|/钓鱼|default\norders.list|卖光光|/钓鱼 卖光光|default\norders.list|帮助|/钓鱼 帮助|default\norders.submit_result|再来一竿|/钓鱼|default\norders.submit_result|看订单|/钓鱼 订单|default\norders.submit_result|看背包|/钓鱼 背包|default\norders.locked|我的档案|/钓鱼 档案|default\norders.locked|再来一竿|/钓鱼|default\naquarium.view|领收益|/钓鱼 领|primary\naquarium.view|放全部|/钓鱼 放 全部|default\naquarium.view|取全部|/钓鱼 取 全部|default\naquarium.view|扩建|/钓鱼 水族馆 扩建|default\naquarium.full|扩建|/钓鱼 水族馆 扩建|primary\naquarium.full|取全部|/钓鱼 取 全部|default\naquarium.full|卖光光|/钓鱼 卖光光|default\naquarium.full|看背包|/钓鱼 背包|default\naquarium.put_done|领收益|/钓鱼 领|primary\naquarium.put_done|放全部|/钓鱼 放 全部|default\naquarium.put_done|看看缸|/钓鱼 水族馆|default\naquarium.put_done|再来一竿|/钓鱼|default\naquarium.take_done|卖光光|/钓鱼 卖光光|primary\naquarium.take_done|看背包|/钓鱼 背包|default\naquarium.take_done|放全部|/钓鱼 放 全部|default\naquarium.take_done|再来一竿|/钓鱼|default\naquarium.income|再来一竿|/钓鱼|default\naquarium.income|放全部|/钓鱼 放 全部|default\naquarium.income|看看缸|/钓鱼 水族馆|default\naquarium.income|看背包|/钓鱼 背包|default\naquarium.income_wait|看看缸|/钓鱼 水族馆|default\naquarium.income_wait|再来一竿|/钓鱼|default\naquarium.income_empty|放全部|/钓鱼 放 全部|primary\naquarium.income_empty|看背包|/钓鱼 背包|default\naquarium.max|看看缸|/钓鱼 水族馆|default\naquarium.max|再来一竿|/钓鱼|default\naquarium.no_gold|签到|/钓鱼 签到|default\naquarium.no_gold|卖光光|/钓鱼 卖光光|default\naquarium.upgraded|放全部|/钓鱼 放 全部|primary\naquarium.upgraded|看看缸|/钓鱼 水族馆|default\naquarium.upgraded|领收益|/钓鱼 领|default\naquarium.upgraded|再来一竿|/钓鱼|default\naquarium.sell_done|再来一竿|/钓鱼|default\naquarium.sell_done|看看缸|/钓鱼 水族馆|default\naquarium.sell_done|看背包|/钓鱼 背包|default\naquarium.put_usage|看背包|/钓鱼 背包|default\naquarium.put_usage|再来一竿|/钓鱼|default\naquarium.take_usage|看看缸|/钓鱼 水族馆|default\naquarium.take_usage|看背包|/钓鱼 背包|default\naquarium.feed_usage|道具店|/钓鱼 道具|default\naquarium.feed_usage|看看缸|/钓鱼 水族馆|default\naquarium.sell_usage|看看缸|/钓鱼 水族馆|default\naquarium.sell_usage|看背包|/钓鱼 背包|default\naquarium.bad_slot|看看缸|/钓鱼 水族馆|default\naquarium.bad_slot|再来一竿|/钓鱼|default\naquarium.usage|再来一竿|/钓鱼|default\naquarium.usage|看看缸|/钓鱼 水族馆|default\naquarium.usage|帮助|/钓鱼 帮助|default\nitem.used|再来一竿|/钓鱼|default\nitem.used|看背包|/钓鱼 背包|default\nitem.used|水族馆|/钓鱼 水族馆|default\nitem.used|道具店|/钓鱼 道具|default\nitem.feed_done|再来一竿|/钓鱼|default\nitem.feed_done|水族馆|/钓鱼 水族馆|default\nitem.feed_done|道具店|/钓鱼 道具|default\nitem.feed_done|看背包|/钓鱼 背包|default\nitem.reroll_done|水族馆|/钓鱼 水族馆|default\nitem.reroll_done|道具店|/钓鱼 道具|default\nitem.reroll_done|再来一竿|/钓鱼|default\nitem.deco_used|看看缸|/钓鱼 水族馆|default\nitem.deco_used|领收益|/钓鱼 领|default\nitem.deco_used|道具店|/钓鱼 道具|default\nitem.feed_no_fish|水族馆|/钓鱼 水族馆|default\nitem.feed_no_fish|放缸里|/钓鱼 放 全部|default\nitem.feed_no_fish|看背包|/钓鱼 背包|default\nitem.reroll_no_fish|水族馆|/钓鱼 水族馆|default\nitem.reroll_no_fish|看背包|/钓鱼 背包|default\nitem.breed_no_fish|水族馆|/钓鱼 水族馆|default\nitem.breed_no_fish|放缸里|/钓鱼 放 全部|default\nitem.usage|道具店|/钓鱼 道具|default\nitem.usage|看背包|/钓鱼 背包|default\nitem.usage|帮助|/钓鱼 帮助|default\nitem.empty|道具店|/钓鱼 道具|primary\nitem.empty|再来一竿|/钓鱼|default\nitem.missing|道具店|/钓鱼 道具|default\nitem.missing|看背包|/钓鱼 背包|default\nitem.feed_full|水族馆|/钓鱼 水族馆|default\nitem.feed_full|道具店|/钓鱼 道具|default\nitem.deco_full|看看缸|/钓鱼 水族馆|default\nitem.deco_full|再来一竿|/钓鱼|default\nitem.deco_disabled|看看缸|/钓鱼 水族馆|default\nitem.deco_disabled|帮助|/钓鱼 帮助|default\nitem.breed_failed|水族馆|/钓鱼 水族馆|default\nitem.breed_failed|道具店|/钓鱼 道具|default\nitem.reroll_failed|水族馆|/钓鱼 水族馆|default\nitem.reroll_failed|再来一竿|/钓鱼|default\nitem.breed_done|水族馆|/钓鱼 水族馆|default\nitem.breed_done|再来一竿|/钓鱼|default\ncollection.view|再来一竿|/钓鱼|default\ncollection.view|钓点|/钓鱼 钓点|default\ncollection.view|今日|/钓鱼 今日|default\ncollection.view|看背包|/钓鱼 背包|default\ncollection.detail|再来一竿|/钓鱼|default\ncollection.detail|图鉴|/钓鱼 图鉴|default\ncollection.detail|钓点|/钓鱼 钓点|default\ncollection.location|去钓点|/钓鱼 钓点|primary\ncollection.location|再来一竿|/钓鱼|default\ncollection.location|图鉴|/钓鱼 图鉴|default\nfishinfo.detail|再来一竿|/钓鱼|default\nfishinfo.detail|钓点|/钓鱼 钓点|default\nfishinfo.detail|图鉴|/钓鱼 图鉴|default\nfishinfo.detail|看背包|/钓鱼 背包|default\nfishinfo.location_detail|再来一竿|/钓鱼|default\nfishinfo.location_detail|图鉴|/钓鱼 图鉴|default\nfishinfo.location_detail|钓点|/钓鱼 钓点|default\nfishinfo.multi_match|再来一竿|/钓鱼|default\nfishinfo.multi_match|图鉴|/钓鱼 图鉴|default\nfishinfo.multi_match|帮助|/钓鱼 帮助|default\nfishinfo.not_found|图鉴|/钓鱼 图鉴|default\nfishinfo.not_found|帮助|/钓鱼 帮助|default\nfishinfo.not_found|再来一竿|/钓鱼|default\ncollectibles.view|再来一竿|/钓鱼|default\ncollectibles.view|看背包|/钓鱼 背包|default\ncollectibles.view|帮助|/钓鱼 帮助|default\nprofile.view|排行榜|/钓鱼 排行|default\nprofile.view|称号|/钓鱼 称号|default\nprofile.view|再来一竿|/钓鱼|default\nprofile.view|看背包|/钓鱼 背包|default\nprofile.renamed|我的档案|/钓鱼 档案|default\nprofile.renamed|再来一竿|/钓鱼|default\nstamina.view|再来一竿|/钓鱼|primary\nstamina.view|喝姜汤|/钓鱼 用 姜汤|default\nstamina.view|看背包|/钓鱼 背包|default\nstamina.view|帮助|/钓鱼 帮助|default\nsign.done|再来一竿|/钓鱼|default\nsign.done|看背包|/钓鱼 背包|default\nsign.done|今日|/钓鱼 今日|default\nsign.result|再来一竿|/钓鱼|default\nsign.result|看背包|/钓鱼 背包|default\nlottery.view|买 1 张|/钓鱼 大鱼乐 1|primary\nlottery.view|买 10 张|/钓鱼 大鱼乐 10|default\nlottery.view|看概率|/钓鱼 大鱼乐 概率|default\nlottery.view|看背包|/钓鱼 背包|default\nlottery.no_gold|卖光光|/钓鱼 卖光光|primary\nlottery.no_gold|看背包|/钓鱼 背包|default\nlottery.no_gold|再来一竿|/钓鱼|default\nlottery.off|开关|/钓鱼 大鱼乐 开关|primary\nlottery.off|再来一竿|/钓鱼|default\nlottery.off|帮助|/钓鱼 帮助|default\nlottery.switches|买 1 张|/钓鱼 大鱼乐 1|primary\nlottery.switches|看概率|/钓鱼 大鱼乐 概率|default\nlottery.switches|再来一竿|/钓鱼|default\nlottery.limit|看概率|/钓鱼 大鱼乐 概率|default\nlottery.limit|再来一竿|/钓鱼|default\nlottery.limit|看背包|/钓鱼 背包|default\nlottery.result|再来一张|/钓鱼 大鱼乐 1|primary\nlottery.result|再来十张|/钓鱼 大鱼乐 10|default\nlottery.result|看概率|/钓鱼 大鱼乐 概率|default\nlottery.result|看背包|/钓鱼 背包|default\nlottery.odds|买 1 张|/钓鱼 大鱼乐 1|primary\nlottery.odds|买 10 张|/钓鱼 大鱼乐 10|default\nlottery.odds|再来一竿|/钓鱼|default\nlottery.pity|再来一张|/钓鱼 大鱼乐 1|primary\nlottery.pity|看背包|/钓鱼 背包|default\ntoday.view|再来一竿|/钓鱼|default\ntoday.view|看订单|/钓鱼 订单|default\ntoday.view|钓点|/钓鱼 钓点|default\ntoday.view|看背包|/钓鱼 背包|default\nrank.view|我的档案|/钓鱼 档案|default\nrank.view|再来一竿|/钓鱼|default\nrank.view|看背包|/钓鱼 背包|default\nrank.empty|再来一竿|/钓鱼|default\nrank.empty|看背包|/钓鱼 背包|default\nrank.no_data|再来一竿|/钓鱼|default\nrank.no_data|看背包|/钓鱼 背包|default\nhelp.page|开始钓鱼|/钓鱼|primary\nhelp.page|看背包|/钓鱼 背包|default\nhelp.page|水族馆|/钓鱼 水族馆|default\nhelp.page|我的档案|/钓鱼 档案|default\nhelp.unknown|帮助|/钓鱼 帮助 1|primary\nhelp.unknown|再来一竿|/钓鱼|default\nauto.view|鱼饵店|/钓鱼 鱼饵|default\nauto.view|道具店|/钓鱼 道具|default\nauto.view|看背包|/钓鱼 背包|default\nauto.view|再来一竿|/钓鱼|default\nauto.on|再来一竿|/钓鱼|primary\nauto.on|看背包|/钓鱼 背包|default\nauto.on|鱼饵店|/钓鱼 鱼饵|default\nauto.off|再来一竿|/钓鱼|default\nauto.off|看背包|/钓鱼 背包|default\nauto.bad|道具店|/钓鱼 道具|default\nauto.bad|再来一竿|/钓鱼|default\ntitle.list|排行榜|/钓鱼 排行|default\ntitle.list|我的档案|/钓鱼 档案|default\ntitle.list|再来一竿|/钓鱼|default\ntitle.list|水族馆|/钓鱼 水族馆|default\ntitle.bought|我的档案|/钓鱼 档案|default\ntitle.bought|称号|/钓鱼 称号|default\ntitle.bought|再来一竿|/钓鱼|default\ntitle.equipped|我的档案|/钓鱼 档案|default\ntitle.equipped|排行榜|/钓鱼 排行|default\ntitle.equipped|再来一竿|/钓鱼|default\ntitle.owned|称号|/钓鱼 称号|default\ntitle.owned|我的档案|/钓鱼 档案|default\ntitle.not_owned|称号|/钓鱼 称号|primary\ntitle.not_owned|再来一竿|/钓鱼|default\ntitle.not_found|称号|/钓鱼 称号|default\ntitle.not_found|再来一竿|/钓鱼|default\ntitle.no_gold|签到|/钓鱼 签到|default\ntitle.no_gold|卖光光|/钓鱼 卖光光|default\ntitle.disabled|再来一竿|/钓鱼|default\ntitle.disabled|帮助|/钓鱼 帮助|default\noffering.done|领收益|/钓鱼 领|primary\noffering.done|看看缸|/钓鱼 水族馆|default\noffering.done|再来一竿|/钓鱼|default\noffering.no_gold|卖光光|/钓鱼 卖光光|default\noffering.no_gold|看背包|/钓鱼 背包|default\nsystem.error|帮助|/钓鱼 帮助|default\nsystem.error|再来一竿|/钓鱼|default\nbroadcast.catch|再来一竿|/钓鱼|default\nbroadcast.catch|我的档案|/钓鱼 档案|default\nbroadcast.catch|看背包|/钓鱼 背包|default\nstory.result|继续钓|/钓鱼|primary\nstory.result|看背包|/钓鱼 背包|default\nstory.result|我的档案|/钓鱼 档案|default\nstory|{label}|/钓鱼 事件 {n}|default\n# v1.18.35：两排**动态按钮**也进了这张表 —— 它们不挂在某一条回复上，\n# 由代码在合适的时机取用并按当前情境填占位符（分页界面 / 道具用成功之后）。\n# 因此文案、指令、样式照样能在「💬 回复」页里改；「什么时候出现」由代码决定：\n#   page.prev / page.next  首页不给上一页、尾页不给下一页、只有一页时整排不出现\n#   item.again             背包里还有这件道具才出现（用光了按下去只会得到一句「你没有」）\n# 占位符：{指令}=当前界面的翻页指令（如 /钓鱼 背包）  {页}=目标页码\n#         {当前页}/{总页}   {道具}=刚才用的道具名  {参数}=刚才写的栏位（如 1 2 3 / 全部）\npage.prev|上一页|{指令} {页}|default\npage.next|下一页|{指令} {页}|default\nitem.again|再次使用|/钓鱼 用 {道具} {参数}|default"
++    "default": "cast|再来一竿|/钓鱼|default\ncast|看背包|/钓鱼 背包|default\ncast|换饵|/钓鱼 换饵|default\ncast|卖光光|/钓鱼 卖光光|default\ncast.hit|再来一竿|/钓鱼|default\ncast.hit|看背包|/钓鱼 背包|default\ncast.hit|放缸|/钓鱼 放 全部|default\ncast.hit|卖光光|/钓鱼 卖光光|default\ncast.no_stamina|体力|/钓鱼 体力|default\ncast.no_stamina|喝姜汤|/钓鱼 用 姜汤|default\ncast.no_stamina|看背包|/钓鱼 背包|default\ncast.no_stamina|帮助|/钓鱼 帮助|default\n# 三种空竿：都会让人想「换饵」或「补货」（v1.18.21 补上 —— 顺便让老配置里\n# 站长自己配过的那几行仍算「官方场景」，内容合并才能把其余场景补进来）\ncast.miss_none|再来一竿|/钓鱼|default\ncast.miss_none|换饵|/钓鱼 换饵|default\ncast.miss_none|鱼饵店|/钓鱼 鱼饵|default\ncast.miss_none|看背包|/钓鱼 背包|default\ncast.miss_bait|再来一竿|/钓鱼|default\ncast.miss_bait|换饵|/钓鱼 换饵|default\ncast.miss_bait|鱼饵店|/钓鱼 鱼饵|default\ncast.miss_bait|看背包|/钓鱼 背包|default\ncast.miss_deep|再来一竿|/钓鱼|default\ncast.miss_deep|换饵|/钓鱼 换饵|default\ncast.miss_deep|钓点|/钓鱼 钓点|default\ncast.miss_deep|看背包|/钓鱼 背包|default\ncast.no_gold|签到|/钓鱼 签到|default\ncast.no_gold|卖光光|/钓鱼 卖光光|default\ncast.no_gold|看背包|/钓鱼 背包|default\ncast.bag_full|卖光光|/钓鱼 卖光光|primary\ncast.bag_full|放缸里|/钓鱼 放 全部|default\ncast.bag_full|扩建背包|/钓鱼 扩建背包|default\ncast.bag_full|看背包|/钓鱼 背包|default\ncast.multi_summary|再来一竿|/钓鱼|default\ncast.multi_summary|看背包|/钓鱼 背包|default\ncast.multi_summary|水族馆|/钓鱼 水族馆|default\ncast.multi_summary|卖光光|/钓鱼 卖光光|default\ncast.achievement|再来一竿|/钓鱼|default\ncast.achievement|我的档案|/钓鱼 档案|default\ncast.milestone|再来一竿|/钓鱼|default\ncast.milestone|我的档案|/钓鱼 档案|default\npull|再来一竿|/钓鱼|default\npull|换饵|/钓鱼 换饵|default\npull|看背包|/钓鱼 背包|default\npull|帮助|/钓鱼 帮助|default\npull.hook|拉线！|/钓鱼 拉|primary\npull.timeout|再来一竿|/钓鱼|primary\npull.timeout|换饵|/钓鱼 换饵|default\npull.timeout|看背包|/钓鱼 背包|default\npull.escape|再来一竿|/钓鱼|primary\npull.escape|换饵|/钓鱼 换饵|default\npull.escape|看背包|/钓鱼 背包|default\npull.none|下竿|/钓鱼|primary\npull.none|看背包|/钓鱼 背包|default\npull.none|帮助|/钓鱼 帮助|default\nbag|卖光光|/钓鱼 卖光光|primary\nbag|放缸里|/钓鱼 放 全部|default\nbag|扩建背包|/钓鱼 扩建背包|default\nbag|再来一竿|/钓鱼|default\nbag.empty|下竿|/钓鱼|primary\nbag.empty|鱼饵店|/钓鱼 鱼饵|default\nbag.empty|图鉴|/钓鱼 图鉴|default\nbag.empty|帮助|/钓鱼 帮助|default\nsell.result|再来一竿|/钓鱼|default\nsell.result|看背包|/钓鱼 背包|default\nsell.result|水族馆|/钓鱼 水族馆|default\nsell.result|卖光光|/钓鱼 卖光光|default\nshop.list|鱼竿店|/钓鱼 鱼竿|default\nshop.list|道具店|/钓鱼 道具|default\nshop.list|鱼饵店|/钓鱼 鱼饵|default\nshop.list|看背包|/钓鱼 背包|default\nshop.no_gold_bait|签到|/钓鱼 签到|default\nshop.no_gold_item|签到|/钓鱼 签到|default\nshop.not_found|鱼竿店|/钓鱼 鱼竿|default\nshop.not_found|道具店|/钓鱼 道具|default\nshop.not_found|鱼饵店|/钓鱼 鱼饵|default\nshop.locked|我的档案|/钓鱼 档案|default\nshop.locked|再来一竿|/钓鱼|default\nbackpack.upgraded|看背包|/钓鱼 背包|default\nbackpack.upgraded|水族馆|/钓鱼 水族馆|default\nbackpack.upgraded|再来一竿|/钓鱼|default\nbackpack.no_gold|签到|/钓鱼 签到|default\nbackpack.no_gold|卖光光|/钓鱼 卖光光|default\nrod.list|自动装备|/钓鱼 装备|primary\nrod.list|鱼饵店|/钓鱼 鱼饵|default\nrod.list|看背包|/钓鱼 背包|default\nrod.list|再来一竿|/钓鱼|default\nrod.no_gold|签到|/钓鱼 签到|default\nrod.no_gold|卖光光|/钓鱼 卖光光|default\nrod.level_low|我的档案|/钓鱼 档案|default\nrod.level_low|再来一竿|/钓鱼|default\nrod.not_owned|鱼竿店|/钓鱼 鱼竿|default\nrod.not_owned|看背包|/钓鱼 背包|default\nbait.equipped|再来一竿|/钓鱼|default\nbait.equipped|看背包|/钓鱼 背包|default\nbait.equipped|水族馆|/钓鱼 水族馆|default\nbait.empty|鱼饵店|/钓鱼 鱼饵|primary\nbait.empty|看背包|/钓鱼 背包|default\nbait.empty|帮助|/钓鱼 帮助|default\nbait.not_owned|鱼饵店|/钓鱼 鱼饵|primary\nbait.not_owned|我的档案|/钓鱼 档案|default\nbait.locked|我的档案|/钓鱼 档案|default\nbait.locked|再来一竿|/钓鱼|default\nbait.not_found|鱼饵店|/钓鱼 鱼饵|default\nbait.not_found|帮助|/钓鱼 帮助|default\nlocation|再来一竿|/钓鱼|default\nlocation|查图鉴|/钓鱼 图鉴|default\nlocation|水族馆|/钓鱼 水族馆|default\nlocation|看天气|/钓鱼 今日|default\nlocation.unlock_need|查图鉴|/钓鱼 图鉴|default\nlocation.unlock_need|钓点|/钓鱼 钓点|default\nlocation.unlock_need|签到|/钓鱼 签到|default\nlocation.unlock_need|看背包|/钓鱼 背包|default\nlocation.moved|再来一竿|/钓鱼|primary\nlocation.moved|看订单|/钓鱼 订单|default\nlocation.moved|查图鉴|/钓鱼 图鉴|default\nlocation.moved|水族馆|/钓鱼 水族馆|default\nlocation.not_found|钓点|/钓鱼 钓点|default\nlocation.not_found|再来一竿|/钓鱼|default\norders.list|看背包|/钓鱼 背包|default\norders.list|再来一竿|/钓鱼|default\norders.list|卖光光|/钓鱼 卖光光|default\norders.list|帮助|/钓鱼 帮助|default\norders.submit_result|再来一竿|/钓鱼|default\norders.submit_result|看订单|/钓鱼 订单|default\norders.submit_result|看背包|/钓鱼 背包|default\norders.locked|我的档案|/钓鱼 档案|default\norders.locked|再来一竿|/钓鱼|default\naquarium.view|领收益|/钓鱼 领|primary\naquarium.view|放全部|/钓鱼 放 全部|default\naquarium.view|取全部|/钓鱼 取 全部|default\naquarium.view|📒 台账|/钓鱼 台账|default\naquarium.view|扩建|/钓鱼 水族馆 扩建|default\naquarium.full|扩建|/钓鱼 水族馆 扩建|primary\naquarium.full|取全部|/钓鱼 取 全部|default\naquarium.full|卖光光|/钓鱼 卖光光|default\naquarium.full|看背包|/钓鱼 背包|default\naquarium.put_done|领收益|/钓鱼 领|primary\naquarium.put_done|放全部|/钓鱼 放 全部|default\naquarium.put_done|看看缸|/钓鱼 水族馆|default\naquarium.put_done|再来一竿|/钓鱼|default\naquarium.take_done|卖光光|/钓鱼 卖光光|primary\naquarium.take_done|看背包|/钓鱼 背包|default\naquarium.take_done|放全部|/钓鱼 放 全部|default\naquarium.take_done|再来一竿|/钓鱼|default\naquarium.income|再来一竿|/钓鱼|default\naquarium.income|放全部|/钓鱼 放 全部|default\naquarium.income|看看缸|/钓鱼 水族馆|default\naquarium.income|看背包|/钓鱼 背包|default\naquarium.income_wait|看看缸|/钓鱼 水族馆|default\naquarium.income_wait|再来一竿|/钓鱼|default\naquarium.income_empty|放全部|/钓鱼 放 全部|primary\naquarium.income_empty|看背包|/钓鱼 背包|default\naquarium.max|看看缸|/钓鱼 水族馆|default\naquarium.max|再来一竿|/钓鱼|default\naquarium.no_gold|签到|/钓鱼 签到|default\naquarium.no_gold|卖光光|/钓鱼 卖光光|default\naquarium.upgraded|放全部|/钓鱼 放 全部|primary\naquarium.upgraded|看看缸|/钓鱼 水族馆|default\naquarium.upgraded|领收益|/钓鱼 领|default\naquarium.upgraded|再来一竿|/钓鱼|default\naquarium.sell_done|再来一竿|/钓鱼|default\naquarium.sell_done|看看缸|/钓鱼 水族馆|default\naquarium.sell_done|看背包|/钓鱼 背包|default\naquarium.put_usage|看背包|/钓鱼 背包|default\naquarium.put_usage|再来一竿|/钓鱼|default\naquarium.take_usage|看看缸|/钓鱼 水族馆|default\naquarium.take_usage|看背包|/钓鱼 背包|default\naquarium.feed_usage|道具店|/钓鱼 道具|default\naquarium.feed_usage|看看缸|/钓鱼 水族馆|default\naquarium.sell_usage|看看缸|/钓鱼 水族馆|default\naquarium.sell_usage|看背包|/钓鱼 背包|default\naquarium.bad_slot|看看缸|/钓鱼 水族馆|default\naquarium.bad_slot|再来一竿|/钓鱼|default\naquarium.usage|再来一竿|/钓鱼|default\naquarium.usage|看看缸|/钓鱼 水族馆|default\naquarium.usage|帮助|/钓鱼 帮助|default\nitem.used|再来一竿|/钓鱼|default\nitem.used|看背包|/钓鱼 背包|default\nitem.used|水族馆|/钓鱼 水族馆|default\nitem.used|道具店|/钓鱼 道具|default\nitem.feed_done|再来一竿|/钓鱼|default\nitem.feed_done|水族馆|/钓鱼 水族馆|default\nitem.feed_done|道具店|/钓鱼 道具|default\nitem.feed_done|看背包|/钓鱼 背包|default\nitem.reroll_done|水族馆|/钓鱼 水族馆|default\nitem.reroll_done|道具店|/钓鱼 道具|default\nitem.reroll_done|再来一竿|/钓鱼|default\nitem.deco_used|看看缸|/钓鱼 水族馆|default\nitem.deco_used|领收益|/钓鱼 领|default\nitem.deco_used|道具店|/钓鱼 道具|default\nitem.feed_no_fish|水族馆|/钓鱼 水族馆|default\nitem.feed_no_fish|放缸里|/钓鱼 放 全部|default\nitem.feed_no_fish|看背包|/钓鱼 背包|default\nitem.reroll_no_fish|水族馆|/钓鱼 水族馆|default\nitem.reroll_no_fish|看背包|/钓鱼 背包|default\nitem.breed_no_fish|水族馆|/钓鱼 水族馆|default\nitem.breed_no_fish|放缸里|/钓鱼 放 全部|default\nitem.usage|道具店|/钓鱼 道具|default\nitem.usage|看背包|/钓鱼 背包|default\nitem.usage|帮助|/钓鱼 帮助|default\nitem.empty|道具店|/钓鱼 道具|primary\nitem.empty|再来一竿|/钓鱼|default\nitem.missing|道具店|/钓鱼 道具|default\nitem.missing|看背包|/钓鱼 背包|default\nitem.feed_full|水族馆|/钓鱼 水族馆|default\nitem.feed_full|道具店|/钓鱼 道具|default\nitem.deco_full|看看缸|/钓鱼 水族馆|default\nitem.deco_full|再来一竿|/钓鱼|default\nitem.deco_disabled|看看缸|/钓鱼 水族馆|default\nitem.deco_disabled|帮助|/钓鱼 帮助|default\nitem.breed_failed|水族馆|/钓鱼 水族馆|default\nitem.breed_failed|道具店|/钓鱼 道具|default\nitem.reroll_failed|水族馆|/钓鱼 水族馆|default\nitem.reroll_failed|再来一竿|/钓鱼|default\nitem.breed_done|水族馆|/钓鱼 水族馆|default\nitem.breed_done|再来一竿|/钓鱼|default\ncollection.view|再来一竿|/钓鱼|default\ncollection.view|钓点|/钓鱼 钓点|default\ncollection.view|今日|/钓鱼 今日|default\ncollection.view|看背包|/钓鱼 背包|default\ncollection.detail|再来一竿|/钓鱼|default\ncollection.detail|图鉴|/钓鱼 图鉴|default\ncollection.detail|钓点|/钓鱼 钓点|default\ncollection.location|去钓点|/钓鱼 钓点|primary\ncollection.location|再来一竿|/钓鱼|default\ncollection.location|图鉴|/钓鱼 图鉴|default\nfishinfo.detail|再来一竿|/钓鱼|default\nfishinfo.detail|钓点|/钓鱼 钓点|default\nfishinfo.detail|图鉴|/钓鱼 图鉴|default\nfishinfo.detail|看背包|/钓鱼 背包|default\nfishinfo.location_detail|再来一竿|/钓鱼|default\nfishinfo.location_detail|图鉴|/钓鱼 图鉴|default\nfishinfo.location_detail|钓点|/钓鱼 钓点|default\nfishinfo.multi_match|再来一竿|/钓鱼|default\nfishinfo.multi_match|图鉴|/钓鱼 图鉴|default\nfishinfo.multi_match|帮助|/钓鱼 帮助|default\nfishinfo.not_found|图鉴|/钓鱼 图鉴|default\nfishinfo.not_found|帮助|/钓鱼 帮助|default\nfishinfo.not_found|再来一竿|/钓鱼|default\ncollectibles.view|再来一竿|/钓鱼|default\ncollectibles.view|看背包|/钓鱼 背包|default\ncollectibles.view|帮助|/钓鱼 帮助|default\nprofile.view|排行榜|/钓鱼 排行|default\nprofile.view|称号|/钓鱼 称号|default\nprofile.view|再来一竿|/钓鱼|default\nprofile.view|看背包|/钓鱼 背包|default\nprofile.renamed|我的档案|/钓鱼 档案|default\nprofile.renamed|再来一竿|/钓鱼|default\nstamina.view|再来一竿|/钓鱼|primary\nstamina.view|喝姜汤|/钓鱼 用 姜汤|default\nstamina.view|看背包|/钓鱼 背包|default\nstamina.view|帮助|/钓鱼 帮助|default\nsign.done|再来一竿|/钓鱼|default\nsign.done|看背包|/钓鱼 背包|default\nsign.done|今日|/钓鱼 今日|default\nsign.result|再来一竿|/钓鱼|default\nsign.result|看背包|/钓鱼 背包|default\nlottery.view|买 1 张|/钓鱼 大鱼乐 1|primary\nlottery.view|买 10 张|/钓鱼 大鱼乐 10|default\nlottery.view|看概率|/钓鱼 大鱼乐 概率|default\nlottery.view|看背包|/钓鱼 背包|default\nlottery.no_gold|卖光光|/钓鱼 卖光光|primary\nlottery.no_gold|看背包|/钓鱼 背包|default\nlottery.no_gold|再来一竿|/钓鱼|default\nlottery.off|开关|/钓鱼 大鱼乐 开关|primary\nlottery.off|再来一竿|/钓鱼|default\nlottery.off|帮助|/钓鱼 帮助|default\nlottery.switches|买 1 张|/钓鱼 大鱼乐 1|primary\nlottery.switches|看概率|/钓鱼 大鱼乐 概率|default\nlottery.switches|再来一竿|/钓鱼|default\nlottery.limit|看概率|/钓鱼 大鱼乐 概率|default\nlottery.limit|再来一竿|/钓鱼|default\nlottery.limit|看背包|/钓鱼 背包|default\nlottery.result|再来一张|/钓鱼 大鱼乐 1|primary\nlottery.result|再来十张|/钓鱼 大鱼乐 10|default\nlottery.result|看概率|/钓鱼 大鱼乐 概率|default\nlottery.result|看背包|/钓鱼 背包|default\nlottery.odds|买 1 张|/钓鱼 大鱼乐 1|primary\nlottery.odds|买 10 张|/钓鱼 大鱼乐 10|default\nlottery.odds|再来一竿|/钓鱼|default\nlottery.pity|再来一张|/钓鱼 大鱼乐 1|primary\nlottery.pity|看背包|/钓鱼 背包|default\ntoday.view|再来一竿|/钓鱼|default\ntoday.view|看订单|/钓鱼 订单|default\ntoday.view|钓点|/钓鱼 钓点|default\ntoday.view|看背包|/钓鱼 背包|default\nrank.view|我的档案|/钓鱼 档案|default\nrank.view|再来一竿|/钓鱼|default\nrank.view|看背包|/钓鱼 背包|default\nrank.empty|再来一竿|/钓鱼|default\nrank.empty|看背包|/钓鱼 背包|default\nrank.no_data|再来一竿|/钓鱼|default\nrank.no_data|看背包|/钓鱼 背包|default\nhelp.page|开始钓鱼|/钓鱼|primary\nhelp.page|看背包|/钓鱼 背包|default\nhelp.page|水族馆|/钓鱼 水族馆|default\nhelp.page|我的档案|/钓鱼 档案|default\nhelp.unknown|帮助|/钓鱼 帮助 1|primary\nhelp.unknown|再来一竿|/钓鱼|default\nauto.view|鱼饵店|/钓鱼 鱼饵|default\nauto.view|道具店|/钓鱼 道具|default\nauto.view|看背包|/钓鱼 背包|default\nauto.view|再来一竿|/钓鱼|default\nauto.on|再来一竿|/钓鱼|primary\nauto.on|看背包|/钓鱼 背包|default\nauto.on|鱼饵店|/钓鱼 鱼饵|default\nauto.off|再来一竿|/钓鱼|default\nauto.off|看背包|/钓鱼 背包|default\nauto.bad|道具店|/钓鱼 道具|default\nauto.bad|再来一竿|/钓鱼|default\ntitle.list|排行榜|/钓鱼 排行|default\ntitle.list|我的档案|/钓鱼 档案|default\ntitle.list|再来一竿|/钓鱼|default\ntitle.list|水族馆|/钓鱼 水族馆|default\ntitle.bought|我的档案|/钓鱼 档案|default\ntitle.bought|称号|/钓鱼 称号|default\ntitle.bought|再来一竿|/钓鱼|default\ntitle.equipped|我的档案|/钓鱼 档案|default\ntitle.equipped|排行榜|/钓鱼 排行|default\ntitle.equipped|再来一竿|/钓鱼|default\ntitle.owned|称号|/钓鱼 称号|default\ntitle.owned|我的档案|/钓鱼 档案|default\ntitle.not_owned|称号|/钓鱼 称号|primary\ntitle.not_owned|再来一竿|/钓鱼|default\ntitle.not_found|称号|/钓鱼 称号|default\ntitle.not_found|再来一竿|/钓鱼|default\ntitle.no_gold|签到|/钓鱼 签到|default\ntitle.no_gold|卖光光|/钓鱼 卖光光|default\ntitle.disabled|再来一竿|/钓鱼|default\ntitle.disabled|帮助|/钓鱼 帮助|default\noffering.done|领收益|/钓鱼 领|primary\noffering.done|看看缸|/钓鱼 水族馆|default\noffering.done|再来一竿|/钓鱼|default\noffering.no_gold|卖光光|/钓鱼 卖光光|default\noffering.no_gold|看背包|/钓鱼 背包|default\nsystem.error|帮助|/钓鱼 帮助|default\nsystem.error|再来一竿|/钓鱼|default\nbroadcast.catch|再来一竿|/钓鱼|default\nbroadcast.catch|我的档案|/钓鱼 档案|default\nbroadcast.catch|看背包|/钓鱼 背包|default\nstory.result|继续钓|/钓鱼|primary\nstory.result|看背包|/钓鱼 背包|default\nstory.result|我的档案|/钓鱼 档案|default\nstory|{label}|/钓鱼 事件 {n}|default\n# v1.18.35：两排**动态按钮**也进了这张表 —— 它们不挂在某一条回复上，\n# 由代码在合适的时机取用并按当前情境填占位符（分页界面 / 道具用成功之后）。\n# 因此文案、指令、样式照样能在「💬 回复」页里改；「什么时候出现」由代码决定：\n#   page.prev / page.next  首页不给上一页、尾页不给下一页、只有一页时整排不出现\n#   item.again             背包里还有这件道具才出现（用光了按下去只会得到一句「你没有」）\n# 占位符：{指令}=当前界面的翻页指令（如 /钓鱼 背包）  {页}=目标页码\n#         {当前页}/{总页}   {道具}=刚才用的道具名  {参数}=刚才写的栏位（如 1 2 3 / 全部）\npage.prev|上一页|{指令} {页}|default\npage.next|下一页|{指令} {页}|default\nitem.again|再次使用|/钓鱼 用 {道具} {参数}|default"
+   },
+   "text_overrides": {
+     "invisible": true,
+@@ -1024,5 +1024,17 @@
+     "description": "凡是给鱼「投喂上限 +N 次」的道具（育灵水 +5、珍珠梳 +10，以后自己加的也算）：同一条鱼一辈子最多能用几次，同类一起算（默认 2）。填 0 = 不限",
+     "type": "int",
+     "default": 2
++  },
++  "lottery_fish_factor": {
++    "invisible": true,
++    "description": "奖池里的鱼乘多少系数（1.0 = 和订单鱼同价；0 = 不乘）",
++    "type": "float",
++    "default": 1.0
++  },
++  "feed_cap_applied": {
++    "invisible": true,
++    "description": "内部：上次生效的全局投喂上限（调低上限时给已喂超的鱼记债用）",
++    "type": "int",
++    "default": 30
+   }
+ }
+diff --git a/_engine.py b/_engine.py
+index 289271c..c8fb29d 100644
+--- a/_engine.py
++++ b/_engine.py
+@@ -45,7 +45,8 @@ class EngineMixin:
+             logger.debug(f"更新最佳渔获记录失败：{e}")
+ 
+     def _auto_supply(
+-        self, player: dict[str, Any], *, times: int = 1, wanted: str = ""
++        self, player: dict[str, Any], *, times: int = 1, wanted: str = "",
++        batch: bool = False,
+     ) -> tuple[str, list[str]]:
+         """下竿前的**自动补给**（v1.18.17，站长要的「用完了自动花钱补 + 自动装备」）。
+ 
+@@ -116,7 +117,11 @@ class EngineMixin:
+         #    那款普通饵再补货（站长：「这种限定鱼饵不能自动购买补饵，应该自动补换
+         #    之前的可以购买的鱼饵」）。换完之后这一竿就按普通饵钓，凭证不扣。
+         if bait_id != "none" and self._bait_is_limited(bait_id):
+-            need = max(1, times)
++            # ⚠️ v1.18.79：**连钓的起飞前检查用 `batch=True`** —— 限定饵不够整批时
++            #    也不该在这里换掉（那会白扔凭证）；真正的"够不够整批"由
++            #    `_do_multi_cast` 用剩余次数判断并如实告诉玩家。这里只在**一次都用不了**
++            #    时才换成普通饵。
++            need = 1 if batch else max(1, times)
+             if stock_of(bait_id) < need:
+                 fallback = self._purchasable_fallback_bait(equipped or wanted)
+                 notes.append(
+@@ -739,8 +744,36 @@ class EngineMixin:
+                     return
+ 
+             # --- 鱼饵：当前装备的那一种（用完会自动补货 / 补不到就退回空钩）---
+-            bait_id, _supply_notes = self._auto_supply(player, times=times)
+-            if bait_id != "none":
++            # ⚠️ v1.18.79 修（站长：「连钓的时候限定鱼饵用完了居然提示让我去买，你这不是
++            #    严重错误吗，明明只能抽出来」）：以前这里直接读 `player["baits"]`，于是
++            #    「凭证还剩 5 次」被算成 0 个，整批连钓被拦下、还让人去买**买不到**的限定饵。
++            #    现在按「哪一种饵真的会被用」分别算：
++            #      * **抽到的限定饵优先**（`_active_limited_bait`）—— 算它的**剩余次数**，
++            #        不够时如实说「还能抛 N 竿」（绝不提示购买），并说明后面会换成哪种普通饵；
++            #      * 玩家**点名**了某种普通饵（`/钓鱼 蚯蚓 10`）—— 只算那种饵的库存；
++            #      * 其余按装备的普通饵算库存。
++            #    ⚠️ 这里**没有** `wanted`（那是单竿 `_do_cast` 的形参）：连钓本来就不支持
++            #    「点名饵」，所以限定饵优先的口径在这里恒成立。
++            _lim_bait = self._active_limited_bait(player)
++            bait_id, _supply_notes = self._auto_supply(player, times=times, batch=True)
++            if _lim_bait and bait_id == _lim_bait:
++                _avail = self._limited_bait_left(player, _lim_bait)
++                _fb = self._purchasable_fallback_bait(player.get("equipped_bait") or "")
++                _other = _safe_int((player.get("baits") or {}).get(_fb or ""), 0, 0)
++                # ⚠️ v1.18.79：按**合计**判断，别只看限定饵那几次 ——
++                #    凭证 2 次 + 普通饵 5 个 = 7 竿，连钓 5 明明是够的（踩过）。
++                if _avail + _other < times:
++                    async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
++                            f"🎒 抽到的「{self.baits[_lim_bait]['name']}」还能抛 {_avail} 竿"
++                            f"（买不到，只能靠大鱼乐抽）\n"
++                            f"　连钓 {times} 竿不够，"
++                            + (f"后面会改用能买到的「{self.baits[_fb]['name']}」（还有 {_other} 个）"
++                               if _fb and _other else "后面会改用空钩（/钓鱼 换饵 空钩）")
++                            + f"\n　先 /钓鱼 {_avail + _other} 把这 {_avail + _other} 竿用掉"
++                        )):
++                        yield _r
++                    return
++            elif bait_id != "none":
+                 owned = _safe_int((player.get("baits") or {}).get(bait_id), 0, 0)
+                 if owned < times:
+                     async for _r in self._say_msg(event, "cast.multi_no_bait", event.plain_result(
+@@ -812,6 +845,11 @@ class EngineMixin:
+             #    现在整批的补给说明攒进 `_supply_all`，等渔获清单 + 汇总都列完，
+             #    统一贴到最末尾（见下面 `_supply_all` 那段）。
+             _supply_all = list(_supply_notes)
++            #: v1.18.79：整批开始前每件限用道具还剩几次（收尾时算「这一批扣了几次」）
++            _lim_before = {
++                _lid: self._limited_item_left(player, _lid)
++                for _lid in self._limited_item_list()
++            }
+             if truncated:
+                 lines.append(
+                     f"⚠️ 背包只剩 {free} 个位置，本次只钓 {planned} 次"
+@@ -830,6 +868,9 @@ class EngineMixin:
+             cast_factor = self._location_hook_factor(loc.get("id"))
+             #: 「buff 刚用光」是否已经尝试补过（补不到就不再每竿刷提示，见循环开头）
+             _buff_refill_tried = False
++            #: v1.18.79：抽到的限定饵**中途用完**时提示一次 —— 站长要的是
++            #: 「写清楚还能连钓多少次 / 后面换什么」，**不是**让他去买（那东西买不到）。
++            _lim_bait_run_out = bool(_lim_bait) and bait_id == _lim_bait
+ 
+             for index in range(1, planned + 1):
+                 # buff 在这一批**中途**用光了：照「自动补给」再补一个（v1.18.37）。
+@@ -853,8 +894,32 @@ class EngineMixin:
+                             if "额度用完" in _refill_note and _refill_note in _supply_all:
+                                 continue
+                             _supply_all.append(_refill_note)
++                    # v1.18.79：抽到的限定饵在这一竿之前用完了 —— 如实说一次
++                    # 「还能抛几竿用完了 / 后面换成了什么」，绝不提示购买（买不到）。
++                    if _lim_bait_run_out and not self._bait_is_limited(bait_id):
++                        _lim_bait_run_out = False
++                        _fb_name = (
++                            self.baits[bait_id]["name"] if bait_id != "none"
++                            else "空钩"
++                        )
++                        _supply_all.append(
++                            f"🕳️ 抽到的「{self.baits[_lim_bait]['name']}」的额度用完了，"
++                            f"后面 {planned - index + 1} 竿改用「{_fb_name}」"
++                            f"（它买不到，只能靠大鱼乐抽）"
++                        )
+                 # 每一竿都按「当前手气」结算，并按同一规则消耗：
+                 # 空竿 / 杂物也算一竿，和体力、鱼饵的扣法保持一致
++                # ⚠️ v1.18.79：**连钓也要扣限用道具的次数**（限定竿/限定饵的凭证）。
++                #    以前只有单竿 `_do_cast` 调了 `_use_limited_items`，连钓循环里没有 ——
++                #    于是「深渊秘饵/潮汐竿」在连钓时**次数永远不扣**，等于无限白用
++                #    （站长报的「限定鱼饵用完了还在让我买」背后就是这个）。
++                #    口径与单竿一致：抛一竿算一次。
++                #    ⚠️ 它返回的行里有「每次还剩 N 次」，逐竿贴进战报会刷屏
++                #    （实测连钓 3 竿刷 3 行），所以这里**只留「用完了」这种一次性事件**，
++                #    「这一批一共扣了几次」等整批结束后统一说一次（见 `_limited_batch_note`）。
++                for _lim_note in _use_limited_items(player, self.items):
++                    if "用完" in _lim_note and _lim_note not in _supply_all:
++                        _supply_all.append(_lim_note)
+                 luck = _effective_luck(player, cfg)
+                 floor = _effective_floor(player, cfg)
+                 _consume_luck(player)
+@@ -1099,6 +1164,16 @@ class EngineMixin:
+             # 站长的两条要求：位置别插在渔获中间、同一种补货只提示一次。
+             # 所以这里对「完全相同的句子」去重后再贴（不同竿补了两次玉髓灯 →
+             # 两句话一模一样，合成一条 + ×2 更省字；鱼饵和道具都走这一套）。
++            # v1.18.79：限用道具（限定竿/限定饵凭证）**整批只说一次**「扣了几次、还剩几次」
++            # —— 逐竿刷「还可用 N 次」会把战报撑爆（实测连钓 3 竿刷 3 行）。
++            for _lid in self._limited_item_list():
++                _left = self._limited_item_left(player, _lid)
++                _used_now = _lim_before.get(_lid, 0) - _left
++                if _used_now > 0:
++                    _supply_all.append(
++                        f"{self._item_label(_lid)} 本批抛了 {_used_now} 竿，"
++                        + (f"还剩 {_left} 次" if _left > 0 else "额度已用完")
++                    )
+             if _supply_all:
+                 merged: list[str] = []
+                 counts: dict[str, int] = {}
+@@ -1344,8 +1419,10 @@ class EngineMixin:
+         单竿走 `_apply_collectible`（再补成就与存档），连钓在循环里只记账、
+         最后统一结算——两条路径共用这一份规则，避免各写一份。
+         """
+-        items = player.setdefault("items", {})
+-        items[drop["id"]] = _safe_int(items.get(drop["id"]), 0, 0) + 1
++        # ⚠️ v1.18.75：杂物**只记进 `collectibles`**，不再往 `items`（道具背包）里塞一份。
++        #    以前这里两处都写，于是 `/钓鱼 用` 的「你有：…」会列出一串杂物 id
++        #    （`old_boot` / `tin_can`…），玩家看得一头雾水 —— 那些根本不是道具。
++        #    （杂物既没有「使用」动作，也不该出现在道具列表里。）
+         coll = player.setdefault("collectibles", {})
+         coll[drop["id"]] = _safe_int(coll.get(drop["id"]), 0, 0) + 1
+ 
+diff --git a/_game_data.py b/_game_data.py
+index e9c0275..d52bd14 100644
+--- a/_game_data.py
++++ b/_game_data.py
+@@ -1976,6 +1976,7 @@ orders.locked|再来一竿|/钓鱼|default
+ aquarium.view|领收益|/钓鱼 领|primary
+ aquarium.view|放全部|/钓鱼 放 全部|default
+ aquarium.view|取全部|/钓鱼 取 全部|default
++aquarium.view|📒 台账|/钓鱼 台账|default
+ aquarium.view|扩建|/钓鱼 水族馆 扩建|default
+ aquarium.full|扩建|/钓鱼 水族馆 扩建|primary
+ aquarium.full|取全部|/钓鱼 取 全部|default
+diff --git a/_lottery.py b/_lottery.py
+index 9879116..5e10381 100644
+--- a/_lottery.py
++++ b/_lottery.py
+@@ -264,6 +264,29 @@ def _rarity_mean_value(rarity_spec: str) -> float:
+     return sum(values) / len(values)
+ 
+ 
++def _cfg_lottery_fish_factor(plugin: Any) -> float:
++    """奖池鱼奖实际会乘的系数（**按「最好那根竿 × 最好那张图」估**，v1.18.71）。
++
++    ⚠️ 奖池发的鱼现在按订单那套动态系数估价（钓点倍率 × 鱼竿价值加成 × 等级成长，
++    封顶 ``order_factor_max``）。护栏必须按**上限**估 —— 否则后期玩家的实际期望
++    会超过票价，「期望 < 票价」那道护栏就成了摆设。
++    """
++    factor = max(0.0, _cfg_float(plugin, "lottery_fish_factor", 1.0))
++    if factor <= 0:
++        return 0.0
++    best_rod = 0.0
++    for rod in (getattr(plugin, "rods", None) or []):
++        best_rod = max(best_rod, max(0.0, _lot_float((rod or {}).get("value_bonus"), 0.0)))
++    avg_loc = _cfg_avg_location_mult(plugin)
++    growth = max(0.0, _cfg_float(plugin, "order_level_growth", 0.02))
++    cap = max(1.0, _cfg_float(plugin, "order_factor_max", 6.0))
++    # 等级那一项按「上限附近」估：等级成长封顶就在 order_factor_max，
++    # 所以取 min(cap, 装备部分 × 中后期等级)。
++    top_level = 60.0
++    gear = (1.0 + best_rod) * avg_loc
++    return min(cap, gear * (1.0 + growth * (top_level - 1))) * factor
++
++
+ def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
+     """一条鱼奖的期望面值（估算）。
+ 
+@@ -292,13 +315,25 @@ def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
+     else:
+         mult = EV_QUALITY_MULT.get(quality, 1.0)
+     variant_mult = _variant_expectation(plugin, variant)
++    # ⚠️ v1.18.71：奖池的鱼**从这一版起会乘系数**（站长：「应该和订单鱼一样乘上系数」）。
++    # 真实发放时乘的是订单那套动态系数 `_order_income_factor`（钓点 × 鱼竿 × 等级成长）；
++    # 这里按**上限**估（见 `_cfg_lottery_fish_factor`），护栏才压得住后期玩家。
++    factor = _cfg_lottery_fish_factor(plugin)
+     per = (
+         _rarity_mean_value(rarity) * mult * variant_mult
+-        * _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
++        * _cfg_variance_mean(plugin) * factor
+     )
+     return per * max(1, count)
+ 
+ 
++def _cfg_float(plugin: Any, key: str, default: float) -> float:
++    """读一个数值配置（读不到就 default）。"""
++    try:
++        return _lot_float((plugin.cfg or {}).get(key), default)
++    except Exception:                                                     # pragma: no cover
++        return default
++
++
+ def _variant_mult_of(item: dict[str, Any]) -> float:
+     """变异定义的「价值倍率」。
+ 
+diff --git a/_texts.py b/_texts.py
+index 1c8569d..d03c792 100644
+--- a/_texts.py
++++ b/_texts.py
+@@ -125,6 +125,7 @@ TEXTS: dict[str, str] = {
+     "sell.locked_note": "{原文}",  # 动态文本
+     "fishinfo.empty": "{原文}",  # 动态文本
+     "aquarium.view": "{原文}",  # 动态文本
++    "aquarium.log": "{原文}",  # 动态文本（v1.18.78 道具台账）
+     "aquarium.upgraded": "{原文}",  # 动态文本
+     "aquarium.income": "{原文}",  # 动态文本
+     "aquarium.feed_usage": "📖 投喂用「用」指令\n　/钓鱼 用 <道具名> <栏位号>\n　例：/钓鱼 用 高级饲料 1",
+diff --git a/_views.py b/_views.py
+index 5999688..0d9c9ba 100644
+--- a/_views.py
++++ b/_views.py
+@@ -491,11 +491,35 @@ class ViewsMixin:
+             return "🪝空钩"
+         return f"{bait.get('emoji', '')}{bait.get('name', bait_id)}"
+ 
++    def _junk_label(self, junk_id: str) -> str:
++        """一件**杂物**的「emoji + 中文名」；不是杂物就原样返回 id（方便调用方判断）。
++
++        v1.18.75 加的：杂物以前没有「给人看的名字」这条路，于是它们的 id
++        直接漏进了玩家看到的列表（站长：「bot 回复的都不能有函数名」）。
++        """
++        for junk in COLLECTIBLES:
++            if str(junk.get("id")) == str(junk_id):
++                return f"{junk.get('emoji', '')}{junk.get('name', junk_id)}"
++        return str(junk_id)
++
+     def _item_label(self, item_id: str) -> str:
++        """一件东西的「中文名 + emoji」。
++
++        ⚠️ v1.18.75：**绝不允许把内部 id 漏给玩家**（站长：「bot 回复的都不能有函数名」）。
++        以前找不到就 `return item_id`，于是杂物 id（`old_boot` / `tin_can`…）会直接
++        出现在「/钓鱼 用」的列表里。现在按三层兜底：
++        ① 道具表；② **杂物表**（走 `_junk_label`，它有中文名和 emoji）；
++        ③ 都没有才退回 id —— 但那种 id 只可能是配置写错的，同时打一条 debug 日志，
++        免得又变成静默漏字。
++        """
+         item = self.items.get(item_id)
+-        if not item:
+-            return item_id
+-        return f"{item.get('emoji', '')}{item.get('name', item_id)}"
++        if item:
++            return f"{item.get('emoji', '')}{item.get('name', item_id)}"
++        junk = self._junk_label(item_id)
++        if junk != item_id:
++            return junk
++        logger.debug(f"展示时找不到这个东西的名字（配置里少了 id？）：{item_id}")
++        return item_id
+ 
+     def _buff_status_line(self, player: dict[str, Any]) -> str:
+         """钓手手气 / 品质保底的当前状态（一行；没有就返回空串）。
+@@ -604,6 +628,53 @@ class ViewsMixin:
+         """
+         _sort_tank(aquarium)
+ 
++    def _ledger_view(self, player: dict[str, Any], spec_text: str = "") -> str:
++        """鱼的「道具台账」：**哪件道具、用了几次、一共改了多少数值**（v1.18.78）。
++
++        站长要这个是为了「以后削减数值 / 退回道具」时有据可查。只记**直接改数值的道具**
++        （饲料、仙露、龙涎、育灵水、珍珠梳）；洗髓丹不记（数值变不变看运气，退了也不对）。
++
++        ``spec_text`` 给栏位号：``/钓鱼 台账 2`` 只看第 2 条；留空看全部。
++        """
++        aquarium = player.get("aquarium") or []
++        if not aquarium:
++            return "🪸 水族馆是空的　/钓鱼 放 全部 先把鱼放进去"
++        picks = self._parse_indices(spec_text, aquarium) if spec_text else []
++        if spec_text and not picks:
++            return "🔢 栏位号看不懂　例：/钓鱼 台账 2　或 /钓鱼 台账（看全部）"
++        targets = [i - 1 for i in picks] if picks else list(range(len(aquarium)))
++        lines = ["📒 水族馆道具台账（只记「直接改数值」的道具）"]
++        for idx in targets:
++            instance = aquarium[idx]
++            by_item = self._ledger_by_item(instance)
++            lines.append(f"{idx + 1:>2}.{_instance_line(instance)}")
++            if not by_item:
++                lines.append("　　还没用过会改数值的道具")
++                continue
++            feed = _safe_int(instance.get("feed_uses"), 0, 0)
++            lines.append(
++                f"　　已喂 {feed}/{_feed_cap(instance, self.cfg)} 次"
++                f"　当前价值 {_fmt_gold(_instance_value(instance))}"
++            )
++            for item_id, row in sorted(
++                by_item.items(), key=lambda kv: -_safe_int(kv[1].get("value"), 0, 0)
++            ):
++                bits = [f"×{_safe_int(row.get('count'), 0, 0)}"]
++                gain = _safe_int(row.get("value"), 0, 0)
++                if gain:
++                    bits.append(f"价值 +{_fmt_gold(gain)}")
++                attrs = row.get("attrs") or {}
++                shown = [
++                    (f"投喂上限+{_safe_int(v, 0, 0)}" if k == "feed_bonus"
++                     else f"{ATTR_LABELS.get(k, k)}+{_safe_int(v, 0, 0)}")
++                    for k, v in attrs.items() if _safe_int(v, 0, 0)
++                ]
++                if shown:
++                    bits.append("、".join(shown))
++                lines.append(f"　　{self._item_label(item_id)}　" + "　".join(bits))
++        lines.append("💡 这里只记「会直接改数值」的道具；洗髓丹改的是重掷结果，不记")
++        return "\n".join(lines)
++
+     def _aquarium_view(self, player: dict[str, Any]) -> str:
+         aquarium: list[dict[str, Any]] = player.get("aquarium") or []
+         self._sort_aquarium(aquarium)
+diff --git a/main.py b/main.py
+index a84a6e2..a0075e6 100644
+--- a/main.py
++++ b/main.py
+@@ -236,6 +236,13 @@ BUILTIN_COMMAND_WORDS: frozenset[str] = frozenset(
+ #: 会被当成「点了没反应的死按钮」丢掉（写按钮表时还看不到任何报错）。
+ CALC.BUTTON_COMMAND_WORDS.update(BUILTIN_COMMAND_WORDS)
+ 
++#: v1.18.78：**凡是在分派链里单独认的短写法，也要进按钮白名单** ——
++#: 「台账」不在 SUBCOMMAND_KEYWORDS 里（那是「内置写法保护」表，台账不需要保护），
++#: 所以上面那一句同步不到它，得在这里补一次。漏了的话 `/钓鱼 台账` 按钮会被
++#: `_button_command_ok` 当死按钮丢掉（表现：按钮表里明明写了，界面上没有）。
++AQUARIUM_LOG_WORDS: tuple[str, ...] = ("台账", "明细", "log")
++CALC.BUTTON_COMMAND_WORDS.update(AQUARIUM_LOG_WORDS)
++
+ #: 运行时的「别名 → 规范子命令」表：**只装站长新加的别名**，
+ #: 内置写法一个都不装（分派链自己认），所以默认配置下它是空的、行为零变化。
+ COMMAND_ALIASES: dict[str, str] = {}
+@@ -368,6 +375,10 @@ DEFAULTS: dict[str, Any] = {
+     "feed_bonus_mode": "add",
+     # 单条鱼的投喂上限加成最多堆到多少（育灵水 +5、珍珠梳 +10 都堆在这一项上）
+     "feed_bonus_cap": 20,
++    #: 内部用：上次生效过的**全局投喂上限**（v1.18.77）。站长把 ``feed_max_uses`` 调低时，
++    #: 已经喂超的鱼会记一笔「债」抵在原上限上 —— 鱼保持原样、不能再喂，但已喂出来的
++    #: 属性与价值**一点不少**；上限调回去时债自动清零。由插件自己维护，不用手改。
++    "feed_cap_applied": 30,
+     # 洗髓丹洗出「神品」的概率 —— **每次重掷**独立判定（一颗丹默认重掷 3 次），
+     # 所以只能靠洗髓丹拿到，自然上钩永远不出（quality_weights 最后一位是 0）
+     "quality_myth_chance": 0.0025,
+@@ -515,10 +526,6 @@ DEFAULTS: dict[str, Any] = {
+         "gold_small|8|gold||5000|回本 5,000 金　🪙 五等奖",
+         "fish_rare|3|fish|稀有:珍品|1|稀有鱼 · 珍品　🐡 六等奖",
+         "bait_pack|2|baitpack|worm:20,bread:30|1|鱼饵包：蚯蚓 ×20 + 面包屑 ×30　🪱",
+-        # ---- v1.18.63：大鱼乐限定竿/饵（站长：「每件都要有被用的价值」+「不能正收入」）----
+-        # 概率按**配置现算的名义价值**分池：值越多张票，概率越低，
+-        # 而且每一档单看也是亏的（最贵的双尾竿名义 ≈3 张票 < 它出现所需的期望张数）。
+-        # 这 6 档加起来只占期望 ~20 金/张，整套期望仍 < 票价。
+         "tide_rod_pass|0.8|rod|tide_rod_pass|1|🌊 潮汐竿（异色猎手，20 次）",
+         "quick_rod_pass|0.25|rod|quick_rod_pass|1|🪶 瞬手竿（必完美拉线，25 次）",
+         "abyss_bait_pass|1.5|bait|abyss_bait_pass|1|🕳️ 深渊秘饵（全图鱼口，8 次）",
+@@ -536,6 +543,11 @@ DEFAULTS: dict[str, Any] = {
+     #: **每张票多少金币**（站长说「价格怎么不能配置」—— 它一直是可配的，但入口不好找，
+     #: 所以 v1.18.52 起在 🎰 大鱼乐 页顶部也写明了它在哪，并给了一键跳转）。
+     "lottery_ticket_price": 5000,
++    # ⚠️ v1.18.71：**奖池里的鱼要乘系数**（站长：「奖池的鱼应该和订单鱼一样乘上系数啊，
++    # 不然太低了」）。奖池发的鱼现在按「订单那套动态系数」估价（当前钓点倍率 ×
++    # 鱼竿价值加成 × 等级成长，封顶 order_factor_max），再乘这一项。
++    # 1.0 = 和订单鱼同价；嫌太肥就往下调（0.5 = 一半），调完记得发 /钓鱼 大鱼乐 概率 核对期望。
++    "lottery_fish_factor": 1.0,
+     "lottery_daily_limit": 50,          # 每天最多买几张（0 = 不限）
+     "lottery_max_per_call": 30,         # 一次最多连抽多少张（挡消息过长）
+     "lottery_pity_count": 15,           # 连输多少张后保底给一张（0 = 不保底）
+@@ -3400,6 +3412,10 @@ class FishingPlugin(
+             "best" if str(cfg.get("feed_bonus_mode") or "").strip().lower() in ("best", "max", "只取最好")
+             else "add"
+         )
++        # 奖池里的鱼乘多少系数（v1.18.71）：0 = 不乘（回到老行为），1 = 和订单鱼同价
++        cfg["lottery_fish_factor"] = _clamp(
++            _safe_number(cfg.get("lottery_fish_factor"), 1.0), 0.0, 100.0
++        )
+         cfg["offering_daily_limit"] = int(
+             _clamp(_safe_int(cfg.get("offering_daily_limit"), 1, 0), 0, 1000)
+         )
+@@ -3759,11 +3775,90 @@ class FishingPlugin(
+         # 老存档：缸里已在养的鱼补上入缸时间（一次性），否则它们会因为「没有计时」
+         # 永远不产出 —— 收益是严格按计时算的
+         migrated = self._migrate_tank_clocks(player) or migrated
++        # v1.18.77：站长调低全局投喂上限时，给已经喂超的鱼记债（不吃掉已喂的价值）
++        migrated = self._migrate_feed_cap(player) or migrated
+         if migrated:
+             logger.info(f"玩家 {user_id} 数据已迁移到 v{DATA_VERSION}")
+             await self._save_player(player)
+         return player
+ 
++    def _ledger(
++        self, instance: dict[str, Any], action: str, **kwargs: Any
++    ) -> None:
++        """给一条鱼记台账（薄包装：真正的实现在 `_calc._ledger`）。
++
++        为什么要包一层：`_calc` 是**纯函数模块**，它的成员只注入 main 的命名空间，
++        兄弟模块（`_commands` / `_engine`）里 `_ledger(...)` 是**取不到的**（会 NameError，
++        这类坑踩过不止一次）。走实例方法就永远不会错。
++        """
++        if CALC is None:                                                  # pragma: no cover
++            return
++        try:
++            CALC._ledger(instance, action, **kwargs)
++        except Exception:                                                 # pragma: no cover
++            pass          # 记账失败绝不能影响玩法
++
++    def _ledger_by_item(self, instance: dict[str, Any]) -> dict[str, dict[str, Any]]:
++        """按道具汇总这条鱼被改了哪些数值（薄包装，同 `_ledger`）。"""
++        if CALC is None:                                                  # pragma: no cover
++            return {}
++        try:
++            return CALC._ledger_by_item(instance)
++        except Exception:                                                 # pragma: no cover
++            return {}
++
++    def _migrate_feed_cap(self, player: dict[str, Any]) -> bool:
++        """站长把「全局投喂上限」调低后，给已经喂超的鱼记一笔债（v1.18.77）。
++
++        为什么需要：上限是**配置**（`feed_max_uses`，默认 30），而 `feed_uses` 是
++        **固化在鱼身上**的。站长把 30 改成 25 以后，老档里那些喂到 30 的鱼就永远
++        「超限」了 —— 不处理的话它们只是不能再喂（已喂的价值还在），但站长会疑惑
++        「那些多出来的次数/value 怎么算」。
++
++        处理办法（见 `_feed_cap`）：把超出的次数记进 `feed_debt`，抵在原上限上。
++        * 那条鱼**保持原样、不能再喂**（`feed_uses` 不动，界面也不显示负数）；
++        * 已喂出来的属性与 `live_bonus` 一点不少（它们本来就是固化的）；
++        * 站长哪天把上限调回去，`_clamp_debt` 会把债自动归零，鱼又能喂了。
++
++        只在**上限变小**的那一次生效；配置里用 `feed_cap_applied` 记住上次生效值。
++        """
++        target = max(0, _safe_int(self.cfg.get("feed_max_uses"), 10, 0))
++        applied = self.cfg.get("feed_cap_applied")
++        if applied is not None and _safe_int(applied, target, 0) == target:
++            return False                      # 上限没变：什么都不用做
++        if applied is not None and _safe_int(applied, target, 0) > target:
++            # 上限**变小**：这一次要给所有鱼记债；标记直接推到最后，避免每条鱼都重来
++            self._feed_cap_pending = True
++            self.cfg["feed_cap_applied"] = target
++            changed = False
++            for fish in player.get("aquarium") or []:
++                if not isinstance(fish, dict):
++                    continue
++                used = max(0, _safe_int(fish.get("feed_uses"), 0, 0))
++                bonus = max(0, _safe_int(fish.get("feed_bonus"), 0, 0))
++                cap = _safe_int(self.cfg.get("feed_bonus_cap"), 20, 0)
++                eff = target + (min(bonus, cap) if cap > 0 else bonus)
++                if used > eff:
++                    fish["feed_debt"] = used - eff
++                    changed = True
++            if changed:
++                logger.info(
++                    f"投喂上限从 {applied} 调低到 {target}：已经喂超的鱼记了「债」"
++                    "（已喂出来的属性与价值一点没少，只是暂时不能再喂）"
++                )
++            return changed
++        # 其余情况（首次记录 / 上限变大）：只更新标记，不动玩家的鱼
++        self.cfg["feed_cap_applied"] = target
++        for fish in player.get("aquarium") or []:
++            if isinstance(fish, dict) and _safe_int(fish.get("feed_debt"), 0, 0):
++                used = max(0, _safe_int(fish.get("feed_uses"), 0, 0))
++                bonus = max(0, _safe_int(fish.get("feed_bonus"), 0, 0))
++                cap = _safe_int(self.cfg.get("feed_bonus_cap"), 20, 0)
++                eff = target + (min(bonus, cap) if cap > 0 else bonus)
++                if used <= eff:
++                    fish["feed_debt"] = 0     # 上限调回去了：债清零，鱼又能喂了
++        return False
++
+     def _migrate_tank_clocks(self, player: dict[str, Any]) -> bool:
+         """给「已经在缸里但没有入缸时间」的鱼补计时（老存档迁移，返回是否有改动）。
+ 
+@@ -4115,9 +4210,19 @@ class FishingPlugin(
+         return weighted[-1][0]
+ 
+     def _limited_item_left(self, player: dict[str, Any], item_id: str) -> int:
+-        """这件「限用道具」还剩几次（没这件 / 不是限用道具 -> 0）。"""
++        """这件「限用道具」**总共**还剩几次（没这件 / 不是限用道具 -> 0）。
++
++        ⚠️ v1.18.76 修：**抽到重复的要叠加次数**。以前这里只算「当前这一张」的剩余，
++        于是抽到 3 张「限用 8 次」的凭证，背包里却显示「可用 8 次」（实际有 24 次）——
++        消耗逻辑是对的（每张各自扣），但**显示和校验都少算了**。
++
++        口径：``总额度 = (手上张数 - 1) × 单张次数 + 当前这张剩的次数``。
++        没开始用的那种（`limited_uses` 里没有记录）按「整张满次数」算，
++        所以「一次没用过的一张」也显示满额。
++        """
+         pocket = player.get("items")
+-        if not isinstance(pocket, dict) or _safe_int(pocket.get(item_id), 0, 0) <= 0:
++        held = _safe_int((pocket or {}).get(item_id), 0, 0) if isinstance(pocket, dict) else 0
++        if held <= 0:
+             return 0
+         spec = self.items.get(str(item_id)) or {}
+         total = _safe_int(spec.get("uses"), 0, 0)
+@@ -4126,7 +4231,8 @@ class FishingPlugin(
+         state = player.get("limited_uses")
+         state = state if isinstance(state, dict) else {}
+         left = state.get(str(item_id))
+-        return total if left is None else max(0, _safe_int(left, total, 0))
++        current = total if left is None else max(0, _safe_int(left, total, 0))
++        return max(0, (held - 1) * total + current)
+ 
+     def _limited_bait_left(self, player: dict[str, Any], bait_id: str) -> int:
+         """这种**限定饵**现在还能用几次 = 对应凭证道具的剩余次数（v1.18.70）。
+@@ -5135,6 +5241,9 @@ class FishingPlugin(
+             handler = self._cmd_sell(event, user_id, *tokens)
+         elif key in ("图鉴", "收集", "collection"):
+             handler = self._cmd_collection(event, user_id, after_sub)
++        elif key in AQUARIUM_LOG_WORDS:
++            # v1.18.78：鱼的「道具台账」——`/钓鱼 台账 [栏位]` 直接看，不用进缸里再点
++            handler = self._cmd_aquarium(event, user_id, "台账", after_sub)
+         elif key in ("水族馆", "馆", "aquarium", "缸"):
+             handler = self._cmd_aquarium(event, user_id, a2, after_first)
+         # 背包扩容（排在「商店」之前，否则「商店 扩容」会被商店吞掉）
+@@ -5526,6 +5635,37 @@ class FishingPlugin(
+             current = self.config.get(key)
+             if not isinstance(current, list) or not current:
+                 continue  # 空/损坏的交给配置兜底逻辑处理
++            # ⚠️ **补齐「半截行」**：合并只按 id 判「有没有」，所以**早期版本生成过的行
++            #    永远补不上后来新增的字段**。实测站长配置里那几条限定竿/饵凭证只有 7 段
++            #    （`uses` / `rod` / `bait` 全缺），于是 `uses` 读成 0 ——
++            #    「抽到限定饵/竿」根本不生效，还会报「鱼饵 xxx 不存在」。
++            #    规则：**这一行的段数比新默认少**就整行换成新默认（多出来的段一律是我们
++            #    后加的字段，不存在「站长自己删过字段」的合法情况）。
++            _default_by_id = {
++                str(line).split("|", 1)[0].strip(): str(line)
++                for line in default
++                if isinstance(line, str)
++            }
++            _fixed = 0
++            _new_current: list[Any] = []
++            for line in current:
++                if not isinstance(line, str):
++                    _new_current.append(line)
++                    continue
++                _want = _default_by_id.get(line.split("|", 1)[0].strip())
++                if _want is not None and line.count("|") < _want.count("|"):
++                    _new_current.append(_want)
++                    _fixed += 1
++                else:
++                    _new_current.append(line)
++            if _fixed:
++                self.config[key] = _new_current
++                current = _new_current
++                changed = True
++                logger.info(
++                    f"配置自动升级：{key} 有 {_fixed} 行是早期版本的半截数据，已按新版默认"
++                    "补齐字段（缺字段会让新功能直接失效）"
++                )
+             have = {
+                 str(line).split("|", 1)[0].strip()
+                 for line in current
+@@ -5977,9 +6117,12 @@ NAME_ARG_WORDS = {
+     "喂", "投喂", "装备", "换竿", "换鱼竿",
+ }
+ AQUARIUM_ACTIONS = (
+-    "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出",
++    "扩建", "领取", "收益", "投喂", "放入", "取出", "卖出", "台账", "明细",
+     "升级", "放", "取", "卖", "喂", "领",
+ )
++#: 「道具台账」的写法（v1.18.78）：`/钓鱼 台账 [栏位]`，也能 `水族馆 台账 1`。
++#: 单列成一张词表，是为了让「分派链认的写法」测试能像 PULL_WORDS / CAST_WORDS 那样扫到它。
++AQUARIUM_LOG_WORDS: tuple[str, ...] = ("台账", "明细", "log")
+ #: 三家店都只认「买」；「扩容」不再挂在商店下面（老写法由 shop.moved 指路）
+ SHOP_ACTIONS = ("购买", "买")
+ ROD_ACTIONS = ("购买", "装备", "买", "用", "换")
