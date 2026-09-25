@@ -635,7 +635,7 @@
     "invisible": true,
     "description": "各鱼饵的咬钩率（= 这一竿中鱼的概率，空钩极低、带饵才容易上鱼）。格式 id:概率 逗号分隔；也认中文饵名与百分数（面包屑:0.8、worm:80 都行），漏写的饵按 0.3 处理。中鱼后就是鱼，不会再被杂物抢走；没中鱼时才有可能钩上杂物（见 item_drop_chance）。实际中鱼率 = 这里的值 × 钓点难度系数（见 location_hook_factors）",
     "type": "string",
-    "default": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0"
+    "default": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0,abyss_secret:0.90,vip_bait:0.90"
   },
   "content_auto_merge": {
     "invisible": true,

@@ -2439,7 +2439,7 @@ async def main():
     # ⚠️ 测试用的 _CFG 只手写了 8 款饵的咬钩率（为了确定性），所以这里要拿**出厂配置**看
     _bait_default_plugin = make_plugin(load_schema_config("bait_hook_new"))
     check(
-        mod.DEFAULTS["bait_hook_rates"].endswith("abyss_bait:1.0,dragon_bait:1.0")
+        "abyss_bait:1.0,dragon_bait:1.0" in mod.DEFAULTS["bait_hook_rates"]
         and abs(mod._safe_number(
             _bait_default_plugin.bait_hook_map.get("abyss_bait"), -1) - 1.0) < 1e-9
         and abs(mod._safe_number(
@@ -2447,6 +2447,16 @@ async def main():
         "新饵的咬钩率进了出厂配置（老配置靠合并补键，不会漏）-> "
         f"{_bait_default_plugin.bait_hook_map.get('abyss_bait')}/"
         f"{_bait_default_plugin.bait_hook_map.get('dragon_bait')}",
+    )
+    # v1.18.70：**限定饵**也要有上钩率，否则每次抛竿都刷一句「没有 XX 的上钩率，按 30% 处理」
+    check(
+        abs(mod._safe_number(
+            _bait_default_plugin.bait_hook_map.get("abyss_secret"), -1) - 0.90) < 1e-9
+        and abs(mod._safe_number(
+            _bait_default_plugin.bait_hook_map.get("vip_bait"), -1) - 0.90) < 1e-9,
+        "限定饵的上钩率也配好了（不再每次抛竿刷「按 30% 处理」）-> "
+        f"{_bait_default_plugin.bait_hook_map.get('abyss_secret')}/"
+        f"{_bait_default_plugin.bait_hook_map.get('vip_bait')}",
     )
     # 抽样：龙涎在龙宫出的神话鱼明显比秘制饵多
     def _myth_share(bait_id: str, n: int = 4000) -> float:
@@ -9092,6 +9102,96 @@ async def main():
         f"全图鱼口：新手村也能抽到多种（60 次抽到 {len(_pool_all)} 种）",
     )
     check(_pool_legend == {"传说"}, f"贵客饵只出传说 -> {_pool_legend}")
+
+    # --- v1.18.70：限定饵**真的能用**（站长：「不是抽到了吗，档案里面显示没有，换饵也用不了」）---
+    # ⚠️ 三个真 bug 的回归：①限定饵在货架上买不到 -> baits 库存永远是 0，
+    #    以前一抽到就被判「用完了」；②限定饵没有上钩率 -> 每竿刷「按 30% 处理」；
+    #    ③凭证不是鱼，背包里一条都不显示 -> 玩家以为没抽到。
+    _lb = make_plugin()
+    _lbp = await _lb._load_player("89410")
+    _lbp["items"] = {"abyss_bait_pass": 1}
+    _lbp["baits"] = {"worm": 5}
+    _lbp["equipped_bait"] = "worm"
+    _lbp["gold"] = 50000
+    check(
+        _lb._active_limited_bait(_lbp) == "abyss_secret",
+        f"抽到凭证后**自动生效**（不用手动装备）-> {_lb._active_limited_bait(_lbp)}",
+    )
+    check(
+        _lb._limited_bait_left(_lbp, "abyss_secret") == 8,
+        f"限定饵的「库存」= 凭证剩余次数 -> {_lb._limited_bait_left(_lbp, 'abyss_secret')}",
+    )
+    _bait_used, _notes_used = _lb._auto_supply(_lbp, times=1)
+    check(
+        _bait_used == "abyss_secret" and not _notes_used,
+        f"这一竿真的用上了深渊秘饵（不再被当成库存 0 退回普通饵）-> {_bait_used}",
+    )
+    # 用完（剩余 0）-> 自动回落到**能买到**的那款（站长：「应该自动补换之前的可以购买的鱼饵」）
+    _lbp["limited_uses"] = {"abyss_bait_pass": 0}
+    _bait_after, _notes_after = _lb._auto_supply(_lbp, times=1)
+    check(
+        _bait_after == "worm",
+        f"凭证用完自动换回装备里的普通饵 -> {_bait_after}（{_notes_after}）",
+    )
+    # 差货时**绝不自动买限定饵**，而是换成能买的
+    # ⚠️ 用 `times=5` 造出「凭证次数不够这一批」的差货场景：限定饵的库存就是凭证剩余
+    #    次数（各 1 次），不够时应当换成可购买的那款，而不是去「买限定饵」。
+    _lbp["limited_uses"] = {"abyss_bait_pass": 1}
+    # 只留一个便宜的可购买饵（不然「手气最高的可购买饵」会是几千金的龙涎饵）
+    _lbp["baits"] = {"worm": 1}
+    await _lb._save_player(_lbp)
+    _lbp = await _lb._load_player("89410")
+    _bait_swap, _notes_swap = _lb._auto_supply(_lbp, times=5)
+    check(
+        _bait_swap != "abyss_secret" and _bait_swap in _lb._bait_list()
+        and any("买不到" in n for n in _notes_swap),
+        f"限定饵差货时不自动购买，换成可购买的饵 -> {_bait_swap}　{_notes_swap}",
+    )
+    # 背包里必须看得见凭证（它不占背包格，但不能隐身）
+    # ⚠️ 把 limited_uses 清掉 = 刚抽到还没用过，剩余次数就是满的
+    _lbp["items"] = {"abyss_bait_pass": 1, "tide_rod_pass": 1}
+    _lbp["limited_uses"] = {}
+    _lbp["inventory"] = []
+    # 先把上面的差货换饵算出来的库存清掉（不然背包那行会写「限用 1/8 次」）
+    _lbp["baits"] = {}
+    await _lb._save_player(_lbp)
+    _bag_lb = text_of(await cmd(_lb, FakeEvent("89410"), "背包"))
+    check(
+        "限用道具" in _bag_lb and "深渊秘饵·凭证" in _bag_lb and "潮汐竿·凭证" in _bag_lb,
+        f"背包里能看到抽到的限用凭证 -> {[l for l in _bag_lb.splitlines() if '凭证' in l][:2]}",
+    )
+    check(
+        "限用 8/8 次" in _bag_lb,
+        f"并且写明还剩几次 -> {[l for l in _bag_lb.splitlines() if '8/8' in l][:1]}",
+    )
+    # 抛一竿：凭证 -1、这一竿按秘饵的特权走
+    # ⚠️ 只留**饵**凭证（竿凭证也留着的话，按「剩余次数最多」会先消耗竿凭证），
+    #    并且**重新读档**：`_cmd_bag` 也是从档里读的，手上那份字典早不是权威状态了。
+    _lbp["items"] = {"abyss_bait_pass": 1}
+    await _lb._save_player(_lbp)
+    _lbp = await _lb._load_player("89410")
+    _cast_lb = text_of(await cast(_lb, FakeEvent("89410")))
+    _lbp = await _lb._load_player("89410")
+    check(
+        _lbp["limited_uses"].get("abyss_bait_pass") == 7,
+        f"抛一竿凭证 -1 -> {_lbp['limited_uses']}",
+    )
+    check(
+        "深渊秘饵·凭证 还可用 7 次" in _cast_lb,
+        f"并且提示还剩几次 -> {[l for l in _cast_lb.splitlines() if '还可用' in l][:1]}",
+    )
+    # 自愈①：升级同步漏了 item_defs（凭证道具不在配置里）时，param 若是**饵 id** 照样发
+    _heal = make_plugin()
+    _heal.items.pop("vip_bait_pass", None)
+    _hpl = mod._default_player("89411")
+    _hrec = _heal._lottery_apply_prize(
+        _hpl, {"id": "vip_bait_pass", "kind": "bait", "param": "vip_bait",
+               "count": 1, "desc": "贵客饵"}
+    )
+    check(
+        _hpl["baits"].get("vip_bait") == 1 or _hpl["items"].get("vip_bait_pass") == 1,
+        f"凭证道具没进配置时也能领到（退化成直接给饵）-> {_hrec.get('line')[:44]}",
+    )
 
     # --- 中奖发放：rod 档发的是一件「限用凭证」 ---
     _lot_plugin = make_plugin()

@@ -70,6 +70,11 @@ class EngineMixin:
         stock_map = player.setdefault("baits", {})
 
         def stock_of(bait_id: str) -> int:
+            # ⚠️ 限定饵（深渊秘饵 / 贵客饵）**在货架上是买不到的，所以 baits 库存永远是 0** ——
+            #    它到底还能用几次，看的是**凭证道具的剩余次数**（v1.18.70 修：
+            #    以前这里读 0，于是刚抽到就被判「用完了」，白白退回空钩/普通饵）。
+            if self._bait_is_limited(bait_id):
+                return self._limited_bait_left(player, bait_id)
             return _safe_int(stock_map.get(bait_id), 0, 0)
 
         # ---- 1. 自动挂饵（只补「从没选过」的人，不覆盖玩家的选择）----
@@ -92,8 +97,14 @@ class EngineMixin:
                 )
 
         # ---- 2. 这一竿用哪种饵 ----
+        # ⚠️ v1.18.70：**限定饵凭证优先**。抽到「深渊秘饵 / 贵客饵」的凭证后，
+        #    只要它还有次数，这一竿就用它那种特权饵 —— 抽到就能用，不用手动装备
+        #    （和限定竿一个口径）。凭证用完自动回落到玩家装备的普通饵。
         bait_id = "none"
-        if wanted:
+        _limited_bait = self._active_limited_bait(player)
+        if _limited_bait:
+            bait_id = _limited_bait
+        elif wanted:
             matched = self._find_bait(wanted)
             if matched is not None:
                 bait_id = matched
@@ -101,7 +112,23 @@ class EngineMixin:
             bait_id = equipped
 
         # ---- 3. 自动补饵：差多少买多少（连钓按 N 竿算）----
-        if bait_id != "none":
+        # ⚠️「限定饵」**永远不自动买**（它根本买不到）：差货时把它换成玩家**能买到的**
+        #    那款普通饵再补货（站长：「这种限定鱼饵不能自动购买补饵，应该自动补换
+        #    之前的可以购买的鱼饵」）。换完之后这一竿就按普通饵钓，凭证不扣。
+        if bait_id != "none" and self._bait_is_limited(bait_id):
+            need = max(1, times)
+            if stock_of(bait_id) < need:
+                fallback = self._purchasable_fallback_bait(equipped or wanted)
+                notes.append(
+                    f"🕳️ 「{self.baits[bait_id]['name']}」是抽到的限定饵，买不到；"
+                    + (
+                        f"自动改用「{self.baits[fallback]['name']}」"
+                        if fallback else "这一竿改用空钩"
+                    )
+                )
+                bait_id = fallback or "none"
+
+        if bait_id != "none" and not self._bait_is_limited(bait_id):
             need = max(1, times)
             have = stock_of(bait_id)
             want_more = need - have

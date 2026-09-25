@@ -1180,10 +1180,19 @@ class CommandsMixin:
         player = await self._load_player(user_id)
         inventory: list[dict[str, Any]] = player.get("inventory") or []
         cap = _backpack_capacity(player, self.cfg)
+        # ⚠️ v1.18.70：**抽到的限用凭证也要在背包里看得见**。它们是 `items` 里的
+        #    「限用道具」（限定竿 / 限定饵凭证），不属于「鱼」，所以以前背包里一条都不显示 ——
+        #    玩家中了奖却在背包找不到，只能从抛竿提示里猜（站长就是被这个搞糊涂的）。
+        _limited_lines = [
+            f"　{self._item_label(iid)}　{self._limited_use_text(player, iid)}"
+            for iid in self._limited_item_list()
+            if _safe_int((player.get("items") or {}).get(iid), 0, 0) > 0
+        ]
         if not inventory:
-            async for _r in self._say_msg(event, "bag.empty", event.plain_result(
-                    f"🎒 背包空空的（容量 {cap}）\n💡 发 /钓鱼 下竿试试手气"
-                )):
+            _empty = f"🎒 背包空空的（容量 {cap}）\n💡 发 /钓鱼 下竿试试手气"
+            if _limited_lines:
+                _empty += "\n🎁 你的限用道具：\n" + "\n".join(_limited_lines)
+            async for _r in self._say_msg(event, "bag.empty", event.plain_result(_empty)):
                 yield _r
             return
 
@@ -1225,6 +1234,10 @@ class CommandsMixin:
         #    一条不落，背包本身只留「有什么、值多少」。
         if total_pages > 1:
             lines.append(f"💡 /钓鱼 背包 {page % total_pages + 1} 看下一页")
+        if _limited_lines:
+            # 限用道具单独一栏（它们不是鱼，不占背包格子，但必须看得见）
+            lines.append("🎁 限用道具（抽到的，不占背包格）：")
+            lines.extend(_limited_lines)
         # 「上一页 / 下一页」按钮（首尾页各缺一个，只有一页时整排不出现）
         async for reply in self._say(
             event, "\n".join(lines), "bag.list",
@@ -3745,10 +3758,50 @@ class CommandsMixin:
         if kind == "bait":
             # 限定饵（v1.18.63）：param 既可能是普通鱼饵 id，也可能是一件
             # 「限用凭证」（item_defs 里带第 11 段 bait 的那种，例如 abyss_bait_pass）。
-            _pass = self.items.get(str(row.get("param") or "").strip()) or {}
-            if str(_pass.get("bait") or "").strip():
-                item_id = str(row.get("param") or "").strip()
-                bait_id = str(_pass["bait"]).strip()
+            # ⚠️ v1.18.70 修：**凭证道具万一没进配置**（升级同步漏了 item_defs 那一行），
+            #    以前会一路掉到「普通鱼饵」分支，报「鱼饵 abyss_bait_pass 不存在」——
+            #    玩家明明中奖却拿不到东西。现在自愈：param 不是饵但**是**限定饵 id 时，
+            #    有凭证道具就发凭证，没有就退化成直接给这种饵（总比什么都不给好）。
+            _param = str(row.get("param") or "").strip()
+            _pass = self.items.get(_param) or {}
+            _pass_bait = str(_pass.get("bait") or "").strip()
+            # 自愈①：param 是**一种限定饵**（`abyss_secret`）**或**它的凭证 id
+            #   （`abyss_bait_pass` = 饵 id + `_pass`）。这两种情况下：
+            #   有凭证道具就发凭证（限用次数、会消耗），没有就直接给这种饵 ——
+            #   老配置 / 升级同步漏了 item_defs 那一行时照样能领到东西。
+            _bare = _param[: -len("_pass")] if _param.endswith("_pass") else _param
+            _limited_target = ""
+            if self._bait_is_limited(_param):
+                _limited_target = _param
+            elif _bare != _param and self._bait_is_limited(_bare):
+                _limited_target = _bare
+            if not _pass_bait and _limited_target:
+                bait = self.baits.get(_limited_target) or {}
+                spec = self.items.get(f"{_limited_target}_pass") or {}
+                item_id = f"{_limited_target}_pass"
+                if spec:
+                    bag = player.setdefault("items", {})
+                    bag[item_id] = _safe_int(bag.get(item_id), 0, 0) + count
+                    uses = _safe_int(spec.get("uses"), 0, 0)
+                    record["line"] = (
+                        f"{bait.get('emoji') or '🪱'} {bait.get('name') or _limited_target}　"
+                        f"（限用 {uses} 次，用完消失；抽到就能用）"
+                        f"　{self._special_brief(bait)}"
+                    )
+                else:
+                    baits = player.setdefault("baits", {})
+                    baits[_limited_target] = (
+                        _safe_int(baits.get(_limited_target), 0, 0) + count
+                    )
+                    record["line"] = (
+                        f"{bait.get('emoji') or '🪱'} {bait.get('name') or _limited_target}"
+                        f" ×{count}　（大鱼乐限定，抽到的）"
+                    )
+                record["bait"] = _limited_target
+                return record
+            if _pass_bait:
+                item_id = _param
+                bait_id = _pass_bait
                 bait = self.baits.get(bait_id)
                 if bait is None:
                     record["line"] = f"🍃 {row.get('desc')}（它对应的鱼饵 {bait_id} 不存在）"
@@ -3763,7 +3816,7 @@ class CommandsMixin:
                 )
                 record["bait"] = bait_id
                 return record
-            bait_id = str(row.get("param") or "").strip()
+            bait_id = _param
             bait = self.baits.get(bait_id)
             if bait is None:
                 record["line"] = f"🍃 {row.get('desc')}（鱼饵 {bait_id} 不存在）"

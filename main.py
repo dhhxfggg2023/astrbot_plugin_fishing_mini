@@ -482,7 +482,9 @@ DEFAULTS: dict[str, Any] = {
     "location_codex_gate": 0.8,
     # 空竿是否也消耗鱼饵：false = 空竿不扣饵（默认）
     "consume_bait_on_empty": False,
-    "bait_hook_rates": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0",
+    # ⚠️ v1.18.70：限定饵也要有上钩率，否则每次抛竿都刷一句「没有 abyss_secret 的上钩率，
+    #    暂时按 30% 处理」。限定饵的定位是「特权换强度」，上钩率给个中上水平（0.90）。
+    "bait_hook_rates": "none:0.25,bread:0.58,worm:0.70,bloodworm:0.80,corn:0.88,shrimp:0.94,livebait:0.97,secret:1.0,abyss_bait:1.0,dragon_bait:1.0,abyss_secret:0.90,vip_bait:0.90",
     "content_auto_merge": True,     # 旧配置自动合并新版内容（钓点/鱼饵/鱼竿/道具）
     # =========================================================================
     # 三·九、大鱼乐（v1.18.51）：现实彩票的玩法搬进游戏
@@ -3608,6 +3610,24 @@ class FishingPlugin(
             key=lambda iid: (_safe_int(self.items[iid].get("price"), 0, 0), iid),
         )
 
+    def _limited_use_text(self, player: dict[str, Any], item_id: str) -> str:
+        """限用道具在背包里那行「还剩几次」的说明（v1.18.70）。"""
+        spec = self.items.get(str(item_id)) or {}
+        total = _safe_int(spec.get("uses"), 0, 0)
+        left = self._limited_item_left(player, str(item_id))
+        target = str(spec.get("rod") or spec.get("bait") or "").strip()
+        thing = "鱼竿" if str(spec.get("rod") or "").strip() else ("鱼饵" if target else "道具")
+        where = ""
+        if str(spec.get("rod") or "").strip():
+            rod = self.rod_by_id.get(target) or {}
+            where = str(rod.get("name") or target)
+        elif target:
+            where = str((self.baits.get(target) or {}).get("name") or target)
+        return (
+            f"限用 {left}/{total} 次（每抛一竿 -1）"
+            + (f"　它生效时用「{where}」{thing}的特权" if where else "")
+        )
+
     def _limited_item_list(self) -> list[str]:
         """只能抽到、不能买的限用道具（大鱼乐奖池里那些「特殊道具」）。"""
         return sorted(
@@ -4093,6 +4113,86 @@ class FishingPlugin(
             if point < cumulative:
                 return fish
         return weighted[-1][0]
+
+    def _limited_item_left(self, player: dict[str, Any], item_id: str) -> int:
+        """这件「限用道具」还剩几次（没这件 / 不是限用道具 -> 0）。"""
+        pocket = player.get("items")
+        if not isinstance(pocket, dict) or _safe_int(pocket.get(item_id), 0, 0) <= 0:
+            return 0
+        spec = self.items.get(str(item_id)) or {}
+        total = _safe_int(spec.get("uses"), 0, 0)
+        if total <= 0:
+            return 0
+        state = player.get("limited_uses")
+        state = state if isinstance(state, dict) else {}
+        left = state.get(str(item_id))
+        return total if left is None else max(0, _safe_int(left, total, 0))
+
+    def _limited_bait_left(self, player: dict[str, Any], bait_id: str) -> int:
+        """这种**限定饵**现在还能用几次 = 对应凭证道具的剩余次数（v1.18.70）。
+
+        限定饵在货架上买不到，`player["baits"]` 里那个库存永远是 0；
+        真正管次数的是 ``items`` 里的凭证（``<bait>_pass``）+ ``limited_uses``。
+        没有凭证就返回 0（玩家没用这张）。
+        """
+        want = str(bait_id or "").strip()
+        if not want:
+            return 0
+        pocket = player.get("items")
+        if not isinstance(pocket, dict):
+            return 0
+        total_left = 0
+        for item_id in pocket:
+            spec = self.items.get(str(item_id)) or {}
+            if str(spec.get("bait") or "").strip() != want:
+                continue
+            total_left += self._limited_item_left(player, str(item_id))
+        return total_left
+
+    def _active_limited_bait(self, player: dict[str, Any]) -> str:
+        """玩家现在**生效的限定饵** id（没有就返回 ""，v1.18.70）。
+
+        和限定竿一个口径：抽到「深渊秘饵 / 贵客饵」的凭证后，只要还有次数，
+        这一竿就用它那种特权饵 —— 抽到就能用，**不用先手动装备**。
+        多张凭证都有次数时，取**剩余次数最多**的那张（先用完一张再换下一张）。
+        """
+        pocket = player.get("items")
+        if not isinstance(pocket, dict) or not pocket:
+            return ""
+        best: tuple[int, str] | None = None
+        for item_id in pocket:
+            spec = self.items.get(str(item_id)) or {}
+            bait_id = str(spec.get("bait") or "").strip()
+            if not bait_id or bait_id not in self.baits:
+                continue
+            if not self._bait_is_limited(bait_id):
+                continue
+            left = self._limited_item_left(player, str(item_id))
+            if left <= 0:
+                continue
+            if best is None or left > best[0]:
+                best = (left, bait_id)
+        return best[1] if best else ""
+
+    def _bait_is_limited(self, bait_id: str) -> bool:
+        """这种饵是不是「买不到、只能抽」的限定饵（``bait_defs`` 带特殊效果）。"""
+        spec = self.baits.get(str(bait_id)) or {}
+        return bool(spec.get("special"))
+
+    def _purchasable_fallback_bait(self, prefer: str = "") -> str:
+        """能给限定饵当替身的**可购买**鱼饵 id（v1.18.70）。
+
+        挑法：先看玩家原来装/点名的那款（能买就用它），否则挑**店里手气最高**的
+        那款。返回 "" 表示店里一款都没有（那就只能空钩）。
+        """
+        shop = [b for b in self._bait_list() if b != "none"]
+        if not shop:
+            return ""
+        want = str(prefer or "").strip()
+        if want and want in shop:
+            return want
+        shop.sort(key=lambda b: -_safe_number((self.baits[b] or {}).get("luck"), 0.0))
+        return shop[0]
 
     def _active_limited_rod(self, player: dict[str, Any]) -> dict[str, Any] | None:
         """玩家背包里「还有剩余次数」的限定竿（v1.18.63），没有就返回 None。
