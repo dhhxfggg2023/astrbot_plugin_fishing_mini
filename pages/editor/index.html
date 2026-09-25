@@ -3786,7 +3786,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.65";
+  var PAGE_VERSION = "v1.18.66";
 
   /* ===========================================================================
      5. 状态
@@ -4715,17 +4715,34 @@ table.grid td.actions .btn { vertical-align: middle; }
   /**
    * 「重置每日次数」条（v1.18.65，大鱼乐页）。
    *
-   * 站长：「给大鱼乐加全局次数重置按钮功能，方便重置每日的次数而且不用直接加上限」。
+   * 站长：「给大鱼乐加全局次数重置按钮功能，方便重置每日的次数而且不用直接加上限」
+   * +「重置应该能选是重置什么」。
    * ⚠️ 它只清**今天用掉多少**（以及每条鱼自己的洗髓 / 喂上限次数），
    *    `buff_daily_cast_limit` / `hot_soup_daily_limit` / `reroll_daily_total` /
    *    `offering_daily_limit` / `lottery_daily_limit` 这些**上限一个都不改**。
    * 数据来自插件的 `reset_quota` 动作（和存档管理同一套通道）。
    */
+  var QUOTA_RESET_ITEMS = [
+    ["", "全部（推荐）"],
+    ["buff", "手气道具"],
+    ["heal", "姜汤（回体力）"],
+    ["reroll", "洗髓丹"],
+    ["offering", "香火供奉"],
+    ["lottery", "大鱼乐购票"],
+    ["fish", "每条鱼自己的次数"]
+  ];
+
   function renderQuotaResetStrip() {
     var s = state.quotaReset || {};
     var html = '<div class="toolbar" style="background:var(--primary-soft);border-bottom-color:var(--primary)">';
     html += "<span class='nowrap'>♻️ <b>重置每日次数</b>　" +
-      "<span class='faint'>只清「今天用掉多少」，上限一个都不改</span></span>";
+      "<span class='faint'>只清「用掉多少」，上限一个都不改</span></span>";
+    html += "<span class='nowrap'>重置什么：</span>";
+    html += "<select class='cell-input' style='width:150px' data-act='quota:what'>" +
+      QUOTA_RESET_ITEMS.map(function (pair) {
+        return "<option value='" + esc(pair[0]) + "'" +
+          (toText(s.what) === pair[0] ? " selected" : "") + ">" + esc(pair[1]) + "</option>";
+      }).join("") + "</select>";
     if (!s.confirm) {
       html += '<span class="spacer" style="margin-left:auto"></span>';
       html += '<button class="btn btn-sm btn-primary" data-act="quota:ask">重置次数…</button>';
@@ -4733,7 +4750,6 @@ table.grid td.actions .btn { vertical-align: middle; }
       html += "<span class='nowrap'>对谁：</span>";
       html += "<button class='btn btn-sm btn-primary' data-act='quota:run' data-scope='all'>全群所有人</button>";
       html += "<button class='btn btn-sm' data-act='quota:run' data-scope='me'>只要我自己</button>";
-      html += "<span class='faint'>（项目不写就是全清：手气 / 姜汤 / 洗髓 / 供奉 / 彩票 / 每条鱼那份）</span>";
       html += "<button class='btn btn-sm' data-act='quota:cancel'>取消</button>";
     }
     html += "</div>";
@@ -8774,14 +8790,15 @@ table.grid td.actions .btn { vertical-align: middle; }
       case "batch:cancel": state.batchAction = null; render(); break;
 
       /* ♻️ 重置每日次数（v1.18.65，大鱼乐页那条） */
-      case "quota:ask": state.quotaReset = { confirm: true }; render(); break;
-      case "quota:cancel": state.quotaReset = { confirm: false }; render(); break;
+      case "quota:ask": state.quotaReset = { confirm: true, what: toText((state.quotaReset || {}).what) }; render(); break;
+      case "quota:cancel": state.quotaReset = { confirm: false, what: toText((state.quotaReset || {}).what) }; render(); break;
       case "quota:run": {
         var scope = toText(el.getAttribute("data-scope")) || "all";
-        state.quotaReset = { confirm: false, busy: true };
+        var what = toText((state.quotaReset || {}).what);
+        state.quotaReset = { confirm: false, what: what, busy: true };
         render();
-        sendCommand("reset_quota", { scope: scope }).then(function (res) {
-          state.quotaReset = { confirm: false, busy: false };
+        sendCommand("reset_quota", { scope: scope, what: what }).then(function (res) {
+          state.quotaReset = { confirm: false, what: what, busy: false };
           if (res && res.ok) {
             toast("ok", "已重置次数", res.message || "只清了用掉的次数，上限没动");
           } else {
@@ -9265,6 +9282,13 @@ table.grid td.actions .btn { vertical-align: middle; }
       return;
     }
     if (act === "batchField") { state.batchField = el.value; return; }
+    /* ♻️ 重置每日次数：选「重置什么」（v1.18.65）—— 只改选择，不立刻动手 */
+    if (act === "quota:what") {
+      var keepConfirm = !!(state.quotaReset && state.quotaReset.confirm);
+      state.quotaReset = { confirm: keepConfirm, what: el.value };
+      render();
+      return;
+    }
     /* ---- 💬 回复：文案 / 按钮 / 每行几个 的实时改动 ---- */
     if (act === "rp:text") {
       var textId = el.getAttribute("data-scene");

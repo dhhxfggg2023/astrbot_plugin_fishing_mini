@@ -9870,6 +9870,40 @@ async def main():
         "不认识" in _out_bad_q and mod._daily_used(p_q, "heal") == 2,
         f"项目名写错只说一句、不清数据 -> {_out_bad_q.strip().splitlines()[0][:30]}",
     )
+    # ⚠️ 这条是**回归测试**（v1.18.65 真踩过）：编辑器那条按钮走的是
+    # `_editor_bridge._editor_reset_quota`，它当时写了 `from _calc import …`，
+    # 而插件运行时兄弟模块是 _load_sibling 动态加载的、sys.modules 里没有顶层
+    # `_calc`，于是站长点按钮得到「没重置成功：No module named '_calc'」。
+    # 所以这里**从插件实例上**真调一次那个动作，确保它能跑通。
+    _q2 = make_plugin(_qlim)
+    p_q2 = await _q2._load_player("96009")
+    p_q2["daily_used"] = {"buff": 4, "lottery": 2}
+    p_q2["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_q2["aquarium"][0]["feed_bonus_used"] = 2
+    await _q2._save_player(p_q2)
+    _ok_act, _msg_act = await _q2._editor_reset_quota(
+        {"scope": "me", "user_id": "96009", "what": ""}
+    )
+    p_q2 = await _q2._load_player("96009")
+    check(
+        _ok_act and mod._daily_used(p_q2, "buff") == 0
+        and mod._safe_int(p_q2["aquarium"][0].get("feed_bonus_used"), 0, 0) == 0,
+        f"编辑器那条按钮也能真重置（不再 No module named '_calc'）-> {_msg_act[:46]}",
+    )
+    _ok_sel, _msg_sel = await _q2._editor_reset_quota(
+        {"scope": "me", "user_id": "96009", "what": "buff"}
+    )
+    check(
+        _ok_sel and "手气道具" in _msg_sel,
+        f"编辑器也能只重置指定项目 -> {_msg_sel[:56]}",
+    )
+    _ok_bad, _msg_bad = await _q2._editor_reset_quota(
+        {"scope": "me", "user_id": "96009", "what": "臭豆腐"}
+    )
+    check(
+        not _ok_bad and "不认识" in _msg_bad,
+        f"编辑器里项目名写错要拒绝并说清 -> {_msg_bad[:40]}",
+    )
 
     # best 模式：只取最好的一次，同档重复不再涨
     plugin_best = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=0, feed_bonus_mode="best"))

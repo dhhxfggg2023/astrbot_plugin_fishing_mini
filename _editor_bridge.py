@@ -168,6 +168,28 @@ NUMBER_KEY_PREFIX_ALLOW: frozenset[str] = frozenset(
     {"backpack_upgrades", "backup_dir"}
 )
 
+#: ♻️ 「重置每日次数」能选的项目（v1.18.65）：项目键 -> 它清哪些 ``daily_used`` 额度。
+#: 键 ``fish`` 特殊：清**每条鱼自己的**次数（洗髓当天次数 / 喂上限道具的终身次数）。
+#: 这一张表同时喂给页面（下拉选项）和动作处理，改处只此一处。
+QUOTA_RESET_ALIASES: dict[str, tuple[str, ...]] = {
+    "buff": ("buff",),
+    "heal": ("heal",),
+    "reroll": ("reroll",),
+    "offering": ("offering",),
+    "lottery": ("lottery",),
+    "fish": (),
+}
+
+#: 上面那些项目键的中文名（回执里用）。
+QUOTA_RESET_LABELS: dict[str, str] = {
+    "buff": "手气道具",
+    "heal": "姜汤（回体力）",
+    "reroll": "洗髓丹",
+    "offering": "香火供奉",
+    "lottery": "大鱼乐购票",
+    "fish": "每条鱼自己的次数",
+}
+
 #: 自动备份设置：页面字段名 -> 配置键 + 允许范围（None = 不限）
 AUTOBACKUP_KEYS: dict[str, tuple[str, int, int]] = {
     "daily_hour": ("backup_daily_hour", 0, 23),
@@ -1833,41 +1855,72 @@ class EditorBridgeMixin(EditorApiMixin):
     async def _editor_reset_quota(self, payload: dict[str, Any]) -> tuple[bool, str]:
         """♻️ 重置**每日次数**（v1.18.65）—— 只清计数，**不动任何上限配置**。
 
-        站长：「给大鱼乐加全局次数重置按钮功能，方便重置每日的次数而且不用直接加上限」。
-        ``scope``：``all``（默认）= 全群每个玩家；``me`` = 只清页面当前选中的玩家
-        （没选中就退化成 all，并在回执里说清）。
+        站长：「给大鱼乐加全局次数重置按钮功能，方便重置每日的次数而且不用直接加上限」
+        + 「重置应该能选是重置什么」。
+
+        ``scope``：``all``（默认）= 全群每个玩家；``me`` = 只清 ``user_id`` 那个玩家。
+        ``what``：项目键（``buff`` / ``heal`` / ``reroll`` / ``offering`` / ``lottery`` /
+        ``fish``），留空 = 全清。
+
+        ⚠️ **不要 `from _calc import …`**（v1.18.65 修）：插件运行时兄弟模块是
+        `_load_sibling()` 动态加载的，`sys.modules` 里没有顶层 `_calc`，
+        那样写会当场 `No module named '_calc'` —— 站长看到的「没重置成功」就是这个。
+        直接用实例上的全局绑定（`_expose_globals_all` 已经把这三个函数挂上去了）。
         """
         scope = str(payload.get("scope") or "all").strip().lower()
         want_all = scope != "me"
         target = str(payload.get("user_id") or "").strip()
         if not want_all and not target:
             want_all = True
+        which = str(payload.get("what") or "").strip()
+        quota_keys = list(QUOTA_RESET_ALIASES[which]) if which in QUOTA_RESET_ALIASES else None
+        fish_only = which == "fish"
+        if which and quota_keys is None and not fish_only:
+            return False, f"不认识要重置的项目「{which}」（可写：" + "、".join(QUOTA_RESET_ALIASES) + "）"
+
         ids = [str(x) for x in await self._player_ids()] if want_all else [target]
         stored = 0
         fish_reset = 0
         quota_reset: dict[str, int] = {}
-        from _calc import DAILY_QUOTA_KEYS, _daily_quota_reset, _per_fish_limit_reset
+        quota_labels = {k: label for k, label, _cfg in DAILY_QUOTA_KEYS}
 
         for uid in ids:
             try:
                 player = await self._load_player(uid)
             except Exception:                                             # pragma: no cover
                 continue
-            cleared = _daily_quota_reset(player)
-            touched = _per_fish_limit_reset(player)
-            if cleared or touched:
+            changed = False
+            if not fish_only:
+                if quota_keys is None:
+                    cleared = _daily_quota_reset(player)
+                else:
+                    used = player.get("daily_used")
+                    cleared = {}
+                    if isinstance(used, dict):
+                        for key in quota_keys:
+                            value = max(0, _safe_int(used.get(key), 0, 0))
+                            if value:
+                                cleared[key] = value
+                            used.pop(key, None)
+                    player["daily_date"] = ""      # 让下次结算重新开账
                 for key, value in cleared.items():
                     quota_reset[key] = quota_reset.get(key, 0) + value
+                changed = changed or bool(cleared)
+            if quota_keys is None or fish_only:
+                touched = _per_fish_limit_reset(player)
                 fish_reset += touched
+                changed = changed or touched > 0
+            if changed:
                 stored += 1
                 await self._save_player(player)
-        name_of = {k: label for k, label, _cfg in DAILY_QUOTA_KEYS}
-        detail = "、".join(f"{name_of.get(k, k)} {v} 次" for k, v in quota_reset.items())
+
+        detail = "、".join(f"{quota_labels.get(k, k)} {v} 次" for k, v in quota_reset.items())
         who = "全群" if want_all else f"玩家 {target}"
+        scope_note = f"（只重置了「{QUOTA_RESET_LABELS[which]}」）" if which else ""
         return True, (
-            f"已重置{who}的每日次数（上限一个都没改）。"
+            f"已重置{who}的每日次数{scope_note}（上限一个都没改）。"
             f"清掉的额度：{detail or '本来就没用掉'}；"
-            f"每条鱼的洗髓/喂上限次数也清了 {fish_reset} 条；动到数据 {stored} 人。"
+            f"每条鱼的洗髓 / 喂上限次数也清了 {fish_reset} 条；动到数据 {stored} 人。"
         )
 
     # ------------------------------------------------------------ save_content

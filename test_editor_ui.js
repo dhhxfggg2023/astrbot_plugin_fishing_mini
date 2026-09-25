@@ -127,6 +127,8 @@ const hookNames = [
   "tabHasError", "problemsInTab", "problemWhere", "gotoProblem", "doSave", "tabHealth",
   // v1.18.64：大鱼乐标题上的「改票价 → / 功能开关 →」要靠它反查入口
   "gotoConfigKey", "tabForConfigKey",
+  // v1.18.65：大鱼乐页的「♻️ 重置每日次数」条（含「重置什么」下拉）
+  "renderQuotaResetStrip",
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "playerRowsNow", "renderPlayersTab",
@@ -1779,6 +1781,26 @@ async function configKeysCoverage() {
     "长 JSON 只显示开头 + 总字数（不会把表格撑爆）", jsonCell.length + " 字符");
   check(T.numberValuesFromPage(null).editor_status === undefined,
     "只读行永远不会被提交（白名单拿不到时也一样）");
+
+  /* ---- v1.18.65：重置每日次数那条（大鱼乐页）---- */
+  const quotaHtml = T.renderQuotaResetStrip();
+  check(quotaHtml.indexOf("重置每日次数") > 0 &&
+    quotaHtml.indexOf("上限一个都不改") > 0,
+    "大鱼乐页有「重置每日次数」条，并写明不动上限");
+  check(quotaHtml.indexOf("quota:what") > 0 &&
+    quotaHtml.indexOf(">手气道具<") > 0 && quotaHtml.indexOf(">洗髓丹<") > 0 &&
+    quotaHtml.indexOf(">每条鱼自己的次数<") > 0,
+    "能选「重置什么」（手气 / 姜汤 / 洗髓 / 供奉 / 彩票 / 每条鱼）",
+    quotaHtml.length + " 字符");
+  check(quotaHtml.indexOf("quota:ask") > 0,
+    "默认只给一个「重置次数…」按钮（先问一次，不乱清）");
+  T.state.quotaReset = { confirm: true, what: "buff" };
+  const quotaAsk = T.renderQuotaResetStrip();
+  check(quotaAsk.indexOf("data-scope='all'") > 0 && quotaAsk.indexOf("data-scope='me'") > 0,
+    "确认后才出现「全群所有人 / 只要我自己」两个范围");
+  check((quotaAsk.match(/selected/g) || []).length >= 1,
+    "下拉里选中的还是刚才那个项目（重绘不会回到「全部」）");
+  T.state.quotaReset = {};
 
   /* ---- v1.18.64：枚举型字符串键不能被当成数字格（否则一进页就红框）---- */
   const modeRow = T.state.data.numbers.filter(function (r) { return r.key === "feed_bonus_mode"; })[0];
