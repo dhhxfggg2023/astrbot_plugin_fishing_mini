@@ -1629,9 +1629,18 @@ async def main():
     await cmd(plugin, ev, "卖", "1", "2", "3", "4", "5")
     p = await plugin._load_player("89001")
     check(len(p["inventory"]) == 5, f"一次卖 5 条 -> 剩 {len(p['inventory'])} 条")
+    # 每条鱼的价 = 10~19（value_override） × 行情加成(1.5~2.2) × 个体差异(0.92~1.12)
+    # ⚠️ v1.18.76：以前写死 `<= 110`（拍脑袋的经验值），漏算了个体差异那 1.12 倍 ——
+    #    行情抽到上限时总额能到 200 多，于是偶发红。这里按**配置**推出上下界。
+    _boost_min = mod._safe_number(_CFG.get("market_boost_min"), 1.5)
+    _boost_max = mod._safe_number(_CFG.get("market_boost_max"), 2.2)
+    _var_min, _var_max = mod.VALUE_VARIANCE
+    _low = int(sum(v * _boost_min * _var_min for v in (10, 11, 12, 13, 14)))
+    _high = int(sum(v * _boost_max * _var_max for v in (10, 11, 12, 13, 14))) + 1
     check(
-        50 <= p["gold"] <= 110,
-        f"得 {p['gold']} 金币（5 条×10，含行情加成最多 ×2.2）",
+        _low <= p["gold"] <= _high,
+        f"卖 5 条得 {p['gold']} 金币（按配置推的区间 {_low}~{_high}："
+        f"行情 ×{_boost_min}~{_boost_max}、个体差异 ×{_var_min}~{_var_max}）",
     )
 
     # --- 区间写法 ---
@@ -1761,7 +1770,19 @@ async def main():
     check(len(p["aquarium"]) == 0, "取 全部 可用")
 
     # --- 批量投喂：/钓鱼 用 高级饲料 1 2 3 ---
-    p["inventory"] = fill(6)
+    # ⚠️ v1.18.76：**夹具要让展示顺序唯一确定**。以前这里靠 `fill()` 造的
+    #    「10 起步、每档 +1」再加并列排序，`2-6` 那一条断言会偶发飘（实测 1/6）。
+    #    现在给每条鱼**拉开品质档位**（绝品 > 珍品 > 精品 > 良品 > 凡品），
+    #    展示顺序 = fish[0..5]，栏位号与数组下标一一对应，断言才有意义。
+    def fill_distinct(n: int) -> list:
+        tiers = [3.5, 3.0, 2.0, 1.5, 1.15, 1.0]
+        return [
+            mod._new_instance("carp", tiers[i % len(tiers)], value_override=500 - i * 10,
+                              attrs={"meat": 60, "spirit": 60, "sheen": 60})
+            for i in range(n)
+        ]
+
+    p["inventory"] = fill_distinct(6)
     p["items"] = {"feed_premium": 3}
     p["gold"] = 100000
     await plugin2._save_player(p)
@@ -4073,7 +4094,7 @@ async def main():
                 #    于是 pulls 只记到 1（实测偶发）—— 补**一次**重试（0.3 + 0.06 秒，
                 #    仍明显短于最短的拉线窗口）。⚠️ 不能循环重试：`_resolve_pull` 会
                 #    把没消费掉的「拉」记成溢出，多试几次会让 pulls 虚高。
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.28)
                 if len(handled) == 1:
                     prompt_first = any("咬钩了" in m for m in out)
                 if pulls < max_pulls and plugin._resolve_pull(event):
@@ -4921,7 +4942,10 @@ async def main():
     _kb_cfg = dict(
         _CFG, interactive_rarities="稀有,传说,神话",
         rarity_spawn_weights="常见:0,少见:0,稀有:100,传说:0,神话:0",
-        bait_hook_rates="abyss_bait:1.0", window_min=1, window_max=1,
+        bait_hook_rates="abyss_bait:1.0",
+        # ⚠️ 窗口给 2 秒：测试要点「拉」，而 `_multi_pull_run` 先睡 0.3 秒越过余震护栏，
+        #    窗口 1 秒时偶尔会晚于窗口 -> 鱼超时跑掉、最后那条没键盘（偶发红）。
+        window_min=2, window_max=2,
         multi_pull_enabled=True, multi_escape_mult=0.0, auto_supply_bait=False,
     )
     _kbp2 = make_plugin(_kb_cfg)
@@ -4942,10 +4966,20 @@ async def main():
          for b in row["buttons"]]
         for c in _kbapi.calls if "keyboard" in c
     ]
+    # ⚠️ 断言的是「**战报那条回复自己也带按钮**」（这正是站长报的 bug），
+    #    不去假设它在所有带键盘的回复里排第几 —— 那个顺序跟时序有关，会偶发红。
+    _kb_report = [
+        c for c in _kbapi.calls
+        if "keyboard" in c and "上鱼" in str(c)
+    ]
     check(
-        len(_kb_msgs) >= 3 and _kb_msgs[-1][:1] == ["再来一竿"],
-        f"连钓跑完时**战报**也拿到键盘（不是只有第一条回复有按钮）-> 带键盘的："
-        f"{_kb_msgs}",
+        len(_kb_msgs) >= 2 and _kb_report
+        and [
+            b["render_data"]["label"]
+            for row in _kb_report[-1]["keyboard"]["content"]["rows"]
+            for b in row["buttons"]
+        ][:1] == ["再来一竿"],
+        f"连钓跑完时**战报那条自己就带按钮**（不再只有咬钩提示有）-> 带键盘的：{_kb_msgs}",
     )
     check(
         all(labels == ["拉线！"] for labels in _kb_msgs[:-1]),
@@ -9198,6 +9232,49 @@ async def main():
     check(
         _hpl["baits"].get("vip_bait") == 1 or _hpl["items"].get("vip_bait_pass") == 1,
         f"凭证道具没进配置时也能领到（退化成直接给饵）-> {_hrec.get('line')[:44]}",
+    )
+
+    # ⚠️ v1.18.76：**抽到重复的限用凭证要叠加次数**（站长问的「抽到重复的会正确叠加吗」）。
+    # 以前 `_limited_item_left` 只算「当前这一张」的剩余 —— 抽到 3 张「限用 8 次」的凭证，
+    # 背包里却显示「可用 8 次」（实际 24 次）：消耗逻辑是对的，显示和校验少算了。
+    _dup = make_plugin()
+    _dup_p = mod._default_player("89412")
+    _row_pass = {"id": "abyss_bait_pass", "kind": "bait", "param": "abyss_bait_pass",
+                 "count": 1, "desc": "深渊秘饵"}
+    for _ in range(3):
+        _dup._lottery_apply_prize(_dup_p, _row_pass)
+    check(
+        mod._safe_int(_dup_p["items"].get("abyss_bait_pass"), 0, 0) == 3,
+        f"抽到 3 张同样的凭证 -> 背包里 3 件 -> {_dup_p['items'].get('abyss_bait_pass')}",
+    )
+    check(
+        _dup._limited_item_left(_dup_p, "abyss_bait_pass") == 24,
+        f"3 张 × 每张 8 次 = 24 次（不再是「8 次」）-> "
+        f"{_dup._limited_item_left(_dup_p, 'abyss_bait_pass')}",
+    )
+    check(
+        _dup._limited_bait_left(_dup_p, "abyss_secret") == 24,
+        f"限定饵那边也按 24 次算（不然会误判「用完了」）-> "
+        f"{_dup._limited_bait_left(_dup_p, 'abyss_secret')}",
+    )
+    for _ in range(10):
+        mod._use_limited_items(_dup_p, _dup.items)
+    check(
+        _dup._limited_item_left(_dup_p, "abyss_bait_pass") == 14,
+        f"抛 10 竿后还剩 14 次 -> {_dup._limited_item_left(_dup_p, 'abyss_bait_pass')}",
+    )
+    for _ in range(14):
+        mod._use_limited_items(_dup_p, _dup.items)
+    check(
+        _dup._limited_item_left(_dup_p, "abyss_bait_pass") == 0
+        and not _dup_p["items"].get("abyss_bait_pass"),
+        f"24 次用完凭证全部消失 -> items={_dup_p['items']}",
+    )
+    _dup._lottery_apply_prize(_dup_p, _row_pass)
+    check(
+        _dup._limited_item_left(_dup_p, "abyss_bait_pass") == 8,
+        f"用光后再抽一张 = 满额 8 次（不会因为残留状态算错）-> "
+        f"{_dup._limited_item_left(_dup_p, 'abyss_bait_pass')}",
     )
 
     # --- v1.18.71：奖池的鱼要乘系数（站长：「应该和订单鱼一样乘上系数啊，不然太低了」）---

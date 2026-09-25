@@ -4120,9 +4120,19 @@ class FishingPlugin(
         return weighted[-1][0]
 
     def _limited_item_left(self, player: dict[str, Any], item_id: str) -> int:
-        """这件「限用道具」还剩几次（没这件 / 不是限用道具 -> 0）。"""
+        """这件「限用道具」**总共**还剩几次（没这件 / 不是限用道具 -> 0）。
+
+        ⚠️ v1.18.76 修：**抽到重复的要叠加次数**。以前这里只算「当前这一张」的剩余，
+        于是抽到 3 张「限用 8 次」的凭证，背包里却显示「可用 8 次」（实际有 24 次）——
+        消耗逻辑是对的（每张各自扣），但**显示和校验都少算了**。
+
+        口径：``总额度 = (手上张数 - 1) × 单张次数 + 当前这张剩的次数``。
+        没开始用的那种（`limited_uses` 里没有记录）按「整张满次数」算，
+        所以「一次没用过的一张」也显示满额。
+        """
         pocket = player.get("items")
-        if not isinstance(pocket, dict) or _safe_int(pocket.get(item_id), 0, 0) <= 0:
+        held = _safe_int((pocket or {}).get(item_id), 0, 0) if isinstance(pocket, dict) else 0
+        if held <= 0:
             return 0
         spec = self.items.get(str(item_id)) or {}
         total = _safe_int(spec.get("uses"), 0, 0)
@@ -4131,7 +4141,8 @@ class FishingPlugin(
         state = player.get("limited_uses")
         state = state if isinstance(state, dict) else {}
         left = state.get(str(item_id))
-        return total if left is None else max(0, _safe_int(left, total, 0))
+        current = total if left is None else max(0, _safe_int(left, total, 0))
+        return max(0, (held - 1) * total + current)
 
     def _limited_bait_left(self, player: dict[str, Any], bait_id: str) -> int:
         """这种**限定饵**现在还能用几次 = 对应凭证道具的剩余次数（v1.18.70）。
