@@ -2591,7 +2591,7 @@ async def main():
         "锦鲤玉佩": 8,      # 道具
         "月夜": 8,          # 天气
         "垂钓达人": 8,      # 成就
-        "新手村": 14,       # 钓点：鱼种多，放宽到 14（钓鱼 查里的 CARD_MAX_LINES）
+        "新手村": 120,      # 钓点：v1.18.64 起**把该钓点的鱼全列出来**（站长要求），上限放宽
     }
     _over = []
     for _kw, _cap in _caps.items():
@@ -2600,7 +2600,7 @@ async def main():
             _over.append(f"{_kw}:{_n}>{_cap}")
     check(
         not _over,
-        f"详情卡长度受控（普通卡 ≤8 行、钓点卡 ≤14 行；超限：{_over or '无'}）",
+        f"详情卡长度受控（普通卡 ≤8 行、钓点卡 ≤120 行；超限：{_over or '无'}）",
     )
 
     # --- ⚠️ 不许把「只有开发者才关心」的东西写进游戏 ---
@@ -3055,18 +3055,20 @@ async def main():
         f"解锁被拒时仍然详细说明缺什么 -> {body.splitlines()[0][:34]}",
     )
 
-    # --- B: 图鉴 <钓点名> 不列未收集条目 ---
+    # --- B: 图鉴 <钓点名> / 图鉴 详：v1.18.64 起**未收集的也列出来**（站长要「能查所有鱼」）---
     out = await cmd(slim, ev_s, "图鉴", "新手村", "")
     body = text_of(out)
-    check("❔" not in body and "???" not in body, "图鉴（单钓点）不再列 ❔ 占位条目")
+    check("❔" in body, "图鉴（单钓点）把没钓到的也列出来（标 ❔）")
+    check("✅" in body, "已钓到的标 ✅")
     check("鲤鱼" in body, "已收集的鱼照常显示")
     check("还差" in body and "种" in body, f"末尾给出「还差 N 种」汇总 -> {body.splitlines()[-2][:30]}")
 
     out = await cmd(slim, ev_s, "图鉴", "详", "")
     body = text_of(out)
-    check("❔" not in body and "???" not in body, "图鉴（详）不再列 ❔ 占位条目")
+    check("❔" in body and "???" not in body, "图鉴（详）也列出未收集的（标 ❔）")
     check("还差" in body and f"{len(mod.FISH_POOL)}" in body, "图鉴（详）末尾给出总汇总")
     check("鲤鱼" in body or "鲫鱼" in body, "图鉴（详）照常列出已收集的鱼")
+    check(len(body.splitlines()) <= 34, f"图鉴（详）每页 30 种 + 表头/汇总 -> {len(body.splitlines())} 行")
 
     out = await cmd(slim, ev_s, "图鉴", "", "")
     body = text_of(out)
@@ -4027,6 +4029,10 @@ async def main():
                 # 连钓会丢弃窗口开头 MULTI_PULL_MIN_REACTION 秒里的「拉」（那是上一条的
                 # 余震），所以这里先等过去再点。顺便在这个时刻验证「提示已经发出去了」：
                 # v1.18.28 以前的代码要等整局跑完才吐提示，这 0.3 秒时 out 里一条都没有。
+                # ⚠️ v1.18.64：整套测试跑起来时 GC / 调度会让这一次点偶尔晚于窗口，
+                #    于是 pulls 只记到 1（实测偶发）—— 补**一次**重试（0.3 + 0.06 秒，
+                #    仍明显短于最短的拉线窗口）。⚠️ 不能循环重试：`_resolve_pull` 会
+                #    把没消费掉的「拉」记成溢出，多试几次会让 pulls 虚高。
                 await asyncio.sleep(0.3)
                 if len(handled) == 1:
                     prompt_first = any("咬钩了" in m for m in out)
@@ -8346,7 +8352,7 @@ async def main():
         (PLUGIN_DIR / "_conf_schema.json").read_text(encoding="utf-8-sig")
     )
     check(
-        len(_schema) == 146,
+        len(_schema) == 147,
         f"配置项总数 {len(_schema)}（v1.9.0 的 93 + command_aliases + custom_commands + 路标"
         f" + v1.11.0 的 decoration_slots/decoration_hours/buff_cast_count"
         f" + v1.12.0 的 text_overrides/button_layout"
@@ -8364,7 +8370,7 @@ async def main():
         f" + v1.18.28 的 multi_pull_enabled + v1.18.37 的 mention_mode"
         f" + v1.18.51 的大鱼乐九项（奖表/头奖/票价/限购/单次上限/保底两项/播报）"
         f" + v1.18.52 的三个开关（总开关/出异色/强制奖级）"
-        f" + v1.18.62 的育灵水三项（每条鱼每天几次 / 叠加方式 / 加成上限）；"
+        f" + v1.18.62/64 的育灵水四项（终身上限 / 旧键 / 叠加方式 / 加成上限）；"
         f"aquarium_bonus* 两项已在 v1.18.0 删掉，hostile_keywords 在 v1.18.17 删掉）",
     )
     _visible = sorted(k for k, v in _schema.items() if not v.get("invisible"))
@@ -8373,7 +8379,7 @@ async def main():
         f"面板只剩 3 条救生索：{_visible}",
     )
     _hidden = [k for k, v in _schema.items() if v.get("invisible")]
-    check(len(_hidden) == 143, f"其余 {len(_hidden)} 项全部 invisible")
+    check(len(_hidden) == 144, f"其余 {len(_hidden)} 项全部 invisible")
     # schema 的**默认值**也必须与 DEFAULTS 逐项一致：不一致的话，新装的人拿到的是
     # 旧默认值，编辑器/面板上显示的也是假值（v1.18.18 就是这么发现 button_defs
     # 少了 3 行 pull.* 的 —— 改完 DEFAULTS 一定要跑一遍同步脚本）。
@@ -9713,25 +9719,30 @@ async def main():
     _inst_fb = p_fb["aquarium"][0]
     check(
         mod._safe_int(_inst_fb.get("feed_bonus"), 0, 0) == 10,
-        f"每天 2 次：育灵水只能用出去 2 次（+5×2=10）-> {_inst_fb.get('feed_bonus')}",
+        f"终身上限 2 次：育灵水只能用出去 2 次（+5×2=10）-> {_inst_fb.get('feed_bonus')}",
     )
     check(
         mod._safe_int(p_fb["items"].get("growth_tonic"), 0, 0) == 7,
         f"第 3 次被拦下，道具没白扣 -> 剩 {p_fb['items'].get('growth_tonic')}",
     )
     check(
-        "今天已经培育过 2 次" in _outs_fb[2] and "明天" in _outs_fb[2],
-        f"被拦时给出人话原因 -> {_outs_fb[2].strip().splitlines()[-1][:60]}",
+        "一辈子只能培育 2 次" in _outs_fb[2],
+        f"被拦时给出人话原因（终身上限）-> {_outs_fb[2].strip().splitlines()[-1][:60]}",
     )
-    # 跨天自动归零（惰性结算，不用定时任务）
-    p_fb["aquarium"][0]["feed_bonus_day"] = "2000-01-01"
+    # ⚠️ v1.18.64：**换一天也不会重置**（终身上限，站长要的就是这个）
+    p_fb["aquarium"][0]["feed_bonus_used"] = 2
     await plugin_fb._save_player(p_fb)
     _out_newday = text_of(await cmd(plugin_fb, ev_fb, "用", "育灵水", "1"))
     p_fb = await plugin_fb._load_player("96004")
     check(
-        mod._safe_int(p_fb["aquarium"][0].get("feed_bonus"), 0, 0) == 15
-        and "今天已经培育过" not in _out_newday,
-        f"换一天额度自动重置 -> {p_fb['aquarium'][0].get('feed_bonus')}",
+        mod._safe_int(p_fb["aquarium"][0].get("feed_bonus"), 0, 0) == 10
+        and "一辈子只能培育" in _out_newday,
+        f"换一天**不**重置（终身计数）-> {p_fb['aquarium'][0].get('feed_bonus')}",
+    )
+    check(
+        mod._safe_int(p_fb["aquarium"][0].get("feed_bonus_used"), 0, 0) == 2,
+        f"终身计数存在鱼的存档里（读档不丢）-> "
+        f"{p_fb['aquarium'][0].get('feed_bonus_used')}",
     )
     # 0 = 不限（回到旧行为，给想放开的人留口子）
     plugin_free_fb = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_cap=20))

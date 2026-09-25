@@ -357,13 +357,17 @@ DEFAULTS: dict[str, Any] = {
     # 洗髓丹：每条鱼每天最多吃几颗（吃满了当天「厌恶」，第二天恢复）
     #   **默认 0 = 不限**（v1.18.29 起）；想恢复「一条鱼一天最多 3 颗」就填 3
     "reroll_daily_limit": 0,
-    # 育灵水 / 珍珠梳这类「加投喂上限」的道具（v1.18.62）：
-    #   feed_bonus_daily_limit = **同一条鱼每天最多能用几次**（默认 2）。
-    #     站长报「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
-    #     之前就不能配置导致数值膨胀了」—— 以前只靠 feed_bonus ≤ 20 兜底，
-    #     一条鱼一天能被堆满 20 次上限。填 0 = 不限（回到老行为）。
+    # 育灵水 / 珍珠梳这类「加投喂上限」的道具（v1.18.62 加，v1.18.64 改口径）：
+    #   feed_bonus_daily_limit = **同一条鱼一辈子最多能用几次**（默认 2）。
+    #     ⚠️ 键名里那个 daily 是历史遗留（v1.18.62 原本按天重置），**现在是终身上限**：
+    #     站长要求「不是每天，而是这条鱼永远只能喂几次加上限的道具（同类一起算）」——
+    #     按天重置等于每天都能再堆，鱼的投喂上限迟早被堆满。
+    #     填 0 = 不限（只受 feed_bonus_cap 约束）。
     #   feed_bonus_mode = add 每次叠加 / best 只取最好的一次
     "feed_bonus_daily_limit": 2,
+    # v1.18.64：终身上限的**新名字**（语义改了就顺便正名）。两个键**都认**，
+    # 新键优先；老配置里只有老键时照旧生效（见 _calc._feed_bonus_daily_limit）。
+    "feed_bonus_lifetime_limit": 2,
     "feed_bonus_mode": "add",
     # 单条鱼的投喂上限加成最多堆到多少（育灵水 +5、珍珠梳 +10 都堆在这一项上）
     "feed_bonus_cap": 20,
@@ -3369,6 +3373,12 @@ class FishingPlugin(
         cfg["feed_bonus_daily_limit"] = int(
             _clamp(_safe_int(cfg.get("feed_bonus_daily_limit"), 2, 0), 0, 10000)
         )
+        # v1.18.64：终身上限的**新键**（老键 feed_bonus_daily_limit 继续读，见 _calc）——
+        # 没写过新键的人就跟着老键走，写过的人以新键为准。
+        if "feed_bonus_lifetime_limit" in cfg:
+            cfg["feed_bonus_lifetime_limit"] = int(
+                _clamp(_safe_int(cfg.get("feed_bonus_lifetime_limit"), 2, 0), 0, 10000)
+            )
         cfg["feed_bonus_cap"] = int(
             _clamp(_safe_int(cfg.get("feed_bonus_cap"), 20, 0), 0, 1000)
         )

@@ -125,6 +125,8 @@ const hookNames = [
   // 回复按钮（button_defs）表 + v1.12.1「只拦改过的部分」这套定位/跳转
   "rowKey", "isButtonStyle", "BUTTON_SCENES", "BUTTON_SCENES_FALLBACK", "buttonSceneIds",
   "tabHasError", "problemsInTab", "problemWhere", "gotoProblem", "doSave", "tabHealth",
+  // v1.18.64：大鱼乐标题上的「改票价 → / 功能开关 →」要靠它反查入口
+  "gotoConfigKey", "tabForConfigKey",
   // 命令别名 / 自定义命令 两张表 + 玩家页（v1.10.0）
   "renderSubTabs", "canonicalCommands", "normalizePlayerRow", "fetchPlayers",
   "fetchSnapshotPlayers", "playerRowsNow", "renderPlayersTab",
@@ -1447,9 +1449,11 @@ async function repliesPure() {
   check(!!T.validateReplyButton(
     { label: "下一页", data: "{指令} {页}", style: "default" }, "cast.hit").data,
     "同一个模板写在普通场景上照样标红（那边没人填占位符 = 死按钮）");
-  check(!!T.validateReplyButton(
+  // ⚠️ v1.18.64 反过来：动态场景（上一页/下一页/再次使用）**不该报错** ——
+  //    站长：「不要显示报错了，本来就不能配置具体命令写死」。
+  check(!T.validateReplyButton(
     { label: "x", data: "这不是指令", style: "default" }, "page.next").data,
-    "动态场景里真写错的指令也拦得住");
+    "动态场景里的内容不再标红（它本来就不是给人写死命令的）");
   check(T.applyCommandPrefix("{指令} {页}", "/钓鱼") === "{指令} {页}",
     "批量改指令前缀会跳过模板行（不会把 {指令} 拼成 /钓鱼 {指令}）");
 
@@ -1610,7 +1614,7 @@ async function configKeysCoverage() {
   /* 唯一真相是插件的 _conf_schema.json：页面那份清单只能一一对应，不能少 */
   const schema = JSON.parse(fs.readFileSync(path.join(__dirname, "_conf_schema.json"), "utf8"));
   const schemaKeys = Object.keys(schema);
-  check(schemaKeys.length === 146, "配置 schema 里是 146 个键", schemaKeys.length);
+  check(schemaKeys.length === 147, "配置 schema 里是 147 个键", schemaKeys.length);
 
   const pageKeys = T.NUMBER_KEYS.map(function (x) { return x[0]; });
   check(pageKeys.indexOf("hostile_keywords") < 0,
@@ -1694,9 +1698,9 @@ async function configKeysCoverage() {
     cov.missing.join(",") || "0 个");
   check(cov.badEntry.length === 0, "所有 tab: 入口都指向真实存在的标签页",
     cov.badEntry.join(",") || "0 个");
-  check(cov.counts.total === 146 &&
-    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 146,
-    "146 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
+  check(cov.counts.total === 147 &&
+    cov.counts.numbers + cov.counts.tab + cov.counts.panel === 147,
+    "147 个键全都有归属（数值页 / 别的页 / 插件面板）", JSON.stringify(cov.counts));
 
   /* 每个键都要有中文名 + 一句「这个键是干什么的」 */
   const noDoc = T.NUMBER_KEYS.filter(function (item) {
@@ -1704,12 +1708,12 @@ async function configKeysCoverage() {
     return !String(row.label || "").trim() || !String(row.desc || "").trim();
   });
   check(noDoc.length === 0, "每个键都有中文名 + 作用说明",
-    noDoc.map(function (x) { return x[0]; }).join(",") || "146/146 都有");
+    noDoc.map(function (x) { return x[0]; }).join(",") || "147/147 都有");
   const longDoc = T.NUMBER_KEYS.filter(function (item) {
     return String(T.numberRowFromItem(item, undefined).desc || "").length >= 30;
   });
   check(longDoc.length >= 80, "绝大多数说明是「讲清后果」的长句（不是复述键名）",
-    longDoc.length + "/146 条 ≥30 字");
+    longDoc.length + "/147 条 ≥30 字");
 
   /* 入口指向：内容表 / 回复 / 命令 / 存档 都要落在真的能改的那一页 */
   const expectTab = {
@@ -1748,8 +1752,8 @@ async function configKeysCoverage() {
   const saved = T.state.data.numbers;
   T.state.data.numbers = T.demoNumberRows();
   const numKeys = T.state.data.numbers.map(function (r) { return r.key; });
-  check(numKeys.length === 146 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
-    "数值页按全量清单铺开 146 行（一行都没少）", numKeys.length + " 行");
+  check(numKeys.length === 147 && schemaKeys.every(function (k) { return numKeys.indexOf(k) >= 0; }),
+    "数值页按全量清单铺开 147 行（一行都没少）", numKeys.length + " 行");
   const blank = T.state.data.numbers.filter(function (r) {
     return !r.entry && (r.value === "" || r.value === null || r.value === undefined);
   }).map(function (r) { return r.key; }).sort();
@@ -1775,6 +1779,53 @@ async function configKeysCoverage() {
     "长 JSON 只显示开头 + 总字数（不会把表格撑爆）", jsonCell.length + " 字符");
   check(T.numberValuesFromPage(null).editor_status === undefined,
     "只读行永远不会被提交（白名单拿不到时也一样）");
+
+  /* ---- v1.18.64：枚举型字符串键不能被当成数字格（否则一进页就红框）---- */
+  const modeRow = T.state.data.numbers.filter(function (r) { return r.key === "feed_bonus_mode"; })[0];
+  check(modeRow && modeRow.text === true && modeRow.value === "add",
+    "feed_bonus_mode（值为 add/best）按**文本**行渲染，不会被判「需要是数字」",
+    modeRow ? JSON.stringify({ text: modeRow.text, value: modeRow.value }) : "没这行");
+  check(modeRow && Object.keys(T.validateRow(T.TAB_BY_ID.numbers, modeRow)).length === 0,
+    "它也不会出现在「校验不通过」里");
+  check(modeRow && typeof T.tabForConfigKey === "function" &&
+    T.tabForConfigKey("feed_bonus_mode") === "numbers",
+    "它自己的入口就是数值页（反查正常）");
+
+  /* ---- v1.18.64：大鱼乐标题上的「改票价 → / 功能开关 →」必须点得开 ----
+     以前这两个按钮只带 data-key、没带 data-tab，gotoConfigKey 拿到 undefined，
+     于是弹「这个入口打不开」——站长报的就是它。 */
+  const lotTab = T.TAB_BY_ID.lottery;
+  const lotTitle = typeof lotTab.titleHtml === "function" ? lotTab.titleHtml() : "";
+  check(lotTitle.indexOf('data-tab="numbers"') > 0 &&
+    lotTitle.indexOf('data-key="lottery_ticket_price"') > 0 &&
+    lotTitle.indexOf('data-key="lottery_enabled"') > 0,
+    "大鱼乐标题上的两个按钮都带上了 data-tab");
+  T.state.tab = "lottery";
+  const beforeTab = T.state.tab;
+  T.gotoConfigKey("", "lottery_ticket_price");     // 故意不带 tagId（模拟不带 data-tab 的老按钮）
+  check(T.state.tab === "numbers", "没带 data-tab 时自己反查到数值页（不再报「打不开」）");
+  T.gotoConfigKey("numbers", "lottery_ticket_price");
+  check(T.state.tab === "numbers" && T.state.query === "lottery_ticket_price",
+    "「改票价 →」跳到数值页并把那一行筛出来");
+  T.state.query = "";
+  T.state.tab = beforeTab || "lottery";
+
+  /* ---- v1.18.64：动态按钮含占位符时**不许报错**（站长：「本来就不能配置具体命令写死」）---- */
+  check(Object.keys(T.validateReplyButton({ label: "上一页", data: "{指令} {页}", style: "default" },
+    "page.prev")).length === 0 &&
+    Object.keys(T.validateReplyButton({ label: "下一页", data: "{指令} {页}", style: "default" },
+      "page.next")).length === 0,
+    "page.prev / page.next 的模板写法不再标红");
+  check(Object.keys(T.validateReplyButton({ label: "再来", data: "{指令} {道具} {参数}" },
+    "item.again")).length === 0,
+    "item.again 的模板写法也不标红");
+  check(Object.keys(T.validateReplyButton({ label: "随便", data: "随便写点啥" },
+    "page.next")).length === 0,
+    "动态按钮就算没写占位符也不拦（它本来就不该写死命令）");
+  check(T.validateReplyButton({ label: "上一页", data: "" }, "page.prev").data !== undefined,
+    "但**留空**仍然要提示（那才是真错）");
+  check(T.validateReplyButton({ label: "看背包", data: "背包" }, "bag.list").data !== undefined,
+    "普通场景的按钮照旧要求 / 开头（这条护栏没被放松）");
   T.state.data.numbers = saved;
 
   /* 「🔎 全部配置键」视图：搜得动、说得清、缺了会红脸 */
@@ -1793,7 +1844,7 @@ async function configKeysCoverage() {
     T.keysFilteredRows()[0].key === "quality_myth_chance",
     "按配置键精确搜索只留那一行");
   T.state.keysQuery = "";
-  check(T.keysFilteredRows().length === 146, "清空搜索词 -> 又看到全部 146 个键");
+  check(T.keysFilteredRows().length === 147, "清空搜索词 -> 又看到全部 147 个键");
   check(keysHtml.indexOf('data-act="key:query"') > 0 &&
     keysHtml.indexOf('data-act="key:query"') < keysHtml.indexOf('id="keysMain"'),
     "搜索框在 #keysMain 外面（局部重绘表格时不会把输入焦点踢掉）");
@@ -2243,8 +2294,8 @@ async function configKeysCoverage() {
 
   /* 演示数据与真实默认值一致（页面上新增分组/视图时不能出现空白） */
   const demo = T.demoNumberRows();
-  check(demo.length === 146 && demo.filter(function (r) { return !r.group; }).length === 0,
-    "演示数据 146 行且每行都有分组（数值页的分组标题撑得起来）",
+  check(demo.length === 147 && demo.filter(function (r) { return !r.group; }).length === 0,
+    "演示数据 147 行且每行都有分组（数值页的分组标题撑得起来）",
     demo.length + " 行");
   const noDemo = T.NUMBER_KEYS.filter(function (item) {
     return T.DEMO_NUMBER_VALUES[item[0]] === undefined;

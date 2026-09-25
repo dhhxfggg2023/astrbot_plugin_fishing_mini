@@ -1974,13 +1974,28 @@ def _feed_bonus_cap(cfg: dict[str, Any]) -> int:
 
 
 def _feed_bonus_daily_limit(cfg: dict[str, Any]) -> int:
-    """**同一条鱼每天**最多能用几次育灵水/珍珠梳（``feed_bonus_daily_limit``）。
+    """**同一条鱼一辈子**最多能用几次育灵水/珍珠梳。
 
-    **默认 2**；填 0 = 不限（回到 v1.18.61 以前的行为）。
-    站长原话：「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
-    之前就不能配置导致数值膨胀了」。
+    ⚠️ 为什么这么绕（v1.18.64 踩过的坑）：新键 ``feed_bonus_lifetime_limit`` 一旦进了
+    DEFAULTS，升级时就会被同步进配置（值 = 默认 2），于是**老键被永久压住** ——
+    站长的老键明明写着 0（不限），却忽然变成终身 2 次。所以这里按优先级取：
+
+    1. 新键被**站长亲手改过**（在 ``user_edited_keys`` 里）-> 用新键；
+    2. 否则有老键 ``feed_bonus_daily_limit`` -> 用老键（老配置的口径就是他想要的）；
+    3. 都没有 -> 默认 2。
+
+    填 0 = 不限（只受 ``feed_bonus_cap`` 约束）。
     """
-    return max(0, _safe_int((cfg or {}).get("feed_bonus_daily_limit"), 2, 0))
+    data = cfg or {}
+    edited = data.get("user_edited_keys")
+    edited_set = {str(x) for x in edited} if isinstance(edited, (list, tuple, set)) else set()
+    if "feed_bonus_lifetime_limit" in edited_set and "feed_bonus_lifetime_limit" in data:
+        return max(0, _safe_int(data.get("feed_bonus_lifetime_limit"), 2, 0))
+    if "feed_bonus_daily_limit" in data:
+        return max(0, _safe_int(data.get("feed_bonus_daily_limit"), 2, 0))
+    if "feed_bonus_lifetime_limit" in data:
+        return max(0, _safe_int(data.get("feed_bonus_lifetime_limit"), 2, 0))
+    return 2
 
 
 def _feed_bonus_mode(cfg: dict[str, Any]) -> str:
@@ -1989,20 +2004,20 @@ def _feed_bonus_mode(cfg: dict[str, Any]) -> str:
     return "best" if mode in ("best", "max", "只取最好") else "add"
 
 
-def _feed_bonus_used(instance: dict[str, Any], today: str) -> int:
-    """这条鱼**今天**已经被喂了几次「加投喂上限」的道具（跨天自动归零）。"""
-    if str(instance.get("feed_bonus_day") or "") != str(today or ""):
-        return 0
-    return max(0, _safe_int(instance.get("feed_bonus_today"), 0, 0))
+def _feed_bonus_used(instance: dict[str, Any], today: str = "") -> int:
+    """这条鱼**一辈子**已经被喂了几次「加投喂上限」的道具（v1.18.64 起终身上限）。
+
+    ``today`` 参数保留只为兼容老调用点，**已经不参与判断**（以前按天重置）。
+    """
+    return max(0, _safe_int(instance.get("feed_bonus_used"), 0, 0))
 
 
-def _feed_bonus_mark(instance: dict[str, Any], today: str, used: int) -> None:
-    """记下「今天喂到第几次」（跨天自然作废，不用定时任务，同 _reroll_mark）。"""
-    instance["feed_bonus_day"] = str(today or "")
-    instance["feed_bonus_today"] = max(0, int(used))
+def _feed_bonus_mark(instance: dict[str, Any], today: str = "", used: int = 0) -> None:
+    """记下「这条鱼累计喂到第几次」（终身累计，不随日期重置）。"""
+    instance["feed_bonus_used"] = max(0, int(used))
 
 
-def _feed_bonus_block(instance: dict[str, Any], cfg: dict[str, Any], today: str) -> str:
+def _feed_bonus_block(instance: dict[str, Any], cfg: dict[str, Any], today: str = "") -> str:
     """还能不能再喂：返回 "" = 可以，否则返回一句给人看的原因。"""
     cap = _feed_bonus_cap(cfg)
     if cap <= 0:
@@ -2010,8 +2025,8 @@ def _feed_bonus_block(instance: dict[str, Any], cfg: dict[str, Any], today: str)
     if _safe_int(instance.get("feed_bonus"), 0, 0) >= cap:
         return f"已经培育到上限（+{cap} 次）"
     limit = _feed_bonus_daily_limit(cfg)
-    if limit > 0 and _feed_bonus_used(instance, today) >= limit:
-        return f"今天已经培育过 {limit} 次了，明天再来"
+    if limit > 0 and _feed_bonus_used(instance) >= limit:
+        return f"这条鱼一辈子只能培育 {limit} 次，已经用完了"
     return ""
 
 
@@ -2092,10 +2107,14 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         # ⚠️ 同样必须列在白名单里，否则每次读档都把当天次数清零，限制就失效了
         "reroll_day": str(raw.get("reroll_day") or ""),
         "reroll_today": max(0, _safe_int(raw.get("reroll_today"), 0, 0)),
-        # 育灵水/珍珠梳的「今天喂了几次」（v1.18.62）：同样是白名单式重建，
-        # ⚠️ 漏在这里 = 每次读档当天次数清零 -> 「每条鱼每天 N 次」直接失效。
-        "feed_bonus_day": str(raw.get("feed_bonus_day") or ""),
-        "feed_bonus_today": max(0, _safe_int(raw.get("feed_bonus_today"), 0, 0)),
+        # 育灵水/珍珠梳的「这条鱼一辈子喂了几次」（v1.18.63 加，v1.18.64 改成终身上限）：
+        # ⚠️ 白名单式重建，漏在这里 = 每次读档清零 -> 「一辈子 N 次」的限制直接失效。
+        # 老存档只有按天的 feed_bonus_today：**取两者的较大值**迁移过终身计数
+        # （那一天用过的次数也算进去，不让老玩家靠升级白刷一轮）。
+        "feed_bonus_used": max(
+            _safe_int(raw.get("feed_bonus_used"), 0, 0),
+            _safe_int(raw.get("feed_bonus_today"), 0, 0),
+        ),
         "live_bonus": live_bonus,
         "locked": bool(raw.get("locked")),
         # ⚠️ 必须列出来：_repair_instance 是白名单式重建，漏掉就等于每次读档把

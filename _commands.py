@@ -1396,10 +1396,12 @@ class CommandsMixin:
             return total, best, held.get(fish_id, 0)
 
         # ---- 各类详情卡（都是「几行短句」，方便统一走详情/多命中两条出口）----
-        # 站长要求「每一条回复的文本量都控制好」：钓点卡最多 14 行（含结尾那两行
-        # 「…还有 N 种」和「/钓鱼 查 <鱼名>」），超了就截断并指路
-        # （龙宫 15 种鱼全列是 20+ 行，刷屏而且没人一次看完）。
+        # 站长要求「每一条回复的文本量都控制好」，但 v1.18.64 又要求
+        # **钓点卡必须把该钓点的鱼全列出来**（「查钓点没法查所有鱼…很不好」）——
+        # 所以钓点卡不再截断，只把「列全」这件事做稳：按稀有度分组、标出钓到没钓到。
+        # 其余卡片仍然按 14 行收敛。
         CARD_MAX_LINES = 14
+        LOC_CARD_MAX_LINES = 120
 
         def loc_card(loc_cfg: dict[str, Any]) -> list[str]:
             ids = [
@@ -1453,7 +1455,7 @@ class CommandsMixin:
                 )
             hidden = 0
             # 结尾固定还有「…还有 N 种」+「/钓鱼 查 <鱼名>」两行，先扣掉
-            body_cap = CARD_MAX_LINES - 2
+            body_cap = LOC_CARD_MAX_LINES - 2
             for rarity in RARITY_ORDER:
                 group = sorted(
                     (FISH_BY_ID[fid] for fid in ids if _fish_rarity(fid) == rarity),
@@ -1625,35 +1627,40 @@ class CommandsMixin:
                 if lower in ("详", "详细", "all", "detail") and len(toks) > 1
                 else (_to_int(arg, 1) if arg.isdigit() else 1)
             )
-            # 未收集的不再逐条列 ❔ 占位，只列已经钓到的；还差多少在末尾一句带过
-            collected = [
-                fish
-                for fish in sorted(
-                    FISH_POOL,
-                    key=lambda f: (RARITY_RANK.get(f["rarity"], 0), f["value"]),
-                )
-                if entry_of(fish["id"])[0] > 0
-            ]
-            per_page = 15
-            total_pages = max(1, (len(collected) + per_page - 1) // per_page)
+            # ⚠️ v1.18.64：**未收集的也列出来**（站长要的是「能查所有鱼」）——
+            # 只是不再给它们编序号占位，用 ❔ 标一下「还没钓到」，并照旧给基准价。
+            # 每页 30 种、可翻页（271 种 = 10 页），配上一页/下一页按钮。
+            listed = sorted(
+                FISH_POOL,
+                key=lambda f: (RARITY_RANK.get(f["rarity"], 0), f["value"]),
+            )
+            per_page = 30
+            total_pages = max(1, (len(listed) + per_page - 1) // per_page)
             page = max(1, min(page, total_pages))
             start = (page - 1) * per_page
             lines = [
                 f"📖 鱼种图鉴（详）{len(owned)}/{len(FISH_POOL)}"
-                f"　第 {page}/{total_pages} 页"
+                f"　第 {page}/{total_pages} 页　✅已钓到 ❔还没"
             ]
-            if not collected:
-                lines.append("　（还没钓到鱼，先去 /钓鱼 下竿）")
-            for fish in collected[start : start + per_page]:
+            if not listed:
+                lines.append("　（鱼池是空的）")
+            for fish in listed[start : start + per_page]:
                 total, best = entry_of(fish["id"])
                 now = held.get(fish["id"], 0)
-                lines.append(
-                    f"　{_fish_emoji(fish)}{fish['name']}"
-                    f"　{self._rarity_name(fish['rarity'])}"
-                    f"　共{total} 最高{_fmt_gold(best)}"
-                    + (f" 存{now}" if now else "")
-                )
-            lack = len(FISH_POOL) - len(collected)
+                if total > 0:
+                    lines.append(
+                        f"　✅{_fish_emoji(fish)}{fish['name']}"
+                        f"　{self._rarity_name(fish['rarity'])}"
+                        f"　共{total} 最高{_fmt_gold(best)}"
+                        + (f" 存{now}" if now else "")
+                    )
+                else:
+                    lines.append(
+                        f"　❔{_fish_emoji(fish)}{fish['name']}"
+                        f"　{self._rarity_name(fish['rarity'])}"
+                        f"　{_fmt_gold(fish['value'])}金"
+                    )
+            lack = len(FISH_POOL) - len(owned)
             lines.append(
                 f"📌 还差 {lack} 种（共 {len(FISH_POOL)} 种）" if lack
                 else f"🏅 全部 {len(FISH_POOL)} 种都收集齐了！"
@@ -1689,25 +1696,34 @@ class CommandsMixin:
                 f"{loc['emoji']} {loc['name']} 图鉴 {len(got)}/{len(ids)}"
                 f"　×{loc['value_mult']:.2f}"
             ]
-            # 没收集到的不逐条列 ❔，只在末尾报一句还差几种（少刷屏、不剧透）
+            # ⚠️ v1.18.64：**把这个钓点的鱼全列出来**（站长：「查钓点没法查所有鱼，
+            # 只会显示已经钓上来的，很不好」）。钓到过 = ✅ 带自己的纪录；
+            # 没钓到 = ❔ 也列出来（玩家才知道这里还有哪些目标）。
+            lines.append("　✅ 已钓到　❔ 还没钓到")
             for fid in ids:
-                total, best = entry_of(fid)
-                if total <= 0:
-                    continue
                 fish = FISH_BY_ID[fid]
+                total, best = entry_of(fid)
                 now = held.get(fid, 0)
-                lines.append(
-                    f"　{_fish_emoji(fish)}{fish['name']}"
-                    f"　{self._rarity_name(fish['rarity'])}"
-                    f"　共{total} 最高{_fmt_gold(best)}"
-                    + (f" 存{now}" if now else "")
-                )
+                if total > 0:
+                    lines.append(
+                        f"　✅{_fish_emoji(fish)}{fish['name']}"
+                        f"　{self._rarity_name(fish['rarity'])}"
+                        f"　{_fmt_gold(fish['value'])}金"
+                        f"　共{total} 最高{_fmt_gold(best)}"
+                        + (f" 存{now}" if now else "")
+                    )
+                else:
+                    lines.append(
+                        f"　❔{_fish_emoji(fish)}{fish['name']}"
+                        f"　{self._rarity_name(fish['rarity'])}"
+                        f"　{_fmt_gold(fish['value'])}金"
+                    )
             lack = len(ids) - len(got)
             lines.append(
                 f"📌 还差 {lack} 种（共 {len(ids)} 种）" if lack
                 else f"🏅 这个钓点已集齐（共 {len(ids)} 种）"
             )
-            lines.append("💡 /钓鱼 图鉴 看各钓点总进度")
+            lines.append("💡 /钓鱼 图鉴 看各钓点总进度　/钓鱼 查 <鱼名> 看它在哪些钓点出没")
             async for _r in self._say_msg(event, "collection.location", event.plain_result("\n".join(lines))):
                 yield _r
             return
@@ -2996,13 +3012,17 @@ class CommandsMixin:
                         continue
                     before = _safe_int(instance.get("feed_bonus"), 0, 0)
                     instance["feed_bonus"] = min(cap, before + gain)
-                    _feed_bonus_mark(instance, today, _feed_bonus_used(instance, today) + 1)
+                    _feed_bonus_mark(instance, today, _feed_bonus_used(instance) + 1)
                     self._note_item_used(player, item_id, 1, items)
                     used += 1
                     lines.append(
                         f"　{idx}. {_instance_line(instance, with_value=False)}"
                         f"　投喂上限 {_feed_cap(instance, self.cfg)} 次"
-                        + (f"（今天第 {_feed_bonus_used(instance, today)}/{limit} 次）" if limit > 0 else "")
+                        + (
+                            f"（这条鱼终身第 {_feed_bonus_used(instance)}/{limit} 次）"
+                            if limit > 0
+                            else ""
+                        )
                     )
                 if used <= 0:
                     async for _r in self._say_msg(event, "item.breed_failed", event.plain_result(

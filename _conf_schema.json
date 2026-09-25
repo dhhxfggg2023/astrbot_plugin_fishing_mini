@@ -1009,7 +1009,7 @@
   },
   "feed_bonus_daily_limit": {
     "invisible": true,
-    "description": "育灵水 / 珍珠梳这类「加投喂上限」的道具：**同一条鱼每天最多能用几次**。默认 2。填 0 = 不限（回到旧行为）。数值膨胀就是这么来的：以前只靠「单鱼加成 ≤ 20」兜底，一条鱼一天能被堆满上限",
+    "description": "育灵水 / 珍珠梳这类「加投喂上限」的道具：同一条鱼一辈子最多能用几次。⚠️ 键名里的 daily 是历史遗留（v1.18.62 原本按天重置），v1.18.64 起**是终身上限**，并推荐改用新键 feed_bonus_lifetime_limit；老键继续生效（新键优先）",
     "type": "int",
     "default": 2
   },
@@ -1021,8 +1021,14 @@
   },
   "feed_bonus_cap": {
     "invisible": true,
-    "description": "单条鱼的投喂上限加成最多堆到多少（默认 20）。喂鱼上限 = feed_max_uses + 这个值",
+    "description": "单条鱼的投喂上限加成最多堆到多少（默认 20）。喂鱼上限 = feed_max_uses + 这个值；填 0 = 关掉加成道具",
     "type": "int",
     "default": 20
+  },
+  "feed_bonus_lifetime_limit": {
+    "invisible": true,
+    "description": "育灵水 / 珍珠梳这类「加投喂上限」的道具：同一条鱼一辈子最多能用几次（同类一起算，默认 2）。v1.18.64 改口径：以前按天重置，等于每天都能再堆一次。填 0 = 不限。老键 feed_bonus_daily_limit 仍兼容（新键优先）",
+    "type": "int",
+    "default": 2
   }
 }

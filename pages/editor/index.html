@@ -338,6 +338,19 @@ body {
 }
 .card-head .hint { color: var(--muted); font-size: 12px; font-weight: 400; }
 .card-head .spacer { margin-left: auto; }
+/* 标题行右侧的「票价 / 改票价 →」这类额外内容：**不放进 h2**（v1.18.64）——
+   h2 是 flex 居中的，塞进去之后长 hint 一行换行就把按钮挤歪（站长报的「按钮错位」）。 */
+.card-head .card-extra {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.card-head .card-extra .btn { flex: 0 0 auto; }
 
 /* ---------- 🧰 玩家数据页（v1.18.57）----------
    站长反馈：「改数据不好改啊，怎么是一堆的挤在一起」。原因有两个：
@@ -1996,9 +2009,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     ["feed_max_uses", "投喂次数上限", "次", "同一条鱼最多喂几次（「育灵水」这类道具还能再往上加）。", false, "水族馆"],
     /* v1.18.62：站长报「一条鱼能用的加喂养上限的道具应该是有限并且可配置的，
        之前就不能配置导致数值膨胀了」——这两项就是那道闸门。 */
-    ["feed_bonus_daily_limit", "育灵水每日上限", "次/鱼", "育灵水 / 珍珠梳这类「加投喂上限」的道具：**同一条鱼每天最多能用几次**。默认 2。填 0 = 不限（回到旧行为，一条鱼一天能被堆满加成上限 —— 数值膨胀就是这么来的）。", false, "水族馆"],
-    ["feed_bonus_mode", "育灵水叠加方式", "add/best", "加投喂上限的道具怎么叠加：add = 每次都用加（默认）；best = 只取最好的一次，同档重复用不再涨。", true, "水族馆"],
-    ["feed_bonus_cap", "投喂加成上限", "次", "单条鱼的投喂上限**加成**最多堆到多少（默认 20）。喂鱼上限 = 「投喂次数上限」+ 这个值。", false, "水族馆"],
+    ["feed_bonus_daily_limit", "育灵水终身上限（旧键）", "次/鱼", "育灵水 / 珍珠梳这类「加投喂上限」的道具：**同一条鱼一辈子最多能用几次**（同类道具一起算，默认 2）。⚠️ 键名里的 daily 是历史遗留：v1.18.62 原本是「每天几次」、跨天重置，等于每天都能再堆一次；**v1.18.64 起是终身上限**。填 0 = 不限（只受「投喂加成上限」约束）。下面那项是同一个设置的新名字，**它被改过时以它为准**。", false, "水族馆"],
+    ["feed_bonus_lifetime_limit", "育灵水终身上限（新键）", "次/鱼", "同一条鱼一辈子最多能用几次加投喂上限的道具（新名字，v1.18.64）。默认不动 = 跟着上面那个旧键走；你**亲手改过这一项**之后就以它为准。填 0 = 不限。", false, "水族馆"],
+    ["feed_bonus_mode", "育灵水叠加方式", "add / best", "加投喂上限的道具怎么叠加：add = 每次都用加（默认）；best = 只取最好的一次，同档重复用不再涨（也不扣道具）。", false, "水族馆"],
+    ["feed_bonus_cap", "投喂加成上限", "次", "单条鱼的投喂上限**加成**最多堆到多少（默认 20）。喂鱼上限 = 「投喂次数上限」+ 这个值。想彻底关掉加成道具就填 0。", false, "水族馆"],
     ["offering_price", "供奉一次价格", "金币", "香火供奉一次要花多少金币（v1.18.17 的后期金币回收口：花大钱换限时加成）；调低 = 人人都点得起、加成变成常态，调高 = 只有后期玩家用得起。", false, "水族馆"],
     ["offering_hours", "供奉时长", "小时", "香火供奉一次能顶多少小时（可重复供奉续时间，效果不叠加）；调短 = 加成更稀缺、玩家要勤回来续香火，调长 = 一次管很久、回收金币的速度变慢。", false, "水族馆"],
     ["offering_income_bonus", "供奉产出加成", "比例", "香火供奉期间的鱼塘挂机产出加成（0.5 = +50%，与装饰加成相加）；它乘在馆藏估值上，调高会直接抬高挂机收益，和「单次领取上限」一起决定一次能领多少。", false, "水族馆"],
@@ -2156,7 +2170,18 @@ table.grid td.actions .btn { vertical-align: middle; }
   function numberRowFromItem(item, value) {
     var key = toText(item && item[0]);
     var doc = KEY_DOCS[key] || {};
+    var schema = schemaDef(key) || {};
     var asText = !!(item && item[4]);
+    // v1.18.64：schema 说它是 text（或者现值是**转不成数字的字符串**）就当文本行渲染 ——
+    // 否则 `feed_bonus_mode = add` 这种「枚举型字符串」会被当成数字格，一进页就报
+    // 「需要是数字」（站长看到的就是这个红框）。数字键的值本来就是数字，不受影响。
+    if (!asText && value !== undefined && value !== null) {
+      var rawText = toText(value).trim();
+      if (toText(schema.type).toLowerCase() === "text"
+          || (rawText !== "" && (!isFinite(toNum(value)) || !/^-?\d+(\.\d+)?$/.test(rawText)))) {
+        asText = true;
+      }
+    }
     var entry = numberEntryOf(item);
     var noValue = value === undefined || value === null;
     /* 值：文本行原样带走；数字行能转成数字就转，转不了（例如 editor_status 那段 JSON）
@@ -2960,6 +2985,7 @@ table.grid td.actions .btn { vertical-align: middle; }
     "pond_income_cap_coins": 100000,
     "feed_max_uses": 10,
     "feed_bonus_daily_limit": 2,
+    "feed_bonus_lifetime_limit": 2,
     "feed_bonus_mode": "add",
     "feed_bonus_cap": 20,
     "offering_price": 200000,
@@ -3531,7 +3557,9 @@ table.grid td.actions .btn { vertical-align: middle; }
       label: "🎰 大鱼乐",
       title: "大鱼乐奖表",
       /* 票价不在这张表里（它是普通数值项），站长找不到就会以为「价格不能配置」——
-         所以这里直接把当前票价写在标题上，并给一个跳到那一行的按钮。 */
+         所以这里直接把当前票价写在标题上，并给一个跳到那一行的按钮。
+         ⚠️ 必须带 data-tab（v1.18.64）：不带的话 gotoConfigKey 拿到的是 undefined，
+         以前会弹「这个入口打不开」——站长报的就是它。没带时现在也会自己反查，双保险。 */
       titleHtml: function () {
         var price = (state.data.numbers || []).filter(function (r) {
           return r.key === "lottery_ticket_price";
@@ -3539,9 +3567,9 @@ table.grid td.actions .btn { vertical-align: middle; }
         var shown = price && price.value !== "" && price.value !== null
           ? fmtNum(price.value) + " 金/张" : "（见「⚙️ 数值」页）";
         return '大鱼乐奖表　<span class="muted">票价：' + esc(shown) +
-          '　<button class="btn btn-sm" data-act="num:jump" data-key="lottery_ticket_price">' +
+          '　<button class="btn btn-sm" data-act="num:jump" data-tab="numbers" data-key="lottery_ticket_price">' +
           '改票价 →</button>　' +
-          '<button class="btn btn-sm" data-act="num:jump" data-key="lottery_enabled">' +
+          '<button class="btn btn-sm" data-act="num:jump" data-tab="numbers" data-key="lottery_enabled">' +
           '功能开关 →</button></span>';
       },
       hint: "一行一档「id|概率|类型|参数|数量|说明」。「概率」是相对权重（不必凑够 100，代码按总和归一化）——" +
@@ -3759,7 +3787,7 @@ table.grid td.actions .btn { vertical-align: middle; }
 
   /** 页面自己的版本号（与插件版本对账用：不一致 = 浏览器缓存了旧页面）。
       改这个页面的功能时记得同步它，和 metadata.yaml 的 version 保持一致。 */
-  var PAGE_VERSION = "v1.18.63";
+  var PAGE_VERSION = "v1.18.64";
 
   /* ===========================================================================
      5. 状态
@@ -4690,8 +4718,10 @@ table.grid td.actions .btn { vertical-align: middle; }
     var d = diffTab(tab.id);
     var html = '<section class="card">';
 
-    html += '<div class="card-head"><h2>' + esc(tab.label) + " " +
-      (typeof tab.titleHtml === "function" ? tab.titleHtml() : esc(tab.title)) + "</h2>" +
+    // 标题里的按钮/徽标**不能塞进 h2**（v1.18.64 修）：h2 是 flex 居中的，
+    // 塞进去之后长 hint 一换行就把按钮挤得歪七扭八（站长：「上方的按钮错位，排版也不好」）。
+    html += '<div class="card-head"><h2>' + esc(tab.label) + " " + esc(tab.title) + "</h2>" +
+      (typeof tab.titleHtml === "function" ? '<span class="card-extra">' + tab.titleHtml() + "</span>" : "") +
       '<span class="hint">' + esc(tab.hint || "") + "</span>" +
       '<span class="spacer"></span>' +
       '<span class="hint">点单元格即可编辑 · Tab 跳到下一格 · 长列表（各钓点系数、品质权重这类）显示成小方块，点开是<b>一行一条</b>，回车换行、Ctrl+回车提交</span></div>';
@@ -4918,10 +4948,35 @@ table.grid td.actions .btn { vertical-align: middle; }
   }
 
   /** 跳到某个键的编辑入口：能定位就顺手把那张表筛成这一行。 */
+  /** 某个配置键「在哪个标签页里改」（从数值页的入口列反查）。找不到返回 ""。 */
+  function tabForConfigKey(key) {
+    var want = toText(key);
+    if (!want) return "";
+    var found = "";
+    (state.data.numbers || []).forEach(function (row) {
+      if (found || toText(row.key) !== want) return;
+      var entry = toText(row.entry);
+      if (entry.indexOf("tab:") === 0) {
+        found = entry.slice(4);
+      } else if (entry === "panel") {
+        found = "keys";          // 面板项只在「全部配置键」里展示
+      } else {
+        found = "numbers";       // 本页可改 -> 它的家就是数值页
+      }
+    });
+    return found;
+  }
+
   function gotoConfigKey(tabId, key) {
-    var tab = TAB_BY_ID[toText(tabId)];
+    var want = toText(tabId);
+    // 没给标签页时**自己找**（v1.18.64）：大鱼乐标题上的「改票价 → / 功能开关 →」
+    // 只带了 data-key，以前 toText(undefined) 成了 "undefined"，
+    // 于是弹「这个入口打不开」——站长报的就是这个。
+    if (!want && key) want = tabForConfigKey(key);
+    if (!want) want = "numbers";        // 兜底：数值页（所有普通配置都在那儿）
+    var tab = TAB_BY_ID[want];
     if (!tab) {
-      toast("warn", "这个入口打不开", "页面没有标签页「" + toText(tabId) + "」");
+      toast("warn", "这个入口打不开", "页面没有标签页「" + want + "」（键 " + toText(key) + "）");
       return;
     }
     state.tab = tab.id;
@@ -6743,11 +6798,18 @@ table.grid td.actions .btn { vertical-align: middle; }
     var dynamic = isDynamicButtonScene(sceneId);
     var shown = dynamic ? renderButtonSample(data).trim() : data;
     if (!label) errs.label = "按钮文案不能为空";
-    if (!data) errs.data = "要写点击后发送的指令，例如 /钓鱼 背包";
-    else if (shown.charAt(0) !== "/") {
+    if (!data) {
+      // 动态按钮（上一页 / 下一页 / 再次使用）**本来就该写模板**，不是写死命令；
+      // 留空才是错的。这条只在真为空时提示。
       errs.data = dynamic
-        ? "指令要以 / 开头（或写成 {指令} {页} 这种模板，占位符见下面的说明）"
-        : "指令要以 / 开头，例如 /钓鱼 背包";
+        ? "动态按钮要写模板，例如 {指令} {页}"
+        : "要写点击后发送的指令，例如 /钓鱼 背包";
+    } else if (!dynamic && shown.charAt(0) !== "/") {
+      // ⚠️ v1.18.64：**动态按钮一律不判指令前缀**（站长：「不要显示报错了，
+      //    本来就不能配置具体命令写死」）。`{指令} {页}` 会被代码在用时填成真指令，
+      //    写死反而会跳错页面；所以这类场景只要有内容就放行。
+      //    普通场景照旧必须 / 开头（这条护栏没放松）。
+      errs.data = "指令要以 / 开头，例如 /钓鱼 背包";
     }
     if (style && !isButtonStyle(style)) errs.style = "写 default / primary，或 0-255 的数字";
     return errs;
