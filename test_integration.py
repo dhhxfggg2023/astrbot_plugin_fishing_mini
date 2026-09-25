@@ -1,4 +1,4 @@
-﻿"""真实 AstrBot 事件链集成测试（不属于插件运行时代码，可随时删除）。
+"""真实 AstrBot 事件链集成测试（不属于插件运行时代码，可随时删除）。
 
 使用 **AstrBot 真实的** AstrMessageEvent / AstrBotMessage / MessageEventResult /
 CommandFilter，完整走一遍：
@@ -326,10 +326,12 @@ async def main():
     p = await plugin._load_player("90002")
     check(len(p["inventory"]) == 1, f"卖掉鲤鱼 -> 剩 {len(p['inventory'])}")
 
-    replies, matched, _ = await send(plugin, "/钓鱼 道具 买 高级饲料", "90002", "群友乙")
+    # ⚠️ v1.18.81：道具店现在也有等级门槛了（跟鱼饵店/鱼竿店一致），
+    #    所以这里用**1 级就能买**的普通饲料（原先的高级饲料要 6 级，会被正确拒绝）。
+    replies, matched, _ = await send(plugin, "/钓鱼 道具 买 普通饲料", "90002", "群友乙")
     check(matched, "/钓鱼 道具 买 <道具> 被匹配")
     p = await plugin._load_player("90002")
-    check(p["items"].get("feed_premium") == 1, f"买到道具 -> {p['items']}")
+    check(p["items"].get("feed_basic") == 1, f"买到道具 -> {p['items']}")
 
     # 水族馆放 + 投喂（三步参数）
     replies, matched, _ = await send(plugin, "/钓鱼 水族馆 放 1", "90002", "群友乙")
@@ -337,7 +339,7 @@ async def main():
     p = await plugin._load_player("90002")
     check(len(p["aquarium"]) == 1, f"放入水族馆 -> {len(p['aquarium'])}")
 
-    replies, matched, _ = await send(plugin, "/钓鱼 用 高级饲料 1", "90002", "群友乙")
+    replies, matched, _ = await send(plugin, "/钓鱼 用 普通饲料 1", "90002", "群友乙")
     check(matched, "/钓鱼 用 <道具> <栏位> 被匹配")
     print("    " + text_of(replies).replace("\n", "\n    "))
     p = await plugin._load_player("90002")

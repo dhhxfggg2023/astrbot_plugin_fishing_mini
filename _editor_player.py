@@ -178,6 +178,9 @@ def _field_specs() -> list[dict[str, Any]]:
         # ---- 大鱼乐 ----
         _spec("lottery_loses", "大鱼乐连输", "count", "状态与计数", "到 pity_count 就保底"),
         _spec("lottery_total", "大鱼乐累计张数", "count", "状态与计数", ""),
+        # v1.18.81：代码一直在写它，但之前既没进读档白名单也没进这份清单
+        # （于是每次读档清零、编辑器也看不到）。补上，让管理员能查能改。
+        _spec("lottery_wins", "大鱼乐累计中奖", "count", "状态与计数", ""),
     ]
     return S
 

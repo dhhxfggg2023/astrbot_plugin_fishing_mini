@@ -41,7 +41,12 @@ class ViewsMixin:
         return f"{label}（限用·剩 {left} 次）" if left is not None else label
 
     def _limited_rod_left(self, player: dict[str, Any], rod_id: str) -> int | None:
-        """这根竿如果是「限用竿」，返回剩余次数；不是（或没有）返回 None。"""
+        """这根竿如果是「限用竿」，返回**总**剩余次数；不是（或没有）返回 None。
+
+        ⚠️ v1.18.81 修：多张同种凭证时要按 ``(张数-1)×单张次数 + 当前剩余`` 算 ——
+        以前只算第一张，于是「2 张潮汐凭证 = 40 次」在鱼竿页显示成「剩 20 次」，
+        和背包页（走 `_limited_use_text`）自相矛盾（审计实测）。
+        """
         if not rod_id:
             return None
         pocket = player.get("items")
@@ -52,11 +57,13 @@ class ViewsMixin:
         for item_id, spec in (getattr(self, "items", None) or {}).items():
             if str((spec or {}).get("rod") or "") != rod_id:
                 continue
-            if _safe_int(pocket.get(item_id), 0, 0) <= 0:
+            held = _safe_int(pocket.get(item_id), 0, 0)
+            if held <= 0:
                 continue
             total = _safe_int((spec or {}).get("uses"), 0, 0)
             left = state.get(str(item_id))
-            return total if left is None else max(0, _safe_int(left, total, 0))
+            current = total if left is None else max(0, _safe_int(left, total, 0))
+            return max(0, (held - 1) * total + current)
         return None
 
     def _title_label(self, player: dict[str, Any]) -> str:
@@ -905,14 +912,20 @@ class ViewsMixin:
         # ---- 鱼竿（限定竿不卖，不进这家店；它有剩余次数时会顶替装备的竿）----
         _active_rod = self._rod(player)
         _active_limited = self._limited_rod_left(player, str(_active_rod.get("id") or ""))
-        if _active_limited is not None:
+        # ⚠️ v1.18.81 修：**这张卡片也必须过关键字匹配**。以前它无条件进 hits，
+        #    而 `/钓鱼 查` 把「精确命中」当唯一结果 —— 只要玩家有一张生效中的限定竿，
+        #    `/钓鱼 查 成就`、`/钓鱼 查 鲤鱼`、`/钓鱼 查 zzz` 全都只回这张卡片，
+        #    整个查询功能等于废掉（审计实测）。
+        if _active_limited is not None and matches(
+            _active_rod.get("name"), str(_active_rod.get("id"))
+        ):
             lines = [
                 f"　{_active_rod.get('emoji', '')}{_active_rod.get('name', '鱼竿')}"
                 f"（大鱼乐限定·剩 {_active_limited} 次）",
                 "　　现在生效的就是它（用完自动换回你装备的竿）",
             ]
             hits.append((f"🎣 鱼竿「{_active_rod.get('name')}」（限定中）", lines))
-        for rod in _shop_visible_rods(self.rods):
+        for rod in _shop_visible_rods(self.rods, self._rod_is_limited):
             if not matches(rod.get("name"), str(rod.get("id"))):
                 continue
             owned_rod = rod["id"] in (player.get("rods") or [DEFAULT_ROD])
@@ -1134,7 +1147,8 @@ class ViewsMixin:
             + self._rod_pull_text(rod)
             + (f"　需{rod['unlock_level']}级" if rod.get("unlock_level", 1) > 1 else "")
             for rod in sorted(
-                _shop_visible_rods(self.rods),
+                # v1.18.81：帮助页也要用同一判据，否则限定竿会被当成 0 金商品列出来
+                _shop_visible_rods(self.rods, self._rod_is_limited),
                 key=lambda r: _safe_int(r.get("price"), 0, 0),
             )
         ]

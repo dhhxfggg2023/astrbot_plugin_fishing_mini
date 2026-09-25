@@ -2006,7 +2006,8 @@ async def main():
     ev3 = FakeEvent("89003")
     p = mod._default_player("89003")
     p["gold"] = 100000
-    p["total_caught"] = mod._level_threshold(2)   # 蚯蚓要 2 级
+    # ⚠️ v1.18.81：道具店也加了等级门槛（与鱼饵/鱼竿一致），所以这里给足级数
+    p["total_caught"] = mod._level_threshold(60)
     await plugin3._save_player(p)
     await cmd(plugin3, ev3, "鱼饵", "买", "蚯蚓", "3")
     p = await plugin3._load_player("89003")
@@ -2150,7 +2151,7 @@ async def main():
     ev_sp = FakeEvent("89060")
     spp = mod._default_player("89060")
     spp["gold"] = 5000
-    spp["total_caught"] = mod._level_threshold(10)
+    spp["total_caught"] = mod._level_threshold(60)   # v1.18.81：道具也要够级
     await split._save_player(spp)
 
     # --- 老写法「商店」只回一句指路，三家店的名字都点到 ---
@@ -9167,19 +9168,34 @@ async def main():
         _bait_after == "worm",
         f"凭证用完自动换回装备里的普通饵 -> {_bait_after}（{_notes_after}）",
     )
-    # 差货时**绝不自动买限定饵**，而是换成能买的
-    # ⚠️ 用 `times=5` 造出「凭证次数不够这一批」的差货场景：限定饵的库存就是凭证剩余
-    #    次数（各 1 次），不够时应当换成可购买的那款，而不是去「买限定饵」。
+    # 凭证还有次数时**绝不提前换掉**（换了等于白扔玩家的奖品）；真的用完才换，且不买限定饵
+    # ⚠️ v1.18.81：口径变了 —— 以前按 `times` 判断，连钓 5 竿就当场把凭证扔掉换成普通饵
+    #    （审计实测：这就是白扔奖品）。现在只在「一次都抛不了」时才换。
     _lbp["limited_uses"] = {"abyss_bait_pass": 1}
     # 只留一个便宜的可购买饵（不然「手气最高的可购买饵」会是几千金的龙涎饵）
     _lbp["baits"] = {"worm": 1}
     await _lb._save_player(_lbp)
     _lbp = await _lb._load_player("89410")
-    _bait_swap, _notes_swap = _lb._auto_supply(_lbp, times=5)
+    _bait_keep, _notes_keep = _lb._auto_supply(_lbp, times=5)
     check(
-        _bait_swap != "abyss_secret" and _bait_swap in _lb._bait_list()
-        and any("买不到" in n for n in _notes_swap),
-        f"限定饵差货时不自动购买，换成可购买的饵 -> {_bait_swap}　{_notes_swap}",
+        _bait_keep == "abyss_secret",
+        f"凭证还有次数时不会因为「连钓更久」就把它换掉 -> {_bait_keep}",
+    )
+    # 次数真的用光了 -> 这张凭证不该再生效（自动补给也不会去买限定饵）
+    # ⚠️ v1.18.76 起「还剩几次」可以显式是 0：0 = 这张空了，但它还在背包里。
+    _lbp["limited_uses"] = {"abyss_bait_pass": 0}
+    _lbp["items"] = {"abyss_bait_pass": 1}
+    await _lb._save_player(_lbp)
+    _lbp = await _lb._load_player("89410")
+    check(
+        _lb._limited_item_left(_lbp, "abyss_bait_pass") == 0
+        and not _lb._active_limited_bait(_lbp),
+        f"凭证次数归零后不再生效（也不会被换掉或购买）-> "
+        f"{_lb._limited_item_left(_lbp, 'abyss_bait_pass')}",
+    )
+    check(
+        _lb._bait_is_limited("abyss_secret") and "abyss_secret" not in _lb._bait_list(),
+        "限定饵永远不在货架上（所以任何「去买」的提示都是错的）",
     )
     # 背包里必须看得见凭证（它不占背包格，但不能隐身）
     # ⚠️ 把 limited_uses 清掉 = 刚抽到还没用过，剩余次数就是满的

@@ -2774,6 +2774,19 @@ def safe_handler(func):
                 yield result
         except asyncio.CancelledError:
             raise
+        except PlayerLoadError as e:
+            # ⚠️ v1.18.81：**读档失败要说清是"没读到"而不是"操作失败"** ——
+            #    以前它和别的异常一样回「操作没有成功」，玩家会以为是自己操作错了；
+            #    实际是存储瞬时故障，而且**存档完好无损**（我们一个字都没写）。
+            logger.error(f"钓鱼插件 {func.__name__}：读档失败，已中止（存档未改动）：{e}")
+            try:
+                async for _r in self._say_msg(event, "system.load_failed", event.plain_result(
+                        "😵 没读到你的存档（存储好像忙了一下），这次操作**已取消**\n"
+                        "　你的数据**没有任何改动**，过几秒再试一次就好"
+                    )):
+                    yield _r
+            except Exception:
+                logger.error("回复读档失败消息时再次异常，已忽略。", exc_info=True)
         except Exception as e:
             logger.error(f"钓鱼插件 {func.__name__} 异常: {e}", exc_info=True)
             try:
@@ -3639,8 +3652,22 @@ class FishingPlugin(
             where = str(rod.get("name") or target)
         elif target:
             where = str((self.baits.get(target) or {}).get("name") or target)
+        # ⚠️ v1.18.81：**分子用「单张剩余」、分母用「单张总额」**，两者口径必须一致。
+        #    以前分子是多张累加的 `_limited_item_left`、分母是单张的 `uses` ——
+        #    3 张 20 次的凭证会显示成「限用 60/20 次」（审计实测）。
+        #    多张时改说「共 60 次（每张 20 次 ×3）」，玩家一眼看懂。
+        held = _safe_int((player.get("items") or {}).get(str(item_id)), 0, 0)
+        state = player.get("limited_uses")
+        state = state if isinstance(state, dict) else {}
+        _cur = state.get(str(item_id))
+        current = total if _cur is None else max(0, _safe_int(_cur, total, 0))
+        if held > 1:
+            return (
+                f"限用 {current}/{total} 次 ×{held} 张（共 {left} 次，每抛一竿 -1）"
+                + (f"　它生效时用「{where}」{thing}的特权" if where else "")
+            )
         return (
-            f"限用 {left}/{total} 次（每抛一竿 -1）"
+            f"限用 {current}/{total} 次（每抛一竿 -1）"
             + (f"　它生效时用「{where}」{thing}的特权" if where else "")
         )
 
@@ -3734,17 +3761,21 @@ class FishingPlugin(
         return lock
 
     async def _load_player(
-        self, user_id: str, *, strict: bool = False
+        self, user_id: str, *, strict: bool = True
     ) -> dict[str, Any]:
         """读取并修复玩家数据（含旧版本自动迁移、信封拆包）。
 
         Args:
-            strict: **会写回的路径必须传 True**。KV 读取是可能瞬时失败的
+            strict: **默认 True**（v1.18.81 改）。KV 读取是可能瞬时失败的
                 （数据库忙 / 磁盘故障），而失败时这个方法只能返回一个「新账号」。
                 一旦调用方拿着这个空账号 `_save_player`，真存档就被静默清空了 ——
-                所以 strict=True 时改为抛 ``PlayerLoadError``，让调用方中止这次操作
-                （见 ``_do_cast`` 开头）。默认 False 保持老行为：
-                「只是想看一眼」的调用点拿到空账号也无害。
+                所以失败时抛 ``PlayerLoadError``，让调用方中止这次操作。
+
+                ⚠️ 审计实测：这个参数原来**默认 False**，而全仓 25 个会写回的路径里
+                只有 3 个（抛竿/连钓/拉线）传了 True —— 于是「只让 KV 读失败一次」，
+                `/钓鱼 签到` 就把 gold 54321→130、total_caught 888→0、鱼全清空。
+                「只是想看一眼」的调用点极少数，它们可以显式传 ``strict=False``；
+                **默认必须是不丢数据的那一边**。
         """
         try:
             raw = await self.get_kv_data(self._kv_key(user_id), None)
@@ -3783,6 +3814,49 @@ class FishingPlugin(
             logger.info(f"玩家 {user_id} 数据已迁移到 v{DATA_VERSION}")
             await self._save_player(player)
         return player
+
+    def _active_limited_item_ids(self, player: dict[str, Any]) -> set[str]:
+        """这一竿**真正生效**的限用凭证 id（竿一件 + 饵一件，v1.18.81）。
+
+        为什么需要：`_use_limited_items` 以前扫全口袋，于是抽到「潮汐竿 + 星陨竿 +
+        深渊秘饵」的话，抛**一竿**三种凭证一起掉次数 —— 而这一竿只有一件竿一种饵生效。
+        扣减必须只落在生效的那两件上。
+
+        判定与 `_rod()` / `_active_limited_bait()` **同一口径**：
+          * 竿：`_active_limited_rod()` 挑中的那根（按 value_bonus 取最优）；
+          * 饵：`_active_limited_bait()` 挑中的那种。
+        """
+        out: set[str] = set()
+        rod = self._active_limited_rod(player)
+        if rod is not None:
+            rid = str(rod.get("id") or "")
+            for item_id, spec in (self.items or {}).items():
+                if str((spec or {}).get("rod") or "") == rid and rid:
+                    out.add(str(item_id))
+                    break
+        bait_id = self._active_limited_bait(player)
+        if bait_id:
+            for item_id, spec in (self.items or {}).items():
+                if str((spec or {}).get("bait") or "") == bait_id:
+                    out.add(str(item_id))
+                    break
+        return out
+
+    def _rod_pass_id(self, rod_id: str) -> str:
+        """这根竿对应的**限用凭证道具 id**（没有就返回 ""，v1.18.81）。
+
+        优先 `<rod_id>_pass`，其次「某件道具的 `rod` 字段指向它」。
+        用途：给玩家看的文案要拿凭证去算「限用 N/M 次」，直接传竿 id 会得到「0/0 次」。
+        """
+        want = str(rod_id or "").strip()
+        if not want:
+            return ""
+        if f"{want}_pass" in self.items:
+            return f"{want}_pass"
+        for item_id, spec in (self.items or {}).items():
+            if str((spec or {}).get("rod") or "").strip() == want:
+                return str(item_id)
+        return ""
 
     def _ledger(
         self, instance: dict[str, Any], action: str, **kwargs: Any
@@ -3835,14 +3909,15 @@ class FishingPlugin(
             if not bad:
                 return False
             refund = 0
-            for rid in bad:
-                # ⚠️ v1.18.80 修：**只退真花过的钱**。默认配置里这几根竿 `price = 0`
-                #    （出厂就是 0，靠抽奖拿），误买时玩家一分钱没花 —— 再"退款"等于白送钱。
-                #    站长原话：「限定鱼竿被误买的时候是 0 金币，不需要退款」。
+            # ⚠️ v1.18.81 修：**按竿 id 去重后再退**。以前 `bad` 不去重、按在 `rods` 里
+            #    出现的**次数**累加，同一根竿写了两遍就退两倍钱（审计实测：16000 而非 8000）。
+            #    另外默认价 0 的竿不退款（站长口径：「限定鱼竿被误买的时候是 0 金币」）。
+            for rid in dict.fromkeys(bad):
                 price = max(
                     0, _safe_int((self.rod_by_id.get(str(rid)) or {}).get("price"), 0, 0)
                 )
                 refund += price
+            for rid in bad:
                 while rid in rods_now:
                     rods_now.remove(rid)
             if not rods_now:
@@ -3883,7 +3958,6 @@ class FishingPlugin(
             return False                      # 上限没变：什么都不用做
         if applied is not None and _safe_int(applied, target, 0) > target:
             # 上限**变小**：这一次要给所有鱼记债；标记直接推到最后，避免每条鱼都重来
-            self._feed_cap_pending = True
             self.cfg["feed_cap_applied"] = target
             changed = False
             for fish in player.get("aquarium") or []:
@@ -4010,20 +4084,36 @@ class FishingPlugin(
         return ids
 
     async def _dump_all_players(self) -> dict[str, Any]:
-        """把索引里的玩家逐个读出来（信封原样带上）。"""
+        """把索引里的玩家逐个读出来（信封原样带上）。
+
+        ⚠️ v1.18.81：读不出来的那些**必须记日志**。以前静默 `continue`，于是
+        「索引里有、备份里没有」的人凭空消失，管理员在**最需要备份的时候**拿到一份
+        缺人的快照却毫无提示（审计实测：坏 JSON 那个玩家在快照里彻底不见）。
+        """
         players: dict[str, Any] = {}
+        skipped: list[str] = []
         for uid in await self._player_ids():
             try:
                 raw = await self.get_kv_data(self._kv_key(uid), None)
-            except Exception:
+            except Exception as e:
+                skipped.append(f"{uid}（读取失败：{e}）")
                 continue
             if isinstance(raw, str):
                 try:
                     raw = json.loads(raw)
                 except (json.JSONDecodeError, TypeError):
+                    skipped.append(f"{uid}（存储内容不是合法 JSON）")
                     continue
             if isinstance(raw, dict):
                 players[uid] = raw
+            else:
+                skipped.append(f"{uid}（存储内容类型异常：{type(raw).__name__}）")
+        if skipped:
+            logger.warning(
+                f"存档快照：索引里有 {len(skipped)} 个玩家读不出来，**没有进快照**："
+                + "、".join(skipped[:6])
+                + ("…" if len(skipped) > 6 else "")
+            )
         return players
 
     # -------------------------------------------------------------------------
@@ -4336,15 +4426,19 @@ class FishingPlugin(
         return best[1] if best else ""
 
     def _rod_is_limited(self, rod: dict[str, Any]) -> bool:
-        """这根竿是不是「买不到、只能抽」的限定竿（v1.18.80）。
+        """这根竿是不是「买不到、只能抽」的限定竿（v1.18.80 / 判据收窄于 v1.18.81）。
 
         判据不限 `uses` 一个字段 —— 早期版本的 `rod_defs` 是**半截行**（没有第 11 段
         `uses`），于是「潮汐竿」在商店里看不出来是限定竿、还能被买走（站长报的严重问题）。
-        三重判据，命中一个就算：
+        两条判据，命中一个就算：
           ① 这一行带 ``uses``（`uses > 0` = 限用体验版）；
           ② 竿表里挂了 ``special``（异化效果，只有限定竿有）；
-          ③ **背包里有对应的凭证道具**（``<竿id>_pass`` 或某件 ``item_defs`` 的 ``rod`` 指向它）
-             —— 这条最关键：它不依赖站长那几行的段数对不对。
+          ③ ``<竿id>_pass`` 这件凭证道具在**配置的道具表**里（不依赖站长那几行的段数）。
+
+        ⚠️ v1.18.81 **去掉了「任何道具的 `rod` 字段指向它」这条判据**：审计实测，
+        站长只要加一件 `rod=carbon` 的道具（比如「碳素竿兑换券」），**正常买到的碳素竿**
+        就会被读档迁移删掉、而且商店从此不卖它 —— 判据过宽会误伤正常竿。
+        现在只认「出厂就买不到」的两种：带 `uses` 的体验版、和带 `special` 的异化竿。
         """
         spec = rod or {}
         if max(0, _safe_int(spec.get("uses"), 0, 0)) > 0:
@@ -4352,26 +4446,61 @@ class FishingPlugin(
         if spec.get("special"):
             return True
         rod_id = str(spec.get("id") or "").strip()
-        if rod_id and f"{rod_id}_pass" in self.items:
-            return True
-        return any(
-            str((item or {}).get("rod") or "").strip() == rod_id
-            for item in self.items.values()
-            if rod_id
-        )
+        return bool(rod_id) and f"{rod_id}_pass" in self.items
 
     def _bait_is_limited(self, bait_id: str) -> bool:
         """这种饵是不是「买不到、只能抽」的限定饵（``bait_defs`` 带特殊效果）。"""
         spec = self.baits.get(str(bait_id)) or {}
         return bool(spec.get("special"))
 
-    def _purchasable_fallback_bait(self, prefer: str = "") -> str:
-        """能给限定饵当替身的**可购买**鱼饵 id（v1.18.70）。
+    def _bait_is_shop_bait(self, bait_id: str) -> bool:
+        """这款饵在货架上吗（**限定饵除外**，不看等级/需竿门槛，v1.18.81）。
 
-        挑法：先看玩家原来装/点名的那款（能买就用它），否则挑**店里手气最高**的
-        那款。返回 "" 表示店里一款都没有（那就只能空钩）。
+        用途：判断「限定饵用完之后能换成哪款普通饵」。这里只要「货架上有」就够了 ——
+        等级不够只是在自动补给时会被 `_bait_is_purchasable` 拦住，不该影响
+        「这一批还能抛几竿」的合计口径（审计实测：门槛卡太死会把 2+5=7 竿误判成 2 竿）。
         """
-        shop = [b for b in self._bait_list() if b != "none"]
+        if str(bait_id) in ("", "none"):
+            return False
+        if str(bait_id) not in self.baits:
+            return False
+        return not self._bait_is_limited(str(bait_id))
+
+    def _bait_is_purchasable(self, player: dict[str, Any], bait_id: str) -> bool:
+        """这款饵**现在**能买吗（限定饵一律不能，等级/需竿门槛也要过，v1.18.81）。
+
+        为什么要单独一个方法：自动补给会**替玩家花钱买饵**，而它以前只看金币 ——
+        于是 1 级新号会被自动买下「龙涎」（62 级 + 需归墟竿才会手动卖给他）：
+        审计实测「🛒 自动补货 1 个「龙涎」（-300 金）」。自动花钱买的东西，
+        门槛必须和手动买一致。
+        """
+        spec = self.baits.get(str(bait_id)) or {}
+        if not spec:
+            return False
+        if self._bait_is_limited(str(bait_id)):
+            return False
+        try:
+            return not self._unlock_shortage(player, spec)
+        except Exception:                                                 # pragma: no cover
+            return False
+
+    def _purchasable_fallback_bait(
+        self, prefer: str = "", player: dict[str, Any] | None = None,
+        *, strict: bool = False,
+    ) -> str:
+        """能给限定饵当替身的**普通**鱼饵 id（v1.18.70）。
+
+        挑法：先看玩家原来装/点名的那款（在货架上就用它），否则挑货架上**手气最高**
+        的那款。返回 "" 表示货架上一款都没有（那就只能空钩）。
+
+        ``strict=True``（自动补给买饵时用）还会过等级/需竿门槛 —— 自动补给要**花钱**，
+        不能替玩家买下他本来买不到的饵（审计实测：1 级新号被自动买下 62 级的「龙涎」）。
+        只算「还能抛几竿」时用默认的 ``strict=False``（货架上有就算数）。
+        """
+        if player is not None and strict:
+            shop = [b for b in self._bait_list() if self._bait_is_purchasable(player, b)]
+        else:
+            shop = [b for b in self._bait_list() if self._bait_is_shop_bait(b)]
         if not shop:
             return ""
         want = str(prefer or "").strip()
@@ -5882,6 +6011,14 @@ class FishingPlugin(
             for line in default.splitlines()
             if line.strip() and not line.strip().startswith("#") and "|" in line
         ]
+        # ⚠️ v1.18.81：**这里保持「按场景 id 判重」是有意为之，别再改成按键合并**。
+        #    按钮表的设计是「**按场景接管**」：某个场景只要在站长配置里出现过，
+        #    这一场景就完全按配置走。如果改成「场景|文案」补行，配置里的行会和官方
+        #    剩下的行**同一个场景重复渲染**（自测立刻抓到：翻页/再次使用出现两套按钮，
+        #    站长自己配的按钮顺序也被打乱）—— 试过，退回来了。
+        #    代价：官方**往已有场景新增按钮**时，站长配置过的那个场景收不到
+        #    （v1.18.78 的「📒 台账」就是这种情况）。要让它出现，得让站长把那一行
+        #    加到自己的 `button_defs` 里，或者删掉那一场景的行让官方的补进来。
         added = [line for line in rows if line.split("|", 1)[0].strip() not in have]
         if not added:
             return False
@@ -6201,8 +6338,8 @@ AQUARIUM_ACTIONS = (
     "升级", "放", "取", "卖", "喂", "领",
 )
 #: 「道具台账」的写法（v1.18.78）：`/钓鱼 台账 [栏位]`，也能 `水族馆 台账 1`。
-#: 单列成一张词表，是为了让「分派链认的写法」测试能像 PULL_WORDS / CAST_WORDS 那样扫到它。
-AQUARIUM_LOG_WORDS: tuple[str, ...] = ("台账", "明细", "log")
+#: ⚠️ v1.18.81：**定义只在文件前面那一处**（`CALC.BUTTON_COMMAND_WORDS.update(...)` 旁边）。
+#:    这里原来是第二份同样的定义 —— 重复定义是批量编辑留下的痕迹，先删掉免得改一处漏一处。
 #: 三家店都只认「买」；「扩容」不再挂在商店下面（老写法由 shop.moved 指路）
 SHOP_ACTIONS = ("购买", "买")
 ROD_ACTIONS = ("购买", "装备", "买", "用", "换")

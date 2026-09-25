@@ -798,10 +798,16 @@ class CommandsMixin:
                 #    里**永久生效**（`rods` 不消耗凭证），等于把奖品变成商品还白送永久特权。
                 #    商店列表本来就过滤了它们，但**指令这条路一直是开的**（站长报了）。
                 if self._rod_is_limited(rod):
+                    # ⚠️ v1.18.81：文案里的「限用 N/M 次」要拿**凭证道具 id** 去算 ——
+                    #    以前直接传竿 id（`tide_rod`），`_limited_use_text` 查不到道具表，
+                    #    于是显示成「限用 0/0 次」这种假数字（审计实测）。
+                    _pass_id = self._rod_pass_id(str(rod.get("id") or ""))
+                    _spec = (
+                        f"（{self._limited_use_text(player, _pass_id)}）" if _pass_id else ""
+                    )
                     async for _r in self._say_msg(event, "rod.not_for_sale", event.plain_result(
                             f"🏆 {rod['emoji']}{rod['name']} 是大鱼乐的奖品，**商店不卖**\n"
-                            f"　它是限用道具（{self._limited_use_text(player, rod['id'])}），"
-                            f"只能靠 /钓鱼 大鱼乐 抽到\n"
+                            f"　它是限用道具{_spec}，只能靠 /钓鱼 大鱼乐 抽到\n"
                             f"　抽到就自动生效，不用装备、也买不到"
                         )):
                         yield _r
@@ -2223,10 +2229,13 @@ class CommandsMixin:
                 )
                 other = "道具店（/钓鱼 道具）"
             else:
+                # 只报「这家店真在卖」的东西：限用凭证不算商品，不该出现在在售清单里
+                # （v1.18.81：以前用 `self.items.values()` 全列，等于告诉玩家凭证能买）
+                _sellable = _shop_visible_items(self.items)
                 names = "、".join(
                     i["name"]
-                    for i in self.items.values()
-                    if not self._unlock_shortage(player, i)
+                    for iid, i in self.items.items()
+                    if iid in _sellable and not self._unlock_shortage(player, i)
                 )
                 other = "鱼饵店（/钓鱼 鱼饵）"
             async for _r in self._say_msg(event, "shop.not_found", event.plain_result(
@@ -2238,6 +2247,18 @@ class CommandsMixin:
 
         if kind == "bait" and bait_id is not None:
             bait = self.baits[bait_id]
+            # ⚠️ v1.18.81 **严重修复**：**限定饵不许买**（`bait_defs` 带 `special` 的那种）。
+            #    以前这里没有判据，0 金币能买 999 个「深渊秘饵」写进 `baits` 库存 ——
+            #    虽然 `stock_of()` 对限定饵按凭证次数算（吃了特权也拿不到），但那是
+            #    **脏数据 + 文案自相矛盾**（换饵页显示"还剩 999 个"）。
+            if self._bait_is_limited(bait_id):
+                async for _r in self._say_msg(event, "shop.not_for_sale_bait", event.plain_result(
+                        f"🏆 {self._bait_label(bait_id)} 是大鱼乐的奖品，**商店不卖**\n"
+                        f"　它是限定饵，只能靠 /钓鱼 大鱼乐 抽到；抽到就自动生效、"
+                        f"不用装备也买不到"
+                    )):
+                    yield _r
+                return
             # 等级 / 需要鱼竿的购买门槛（只限制购买，已持有的不受影响）
             refuse = self._unlock_refuse_text(player, bait)
             if refuse:
@@ -2272,6 +2293,29 @@ class CommandsMixin:
             ]
         else:
             item = self.items[item_id]
+            # ⚠️ v1.18.81 **严重修复**：道具店买分支以前**只认 `_find_item`**（在全部道具里找），
+            #    既没有「限用道具不许买」的判据，也没有等级门槛 —— 1 级新号 0 金币就能买
+            #    999 张限定凭证（潮汐竿/星陨竿/瞬手竿/双尾竿/深渊秘饵/贵客饵），
+            #    等于把大鱼乐的奖品直接白送（审计实测：999 张 = 十一万次特权）。
+            #    两条判据跟鱼竿那条路对齐：
+            #      ① 限用道具（`uses > 0`）—— 抽奖专属，**商店不卖**；
+            #      ② 等级/需竿门槛 —— 和货架、鱼饵店、鱼竿店一致。
+            if item_id not in _shop_visible_items(self.items):
+                async for _r in self._say_msg(event, "shop.not_for_sale_item", event.plain_result(
+                        f"🏆 {self._item_label(item_id)} 是大鱼乐的奖品，**商店不卖**\n"
+                        f"　它是限用道具（{self._limited_use_text(player, item_id)}），"
+                        f"只能靠 /钓鱼 大鱼乐 抽到\n"
+                        f"　抽到就自动生效，不用装备也买不到"
+                    )):
+                    yield _r
+                return
+            refuse = self._unlock_refuse_text(player, item)
+            if refuse:
+                async for _r in self._say_msg(event, "shop.locked", event.plain_result(
+                        f"{refuse}\n　升级靠多钓鱼；要鱼竿就去 /钓鱼 鱼竿 买"
+                )):
+                    yield _r
+                return
             price = int(item.get("price", 0)) * times
             if _safe_int(player.get("gold"), 0, 0) < price:
                 async for _r in self._say_msg(event, "shop.no_gold_item", event.plain_result(
@@ -2513,6 +2557,20 @@ class CommandsMixin:
 
             item = self.items.get(item_id) or {}
             effects = item.get("effects") or {}
+
+            # ⚠️ v1.18.81 修：**限用凭证不许走「用 / 喂」**。以前它落到最后那个
+            #    「饲料类」兜底分支，被当饲料喂给鱼 —— 凭证本身没有任何效果，
+            #    等于白白吃掉（审计实测：`/钓鱼 用 潮汐竿·凭证` 两次把 2 张凭证吃光，
+            #    可用次数归零）。它们抽到就自动生效，根本不需要「用」。
+            if _safe_int(item.get("uses"), 0, 0) > 0 or item.get("rod") or item.get("bait"):
+                async for _r in self._say_msg(event, "item.pass_no_use", event.plain_result(
+                        f"🏆 {self._item_label(item_id)} 是限用道具，**不用「用」**\n"
+                        f"　抽到就自动生效（{self._limited_use_text(player, item_id)}），"
+                        f"每抛一竿 -1，用完自动消失\n"
+                        f"　直接 /钓鱼 下竿就能享受它的特权"
+                    )):
+                    yield _r
+                return
 
             # --- 每日使用上限（v1.18.46：写在道具表第 8 段，一件一件可配）---
             # 站长要求「道具的每日使用上限可配置化」。0 / 省略 = 不限，
@@ -3847,9 +3905,12 @@ class CommandsMixin:
                 _limited_target = _param
             elif _bare != _param and self._bait_is_limited(_bare):
                 _limited_target = _bare
-            elif _limited_ids:
+            elif _limited_ids and len(_param) >= 4:
                 # 参数既不是饵也不是凭证 id：按「参数里含饵 id、或饵 id 里含参数」模糊认一次
                 # （站长手改过奖表、或 id 拼写差一点时也能领到东西）
+                # ⚠️ v1.18.81：**必须要求参数足够长且非空** —— 以前 `param=''` 或 `'s'`
+                #    会命中 `'' in 'abyss_secret'`、`'bait' in 'vip_bait'`，
+                #    等于奖表里少写一个字段就白送一件限定饵（审计实测）。
                 for _bid in _limited_ids:
                     if _bid in _param or _param in _bid:
                         _limited_target = _bid

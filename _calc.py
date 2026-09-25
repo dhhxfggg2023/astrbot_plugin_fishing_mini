@@ -1156,6 +1156,10 @@ def _default_player(user_id: str) -> dict[str, Any]:
         # 「今天买了几张」走 daily_used["lottery"]，跨天自动清零。
         "lottery_loses": 0,
         "lottery_total": 0,
+        # v1.18.81：彩票**累计中奖次数**。`_commands.py` 一直在写它，但两张表（这里与
+        # `_repair_player`）都没登记 -> 每次读档清零（审计实测：存 42 读回 None）。
+        # 目前还没有地方读它，但只要以后拿它做成就/展示就会永远是 0 —— 先补上。
+        "lottery_wins": 0,
         "decorations": [],     # 水族馆装饰：[{id, rate, ts, expire_ts}]（耐久到点自动失效）
         "buff_casts_left": 0,  # 钓手手气 buff 还剩几竿（0 = 没有 buff）
         "aquarium_slots": [],  # 已解锁的水族馆扩建栏位名
@@ -1882,9 +1886,22 @@ def _ledger(
             log.append(entry)
         if len(log) > LEDGER_KEEP:
             # 淘汰最旧的一笔：把它的增量并进新的第一笔（按道具的累计不丢）
+            # ⚠️ v1.18.81 修：以前只加 `dvalue`，**丢掉了被淘汰那笔自己身上的 `carry`**
+            #    —— 淘汰两次以上，更早的增量就蒸发了（审计实测：喂 45 次只算到 41 次的价值）。
+            #    次数也一样要传下去（`ncarry`），否则「用了几次」会少算。
             dropped = log.pop(0)
-            log[0]["carry"] = _safe_int(log[0].get("carry"), 0, 0) + _safe_int(
-                dropped.get("dvalue"), 0, 0
+            log[0]["carry"] = (
+                _safe_int(log[0].get("carry"), 0, 0)
+                + _safe_int(dropped.get("dvalue"), 0, 0)
+                + _safe_int(dropped.get("carry"), 0, 0)
+            )
+            log[0]["ncarry"] = (
+                _safe_int(log[0].get("ncarry"), 0, 0)
+                + max(1, _safe_int(dropped.get("n"), 1, 1))
+                + _safe_int(dropped.get("ncarry"), 0, 0)
+            )
+            log[0]["carry_item"] = str(
+                dropped.get("carry_item") or dropped.get("item") or log[0].get("carry_item") or ""
             )
             if isinstance(dropped.get("dattrs"), dict):
                 first = log[0].get("dattrs")
@@ -1902,6 +1919,10 @@ def _ledger_by_item(instance: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     以后站长要「削减数值 / 退回道具」时，看这一份就知道：
     哪件道具、用了几次、一共给它加了多少价值。
+
+    ⚠️ v1.18.81：`carry` 是**被淘汰记录**折进来的增量，它属于**那件道具**；
+    但如果淘汰时那件道具的记录已经不在 log 里（连同它的 item 一起被丢掉），
+    就只能挂到第一笔的 `carry_item` 上 —— 这里按 `carry_item` 归账，别把别人的账算错。
     """
     out: dict[str, dict[str, Any]] = {}
     for entry in instance.get("log") or []:
@@ -1911,10 +1932,15 @@ def _ledger_by_item(instance: dict[str, Any]) -> dict[str, dict[str, Any]]:
         if not item:
             continue
         row = out.setdefault(item, {"count": 0, "value": 0, "attrs": {}})
-        row["count"] += max(1, _safe_int(entry.get("n"), 1, 1))
-        row["value"] += _safe_int(entry.get("dvalue"), 0, 0) + _safe_int(
-            entry.get("carry"), 0, 0
+        row["count"] += (
+            max(1, _safe_int(entry.get("n"), 1, 1)) + _safe_int(entry.get("ncarry"), 0, 0)
         )
+        row["value"] += _safe_int(entry.get("dvalue"), 0, 0)
+        carry_item = str(entry.get("carry_item") or "")
+        carry_val = _safe_int(entry.get("carry"), 0, 0)
+        if carry_val:
+            target = carry_item or item
+            out.setdefault(target, {"count": 0, "value": 0, "attrs": {}})["value"] += carry_val
         for k, v in (entry.get("dattrs") or {}).items():
             row["attrs"][k] = _safe_int(row["attrs"].get(k), 0, 0) + _safe_int(v, 0, 0)
     return out
@@ -2075,8 +2101,10 @@ def _shop_visible_rods(rods: Any, is_limited: Any = None) -> list[dict[str, Any]
             try:
                 if is_limited(rod):
                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                # ⚠️ v1.18.81：**不能静默**。以前 `pass` 掉，判据一坏限定竿就立刻被当普通竿
+                #    放回商店（审计实测：传一个会抛的判据即复现）—— 正是 v1.18.80 要堵的洞。
+                logger.warning(f"判断鱼竿是否限定时出错（这一根按普通竿处理）：{e}")
         elif max(0, _safe_int((rod or {}).get("uses"), 0, 0)) > 0:
             continue
         out.append(rod)
@@ -2109,19 +2137,34 @@ def _myth_quality_mult() -> float:
 
 
 def _use_limited_items(
-    player: dict[str, Any], items: dict[str, dict[str, Any]]
+    player: dict[str, Any],
+    items: dict[str, dict[str, Any]],
+    active: Any = None,
 ) -> list[str]:
     """扣掉「限用道具」一次的用量，返回要告诉玩家的那几行（v1.18.63）。
 
     限用道具（``uses > 0``）是大鱼乐那些**买不到、只能抽到**的特殊家伙：
     每抛一竿消耗 1 次，用完就从背包里消失。这里**按抛竿**算，而不是按
     ``/钓鱼 用``：它们是「装备式的体验版」，玩家抽到就能直接用。
+
+    ⚠️ v1.18.81 **严重修复**：以前它把口袋里**每一件**限用道具都 -1 —— 抽到
+    「潮汐竿 + 星陨竿 + 深渊秘饵」的话，抛一竿三种凭证一起掉次数，而这一竿其实
+    只有一件竿 + 一种饵在生效（审计实测：一竿 6 件全 -1，其余全是白扣）。
+
+    ``active`` = 这一竿**真正生效**的凭证 id 集合（竿一件 + 饵一件）：
+      * 传了集合：只扣集合里的（正确的口径）；
+      * 传了 ``None``：退回老行为（扫全口袋）—— 只给「无法判定生效者」的调用方兜底，
+        新代码一律显式传。
     """
     pocket = player.get("items")
     if not isinstance(pocket, dict) or not pocket:
         return []
+    if active is not None:
+        targets = [str(x) for x in active if str(x) in pocket]
+    else:
+        targets = [str(x) for x in list(pocket)]
     lines: list[str] = []
-    for item_id in list(pocket):
+    for item_id in targets:
         spec = items.get(str(item_id)) or {}
         total = max(0, _safe_int(spec.get("uses"), 0, 0))
         if total <= 0:
@@ -2274,6 +2317,9 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
     if not isinstance(instance_id, str) or not instance_id:
         instance_id = uuid.uuid4().hex[:10]
 
+    # v1.18.81：台账的**类型前置判断**（坏值绝不能抛异常 —— 那会连累整份存档被重置）
+    _raw_log = raw.get("log")
+
     quality_mult = _clamp(_safe_number(raw.get("quality_mult"), 1.0), 0.5, _quality_ceil())
     quality, _ = _quality_label(quality_mult)
 
@@ -2328,8 +2374,12 @@ def _repair_instance(raw: Any) -> dict[str, Any] | None:
         "feed_debt": max(0, _safe_int(raw.get("feed_debt"), 0, 0)),
         # v1.18.78：**道具台账** —— 每条鱼被「直接改数值的道具」改了多少（按道具可回退）。
         # ⚠️ 必须在白名单里：漏了的话每次读档就把台账清空，等于没记（踩过这个坑的字段不止一个）
+        # ⚠️ v1.18.81 **必须做类型前置判断**：以前直接 `for e in (raw.get("log") or [])`，
+        #    而「真值但不可迭代」的坏值（5 / True / 3.5）会抛 TypeError —— 那个异常会被
+        #    `_repair_player` 的兜底吞成「整份存档重置成新号」（审计实测：gold、
+        #    鱼缸、图鉴全没，不可逆）。一个字段类型不对，绝不能赔上整个玩家。
         "log": [
-            e for e in (raw.get("log") or [])
+            e for e in (_raw_log if isinstance(_raw_log, list) else [])
             if isinstance(e, dict) and e.get("item")
         ][-40:],
         # 洗髓丹的「今天吃了几颗」：跨天自动作废（只记日期 + 次数，不需要定时任务）
@@ -2685,6 +2735,8 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         #    （test_local 的存档字段守卫会抓到这件事）。
         player["lottery_loses"] = max(0, _safe_int(raw.get("lottery_loses"), 0, 0))
         player["lottery_total"] = max(0, _safe_int(raw.get("lottery_total"), 0, 0))
+        # v1.18.81：代码在写它却没登记 -> 每次读档清零（审计实测存 42 读回 None）
+        player["lottery_wins"] = max(0, _safe_int(raw.get("lottery_wins"), 0, 0))
 
         # --- 里程碑提示记录 ---
         raw_ms = raw.get("milestones")
@@ -2854,8 +2906,35 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
         _sync_collection(player)
 
     except Exception as e:  # pragma: no cover
-        logger.warning(f"玩家 {user_id} 数据修复失败，已重置：{e}")
-        return _default_player(user_id), False
+        # ⚠️ v1.18.81 **这条兜底以前会把整份存档换成新号**（`_default_player`）：
+        #    只要修复途中任何一个字段抛异常（审计实测：鱼的 `log` 是 5/True，
+        #    或者 `event.id` 是 list），玩家就会 gold / 鱼缸 / 图鉴全部归零，
+        #    而且下一步指令把空号写回 KV —— **不可逆**。
+        #    一个坏字段绝不该赔上整个玩家。现在改成「**保留原始数据**、
+        #    只把能认的标量兜到默认值」，玩家的金币/鱼/道具尽量原样留着，
+        #    等下一次版本修好那个字段就能正常读。
+        logger.error(
+            f"玩家 {user_id} 数据修复失败（已按「尽量保留原数据」处理，"
+            f"不会清档）：{e}", exc_info=True
+        )
+        fallback = _default_player(user_id)
+        try:
+            if isinstance(raw, dict):
+                for key, value in raw.items():
+                    if key not in fallback:
+                        fallback[key] = value          # 未知字段原样留着
+                        continue
+                    if isinstance(fallback[key], (int, float)) and isinstance(value, (int, float)):
+                        fallback[key] = value          # 金币/次数这类标量照抄
+                    elif isinstance(fallback[key], str) and isinstance(value, str):
+                        fallback[key] = value
+                    elif isinstance(fallback[key], (list, dict)) and isinstance(
+                        value, type(fallback[key])
+                    ):
+                        fallback[key] = value          # 容器类型一致也照抄（坏的那件留着）
+        except Exception:                                      # pragma: no cover
+            pass
+        return fallback, False
 
     player["user_id"] = str(user_id)
     player["data_version"] = DATA_VERSION
@@ -3258,6 +3337,10 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("aquarium.view", "aquarium", "水族馆总览", ""),
     ("aquarium.log", "aquarium", "道具台账（哪件道具改了多少数值）", ""),
     ("rod.not_for_sale", "rod", "限定竿不卖（只能抽）", ""),
+    ("shop.not_for_sale_item", "shop", "限定道具不卖（只能抽）", ""),
+    ("shop.not_for_sale_bait", "shop", "限定鱼饵不卖（只能抽）", ""),
+    ("item.pass_no_use", "item", "限用道具不用「用」（抽到即生效）", ""),
+    ("system.load_failed", "system", "读档失败已中止（数据没动）", ""),
     ("aquarium.usage", "aquarium", "水族馆用法说明", ""),
     ("aquarium.max", "aquarium", "水族馆已经扩到最大", ""),
     ("aquarium.no_gold", "aquarium", "扩建金币不足", ""),

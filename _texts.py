@@ -127,6 +127,10 @@ TEXTS: dict[str, str] = {
     "aquarium.view": "{原文}",  # 动态文本
     "aquarium.log": "{原文}",  # 动态文本（v1.18.78 道具台账）
     "rod.not_for_sale": "{原文}",  # 动态文本（v1.18.80 限定竿不卖）
+    "shop.not_for_sale_item": "{原文}",  # 动态文本（v1.18.81 限定道具不卖）
+    "shop.not_for_sale_bait": "{原文}",  # 动态文本（v1.18.81 限定饵不卖）
+    "item.pass_no_use": "{原文}",  # 动态文本（v1.18.81 限用道具不用「用」）
+    "system.load_failed": "{原文}",  # 动态文本（v1.18.81 读档失败）
     "aquarium.upgraded": "{原文}",  # 动态文本
     "aquarium.income": "{原文}",  # 动态文本
     "aquarium.feed_usage": "📖 投喂用「用」指令\n　/钓鱼 用 <道具名> <栏位号>\n　例：/钓鱼 用 高级饲料 1",
