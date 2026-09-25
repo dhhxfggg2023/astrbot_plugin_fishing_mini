@@ -1183,11 +1183,18 @@ class CommandsMixin:
         # ⚠️ v1.18.70：**抽到的限用凭证也要在背包里看得见**。它们是 `items` 里的
         #    「限用道具」（限定竿 / 限定饵凭证），不属于「鱼」，所以以前背包里一条都不显示 ——
         #    玩家中了奖却在背包找不到，只能从抛竿提示里猜（站长就是被这个搞糊涂的）。
-        _limited_lines = [
-            f"　{self._item_label(iid)}　{self._limited_use_text(player, iid)}"
-            for iid in self._limited_item_list()
-            if _safe_int((player.get("items") or {}).get(iid), 0, 0) > 0
-        ]
+        _limited_lines = []
+        for _iid in self._limited_item_list():
+            if _safe_int((player.get("items") or {}).get(_iid), 0, 0) <= 0:
+                continue
+            _spec = self.items.get(_iid) or {}
+            _target = self.baits.get(str(_spec.get("bait") or "")) or self.rod_by_id.get(
+                str(_spec.get("rod") or "")
+            ) or {}
+            _limited_lines.append(
+                f"　{self._item_label(_iid)}　{self._limited_use_text(player, _iid)}"
+                + (f"　{self._special_brief(_target)}" if _target else "")
+            )
         if not inventory:
             _empty = f"🎒 背包空空的（容量 {cap}）\n💡 发 /钓鱼 下竿试试手气"
             if _limited_lines:

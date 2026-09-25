@@ -2426,6 +2426,14 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
             for item_id, count in raw_items.items():
                 if isinstance(item_id, str):
                     items[item_id] = _safe_int(count, 0, 0)
+        # ⚠️ v1.18.75 **把杂物从道具背包里清出去**：`_collect_bookkeeping` 以前两头都写，
+        #    于是杂物 id（old_boot / tin_can…）躺在 `items` 里，`/钓鱼 用` 的
+        #    「你有：…」就会把它们列给玩家（还长得像函数名）。
+        #    杂物真正的家在 `collectibles`，那边一点没动 —— 这里只是把错放的那份删掉。
+        _junk_ids = {str(c.get("id")) for c in (globals().get("COLLECTIBLES") or [])}
+        if _junk_ids:
+            for _jid in [k for k in items if k in _junk_ids]:
+                items.pop(_jid, None)
         player["items"] = items
 
         # --- 水族馆扩建 ---

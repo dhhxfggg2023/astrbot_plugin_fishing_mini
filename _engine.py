@@ -1344,8 +1344,10 @@ class EngineMixin:
         单竿走 `_apply_collectible`（再补成就与存档），连钓在循环里只记账、
         最后统一结算——两条路径共用这一份规则，避免各写一份。
         """
-        items = player.setdefault("items", {})
-        items[drop["id"]] = _safe_int(items.get(drop["id"]), 0, 0) + 1
+        # ⚠️ v1.18.75：杂物**只记进 `collectibles`**，不再往 `items`（道具背包）里塞一份。
+        #    以前这里两处都写，于是 `/钓鱼 用` 的「你有：…」会列出一串杂物 id
+        #    （`old_boot` / `tin_can`…），玩家看得一头雾水 —— 那些根本不是道具。
+        #    （杂物既没有「使用」动作，也不该出现在道具列表里。）
         coll = player.setdefault("collectibles", {})
         coll[drop["id"]] = _safe_int(coll.get(drop["id"]), 0, 0) + 1
 

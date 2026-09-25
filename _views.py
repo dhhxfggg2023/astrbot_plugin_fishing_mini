@@ -491,11 +491,35 @@ class ViewsMixin:
             return "🪝空钩"
         return f"{bait.get('emoji', '')}{bait.get('name', bait_id)}"
 
+    def _junk_label(self, junk_id: str) -> str:
+        """一件**杂物**的「emoji + 中文名」；不是杂物就原样返回 id（方便调用方判断）。
+
+        v1.18.75 加的：杂物以前没有「给人看的名字」这条路，于是它们的 id
+        直接漏进了玩家看到的列表（站长：「bot 回复的都不能有函数名」）。
+        """
+        for junk in COLLECTIBLES:
+            if str(junk.get("id")) == str(junk_id):
+                return f"{junk.get('emoji', '')}{junk.get('name', junk_id)}"
+        return str(junk_id)
+
     def _item_label(self, item_id: str) -> str:
+        """一件东西的「中文名 + emoji」。
+
+        ⚠️ v1.18.75：**绝不允许把内部 id 漏给玩家**（站长：「bot 回复的都不能有函数名」）。
+        以前找不到就 `return item_id`，于是杂物 id（`old_boot` / `tin_can`…）会直接
+        出现在「/钓鱼 用」的列表里。现在按三层兜底：
+        ① 道具表；② **杂物表**（走 `_junk_label`，它有中文名和 emoji）；
+        ③ 都没有才退回 id —— 但那种 id 只可能是配置写错的，同时打一条 debug 日志，
+        免得又变成静默漏字。
+        """
         item = self.items.get(item_id)
-        if not item:
-            return item_id
-        return f"{item.get('emoji', '')}{item.get('name', item_id)}"
+        if item:
+            return f"{item.get('emoji', '')}{item.get('name', item_id)}"
+        junk = self._junk_label(item_id)
+        if junk != item_id:
+            return junk
+        logger.debug(f"展示时找不到这个东西的名字（配置里少了 id？）：{item_id}")
+        return item_id
 
     def _buff_status_line(self, player: dict[str, Any]) -> str:
         """钓手手气 / 品质保底的当前状态（一行；没有就返回空串）。
