@@ -1897,26 +1897,35 @@ class EditorBridgeMixin(EditorApiMixin):
             except Exception:                                             # pragma: no cover
                 continue
             changed = False
-            if not fish_only:
-                if quota_keys is None:
-                    cleared = _daily_quota_reset(player)
-                else:
-                    used = player.get("daily_used")
-                    cleared = {}
-                    if isinstance(used, dict):
-                        for key in quota_keys:
-                            value = max(0, _safe_int(used.get(key), 0, 0))
-                            if value:
-                                cleared[key] = value
-                            used.pop(key, None)
-                    player["daily_date"] = ""      # 让下次结算重新开账
-                for key, value in cleared.items():
-                    quota_reset[key] = quota_reset.get(key, 0) + value
-                changed = changed or bool(cleared)
-            if quota_keys is None or fish_only:
+            if quota_keys is not None:
+                # 选了具体项目：**只动那一项**，别的一根手指都不碰
+                # ⚠️ v1.18.68 修：以前这里漏了「选了具体项目也照样清每条鱼」——
+                # 站长选「大鱼乐购票」，结果缸里每条鱼的洗髓/喂上限次数也被清了。
+                used = player.get("daily_used")
+                cleared = {}
+                if isinstance(used, dict):
+                    for key in quota_keys:
+                        value = max(0, _safe_int(used.get(key), 0, 0))
+                        if value:
+                            cleared[key] = value
+                        used.pop(key, None)
+                # ⚠️ 这里**不碰 daily_date**：那一项是「今天是哪天」的标记，由每日结算维护；
+                # 选了具体项目就只清那一项，别的一律不动（站长报过「选大鱼乐结果别的也被重置」）。
+            elif fish_only:
+                # 只清每条鱼自己的两项
                 touched = _per_fish_limit_reset(player)
                 fish_reset += touched
                 changed = changed or touched > 0
+                cleared = {}
+            else:
+                # 「全部」：额度 + 每条鱼一起清
+                cleared = _daily_quota_reset(player)
+                touched = _per_fish_limit_reset(player)
+                fish_reset += touched
+                changed = changed or touched > 0
+            for key, value in cleared.items():
+                quota_reset[key] = quota_reset.get(key, 0) + value
+            changed = changed or bool(cleared)
             if changed:
                 stored += 1
                 await self._save_player(player)

@@ -224,7 +224,6 @@ SUBCOMMAND_KEYWORDS: dict[str, tuple[str, ...]] = {
     "供奉": ("供奉", "香火", "上香", "offering"),
     # 大鱼乐（v1.18.51）：现实彩票玩法。别名挑的是玩家真会打的词
     "大鱼乐": ("大鱼乐", "彩票", "抽奖", "lottery", "lotto", "买彩票", "乐透"),
-    "重置额度": ("重置额度", "重置次数", "重置", "重置每日", "清空额度", "reset"),
 }
 
 #: 全部内置写法（含规范名本身）：自定义命令不许与它们重名（内置永远优先）
@@ -5079,9 +5078,6 @@ class FishingPlugin(
             handler = self._cmd_gold_renamed(event, user_id)
         elif key in ("签到", "sign"):
             handler = self._cmd_sign(event, user_id)
-        elif key in ("重置额度", "重置次数", "重置", "reset", "重置每日", "清空额度"):
-            # v1.18.65：把「今天用掉的次数」清零（只清计数，不动任何上限）
-            handler = self._cmd_reset_quota(event, user_id, a2, after_first)
         elif key in ("订单", "任务", "order", "orders"):
             handler = self._cmd_orders(event, user_id, a2, after_first)
         elif key in ("钓点", "地点", "地图", "map", "location"):

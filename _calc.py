@@ -2948,9 +2948,6 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("cast.hit", "cast", "钓到鱼之后那条结果", "cast"),
     ("cast.double", "cast", "双尾竿触发：同一竿又上来一条（v1.18.63）", "cast"),
     ("cast.double_full", "cast", "双尾竿触发但背包满了", "cast"),
-    # v1.18.65：管理员重置每日额度（/钓鱼 重置额度）
-    ("reset.done", "cast", "重置掉玩家今日次数之后那条回执", "cast"),
-    ("reset.bad", "cast", "重置额度时项目名写错了", "cast"),
     ("cast.junk", "cast", "这一竿钩上的是杂物", "cast"),
     ("cast.miss_none", "cast", "空竿：空钩没鱼理", ""),
     ("cast.miss_bait", "cast", "空竿：咬了一口又吐掉", ""),

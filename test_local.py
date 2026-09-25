@@ -7952,7 +7952,7 @@ async def main():
     # ---- 14.1 内置写法总表：自检 + 与真实分派链的一致性 ----
     kw = mod.SUBCOMMAND_KEYWORDS
     check(
-        len(kw) == 34,
+        len(kw) == 33,
         f"子命令总表 {len(kw)} 行（v1.18.13 商店拆成鱼竿/道具/鱼饵，外加「买」；"
         f"v1.18.17 又加了 自动/称号/供奉；v1.18.51 加了大鱼乐）",
     )
@@ -9811,7 +9811,8 @@ async def main():
         f"道具用光就停，不会扣成负数 -> 剩 {p_many['items'].get('growth_tonic')}",
     )
 
-    # ---- v1.18.65：♻️ 重置每日次数（只清计数，不动上限）----
+    # ---- v1.18.65/68：♻️ 重置每日次数（**只有编辑器按钮**，没有指令）----
+    # 站长：「怎么还有重置额度的命令，这很不好，这应该只能配置 ui 修改」
     _qlim = dict(
         _CFG,
         buff_daily_cast_limit=20,
@@ -9821,54 +9822,16 @@ async def main():
         lottery_daily_limit=50,
     )
     plugin_q = make_plugin(_qlim)
-    p_q = await plugin_q._load_player("96008")
-    p_q["daily_date"] = "2026-01-01"
-    p_q["daily_used"] = {"buff": 20, "heal": 3, "lottery": 7}
-    p_q["aquarium"] = [mod._new_instance("carp", 1.0)]
-    p_q["aquarium"][0]["feed_bonus_used"] = 2
-    p_q["aquarium"][0]["reroll_day"] = "2026-01-01"
-    p_q["aquarium"][0]["reroll_today"] = 5
-    await plugin_q._save_player(p_q)
-    _out_q = text_of(await cmd(plugin_q, FakeEvent("96008"), "重置额度", "我"))
-    p_q = await plugin_q._load_player("96008")
+    _out_cmd_q = text_of(await cmd(plugin_q, FakeEvent("96008"), "重置额度", "我"))
     check(
-        mod._daily_used(p_q, "buff") == 0
-        and mod._daily_used(p_q, "heal") == 0
-        and mod._daily_used(p_q, "lottery") == 0,
-        f"额度计数清零 -> {p_q.get('daily_used')}",
+        "不认识" in _out_cmd_q,
+        f"**没有** /钓鱼 重置额度 这条指令了（只能从编辑器按钮改）-> "
+        f"{_out_cmd_q.strip().splitlines()[0][:24]}",
     )
     check(
-        mod._safe_int(p_q["aquarium"][0].get("feed_bonus_used"), 0, 0) == 0
-        and mod._safe_int(p_q["aquarium"][0].get("reroll_today"), 0, 0) == 0,
-        "每条鱼自己的洗髓次数 / 喂上限次数也清了",
-    )
-    check(
-        mod._safe_int(plugin_q.cfg.get("buff_daily_cast_limit"), 0, 0) == 20
-        and mod._safe_int(plugin_q.cfg.get("hot_soup_daily_limit"), 0, 0) == 3
-        and mod._safe_int(plugin_q.cfg.get("reroll_daily_total"), 0, 0) == 5
-        and mod._safe_int(plugin_q.cfg.get("offering_daily_limit"), 0, 0) == 1
-        and mod._safe_int(plugin_q.cfg.get("lottery_daily_limit"), 0, 0) == 50,
-        "**上限一个都没改**（这是站长特意要的：重置次数不等于加上限）",
-    )
-    check(
-        "已重置" in _out_q and "手气" in _out_q and "上限一个都没改" in _out_q,
-        f"回执说清清了什么 -> {_out_q.strip().splitlines()[:2]}",
-    )
-    # 项目过滤：只清手气
-    p_q["daily_used"] = {"buff": 9, "heal": 2}
-    await plugin_q._save_player(p_q)
-    await cmd(plugin_q, FakeEvent("96008"), "重置额度", "我", "手气")
-    p_q = await plugin_q._load_player("96008")
-    check(
-        mod._daily_used(p_q, "buff") == 0 and mod._daily_used(p_q, "heal") == 2,
-        f"只清指定项目 -> {p_q.get('daily_used')}",
-    )
-    # 项目写错给指路，不乱清
-    _out_bad_q = text_of(await cmd(plugin_q, FakeEvent("96008"), "重置额度", "臭豆腐"))
-    p_q = await plugin_q._load_player("96008")
-    check(
-        "不认识" in _out_bad_q and mod._daily_used(p_q, "heal") == 2,
-        f"项目名写错只说一句、不清数据 -> {_out_bad_q.strip().splitlines()[0][:30]}",
+        "重置额度" not in mod.SUBCOMMAND_KEYWORDS
+        and all("重置" not in w for w in mod.BUILTIN_COMMAND_WORDS),
+        "子命令总表里也没有「重置额度」",
     )
     # ⚠️ 这条是**回归测试**（v1.18.65 真踩过）：编辑器那条按钮走的是
     # `_editor_bridge._editor_reset_quota`，它当时写了 `from _calc import …`，
@@ -9877,9 +9840,12 @@ async def main():
     # 所以这里**从插件实例上**真调一次那个动作，确保它能跑通。
     _q2 = make_plugin(_qlim)
     p_q2 = await _q2._load_player("96009")
+    p_q2["daily_date"] = "2026-01-01"
     p_q2["daily_used"] = {"buff": 4, "lottery": 2}
     p_q2["aquarium"] = [mod._new_instance("carp", 1.0)]
     p_q2["aquarium"][0]["feed_bonus_used"] = 2
+    p_q2["aquarium"][0]["reroll_day"] = "2026-01-01"
+    p_q2["aquarium"][0]["reroll_today"] = 5
     await _q2._save_player(p_q2)
     _ok_act, _msg_act = await _q2._editor_reset_quota(
         {"scope": "me", "user_id": "96009", "what": ""}
@@ -9912,6 +9878,53 @@ async def main():
         f"编辑器里项目名写错要拒绝并说清 -> {_msg_bad[:40]}",
     )
 
+    # ⚠️ 这条是**站长报过的 bug 的回归测试**（v1.18.68）：选「大鱼乐购票」时
+    # 以前会把**每条鱼自己的次数**也一起清（那是独立的一项）。现在只动选中的那一项。
+    _q3 = make_plugin(_qlim)
+    p_q3 = await _q3._load_player("96010")
+    p_q3["daily_used"] = {"buff": 4, "lottery": 2}
+    p_q3["aquarium"] = [mod._new_instance("carp", 1.0)]
+    p_q3["aquarium"][0]["feed_bonus_used"] = 2
+    p_q3["aquarium"][0]["reroll_today"] = 5
+    await _q3._save_player(p_q3)
+    _ok_lot, _msg_lot = await _q3._editor_reset_quota(
+        {"scope": "me", "user_id": "96010", "what": "lottery"}
+    )
+    p_q3 = await _q3._load_player("96010")
+    check(
+        _ok_lot
+        and mod._daily_used(p_q3, "lottery") == 0
+        and mod._daily_used(p_q3, "buff") == 4,
+        f"选「大鱼乐购票」只清彩票，别的额度不动 -> {p_q3.get('daily_used')}",
+    )
+    check(
+        mod._safe_int(p_q3["aquarium"][0].get("feed_bonus_used"), 0, 0) == 2
+        and mod._safe_int(p_q3["aquarium"][0].get("reroll_today"), 0, 0) == 5,
+        "选具体项目时**不再顺带清「每条鱼自己的次数」**（站长报的就是这个）",
+    )
+    check(
+        "大鱼乐购票" in _msg_lot and "每条鱼的洗髓 / 喂上限次数也清了 0 条" in _msg_lot,
+        f"回执如实说明只清了那一项 -> {_msg_lot[:60]}",
+    )
+    # 「全部」才两样一起清
+    _ok_all, _msg_all = await _q3._editor_reset_quota(
+        {"scope": "me", "user_id": "96010", "what": ""}
+    )
+    p_q3 = await _q3._load_player("96010")
+    check(
+        _ok_all and mod._daily_used(p_q3, "buff") == 0
+        and mod._safe_int(p_q3["aquarium"][0].get("feed_bonus_used"), 0, 0) == 0,
+        "选「全部」才额度 + 每条鱼一起清",
+    )
+    check(
+        mod._safe_int(plugin_q.cfg.get("buff_daily_cast_limit"), 0, 0) == 20
+        and mod._safe_int(plugin_q.cfg.get("hot_soup_daily_limit"), 0, 0) == 3
+        and mod._safe_int(plugin_q.cfg.get("reroll_daily_total"), 0, 0) == 5
+        and mod._safe_int(plugin_q.cfg.get("offering_daily_limit"), 0, 0) == 1
+        and mod._safe_int(plugin_q.cfg.get("lottery_daily_limit"), 0, 0) == 50,
+        "**上限一个都没改**（重置次数不等于加上限）",
+    )
+
     # best 模式：只取最好的一次，同档重复不再涨
     plugin_best = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=0, feed_bonus_mode="best"))
     p_best = await plugin_best._load_player("96006")
@@ -9930,7 +9943,7 @@ async def main():
         f"best 模式下「没提升」就不扣道具 -> 剩 {p_best['items'].get('growth_tonic')}",
     )
     # 加成上限可配（feed_bonus_cap）
-    plugin_cap = make_plugin(dict(_CFG, feed_bonus_daily_limit=0, feed_bonus_cap=6))
+    plugin_cap = make_plugin(dict(_CFG, feed_bonus_lifetime_limit=0, feed_bonus_cap=6))
     p_cap = await plugin_cap._load_player("96007")
     p_cap["aquarium"] = [mod._new_instance("carp", 1.0)]
     p_cap["items"]["growth_tonic"] = 5
@@ -12295,8 +12308,6 @@ async def main():
                    "pull.hook", "story.prompt",
                    # v1.18.63：限定竿「双尾」的两条回复也继承 cast 的按钮
                    "cast.double", "cast.double_full",
-                   # v1.18.65：重置额度的两条回执
-                   "reset.done", "reset.bad",
                    # v1.18.13：商店拆成三家，两家货架 / 两条用法说明 / 拆店提示
                    # 都继承「共用按钮组」，所以老配置里给 shop.list 配的按钮照样生效
                    "shop.bait_list", "shop.item_list",
