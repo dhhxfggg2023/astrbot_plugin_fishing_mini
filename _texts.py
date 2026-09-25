@@ -48,6 +48,9 @@ TEXTS: dict[str, str] = {
     "system.error": "😵 这一下没成，日志里记了一笔\n　再试一次；老出错就把这条发给管理员",
     "cast.busy": "🎣 竿子还在手里\n　先 /钓鱼 拉，或者干脆等它跑掉",
     "cast.hit": "{原文}",  # 动态文本
+    # v1.18.63：限定竿「双尾」触发时那条「又上来一条」
+    "cast.double": "{原文}",  # 动态文本
+    "cast.double_full": "{原文}",  # 动态文本
     "cast.multi_limit": "{原文}",  # 动态文本
     "cast.multi_busy": "🎣 上一竿还等着收\n　先 /钓鱼 拉，再谈连钓",
     "cast.multi_summary": "{原文}",  # 动态文本
@@ -282,6 +285,8 @@ EXTRA_PLACEHOLDERS: dict[str, tuple[tuple[str, str], ...]] = {
 #: 「原文」的示例值（编辑器预览用）。没登记的用下面那句通用说明
 SAMPLE_ORIGINAL: dict[str, str] = {
     "cast.hit": "🎣 🐟鲤鱼　💰 1,240　⚪普通　余额 3,800",
+    "cast.double": "🎣 双尾竿：同一竿又上来一条 —— 🐟鲫鱼　💰 320",
+    "cast.double_full": "🎣 双尾竿本想再来一条，背包满了（先 /钓鱼 卖）",
     "cast.junk": "🪝 钩上来一只旧鞋（杂物 +1）",
     "cast.miss_none": "🪝 空钩在水里漂了半天，鱼碰了碰就游走了",
     "cast.miss_bait": "🎣 咬了一口又吐掉了——🪱蚯蚓 白搭了",

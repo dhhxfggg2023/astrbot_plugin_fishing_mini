@@ -3601,6 +3601,27 @@ class CommandsMixin:
         remaining = _daily_left(player, "lottery", limit)             # noqa: F821
         return want, cost, (remaining if remaining is not None else -1)
 
+    @staticmethod
+    def _special_brief(spec: dict[str, Any]) -> str:
+        """把一件竿/饵的「特殊效果」写成一句人话（中奖播报、鱼竿页都用它）。"""
+        special = (spec or {}).get("special")
+        if not isinstance(special, dict) or not special:
+            return ""
+        bits: list[str] = []
+        if _safe_number(special.get("variant_extra"), 0) > 0:
+            bits.append(f"异色多掷 {int(_safe_number(special.get('variant_extra'), 0))} 次")
+        if _safe_number(special.get("myth_every"), 0) > 0:
+            bits.append(f"每 {int(_safe_number(special.get('myth_every'), 0))} 竿一次神品")
+        if _safe_number(special.get("perfect"), 0) > 0:
+            bits.append("拉线必判完美")
+        if _safe_number(special.get("double"), 0) > 0:
+            bits.append("一竿两条")
+        if _safe_number(special.get("all_pool"), 0) > 0:
+            bits.append("全图鱼口")
+        if _safe_number(special.get("legend_only"), 0) > 0:
+            bits.append("只抽传说档")
+        return "特权：" + "、".join(bits) if bits else ""
+
     def _lottery_apply_prize(
         self, player: dict[str, Any], row: dict[str, Any]
     ) -> dict[str, Any]:
@@ -3680,6 +3701,26 @@ class CommandsMixin:
             )
             return record
         if kind == "bait":
+            # 限定饵（v1.18.63）：param 既可能是普通鱼饵 id，也可能是一件
+            # 「限用凭证」（item_defs 里带第 11 段 bait 的那种，例如 abyss_bait_pass）。
+            _pass = self.items.get(str(row.get("param") or "").strip()) or {}
+            if str(_pass.get("bait") or "").strip():
+                item_id = str(row.get("param") or "").strip()
+                bait_id = str(_pass["bait"]).strip()
+                bait = self.baits.get(bait_id)
+                if bait is None:
+                    record["line"] = f"🍃 {row.get('desc')}（它对应的鱼饵 {bait_id} 不存在）"
+                    return record
+                bag = player.setdefault("items", {})
+                bag[item_id] = _safe_int(bag.get(item_id), 0, 0) + count
+                uses = _safe_int(_pass.get("uses"), 0, 0)
+                record["line"] = (
+                    f"{bait.get('emoji') or '🪱'} {bait['name']}　"
+                    f"（限用 {uses} 次，用完消失；抽到就能用）"
+                    f"　{self._special_brief(bait)}"
+                )
+                record["bait"] = bait_id
+                return record
             bait_id = str(row.get("param") or "").strip()
             bait = self.baits.get(bait_id)
             if bait is None:
@@ -3719,6 +3760,30 @@ class CommandsMixin:
                 f"🎁 {row.get('desc')}　" + "　".join(got) if got
                 else f"🍃 {row.get('desc')}（道具包里没有有效道具）"
             )
+            return record
+        if kind == "rod":
+            # 限定竿（v1.18.63）：发的是一件「限用道具」，带着第 10 段的竿 id。
+            # 它在背包里、还有次数期间顶替装备中的竿（见 main._active_limited_rod），
+            # 次数用完就消失、自动换回原来的竿。
+            item_id = str(row.get("param") or "").strip()
+            item = self.items.get(item_id)
+            if item is None:
+                record["line"] = f"🍃 {row.get('desc')}（限定竿 {item_id} 不存在）"
+                return record
+            rod_id = str(item.get("rod") or "").strip()
+            rod = self.rod_by_id.get(rod_id) if rod_id else None
+            if rod is None:
+                record["line"] = f"🍃 {row.get('desc')}（它对应的鱼竿 {rod_id or '？'} 不存在）"
+                return record
+            bag = player.setdefault("items", {})
+            bag[item_id] = _safe_int(bag.get(item_id), 0, 0) + count
+            uses = _safe_int(item.get("uses"), 0, 0)
+            record["line"] = (
+                f"{rod.get('emoji') or '🎣'} {rod['name']}　"
+                f"（限用 {uses} 次，用完消失；抽到就能用，不用装备）"
+                f"　{self._special_brief(rod)}"
+            )
+            record["rod"] = rod_id
             return record
         record["line"] = f"🍃 {row.get('desc')}"
         return record

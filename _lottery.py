@@ -56,7 +56,10 @@ from __future__ import annotations
 from typing import Any
 
 #: 奖级类型（站长在奖表里写这些词）
-PRIZE_KINDS: tuple[str, ...] = ("fish", "gold", "item", "bait", "reward", "baitpack", "none")
+#: ``rod``（v1.18.63）：发一件「限定竿」——参数填 item_defs 里那条限用道具的 id
+#: （它带着第 10 段的竿 id）。和 ``item`` 的区别只是**期望值算法**：
+#: 限定竿不进商店、价格是 0，按「它顶替的那根竿的价值加成折算成多少次抛竿的收益」估。
+PRIZE_KINDS: tuple[str, ...] = ("fish", "gold", "item", "bait", "reward", "baitpack", "rod", "none")
 
 #: 期望值模型用的「典型加成」——真实玩家的装备各不相同，估算取一个中间值。
 #: 站长想让估算更贴近自己服务器的后期配置，把这两个数往大调即可（不影响实际发放）。
@@ -191,6 +194,63 @@ def _quality_weights(plugin: Any) -> list[float]:
     return [44.0, 28.0, 16.0, 9.0, 3.0, 0.0]
 
 
+def _cfg_avg_location_mult(plugin: Any) -> float:
+    """钓点价值倍率的**平均**（取站长配置里的钓点表，不用写死的常数）。
+
+    ⚠️ 以前这里是模块常数 ``EV_LOCATION_MULT = 1.4`` —— 站长把钓点倍率改了之后，
+    期望值估算还按 1.4 算，护栏和概率页就全是错的（站长：「算数值优先看我设置的
+    配置，不要用原始数据」）。现在一律从 `plugin.locations` 现算。
+    """
+    mults = [
+        max(0.0, _lot_float((loc or {}).get("value_mult"), 1.0))
+        for loc in (getattr(plugin, "locations", None) or [])
+    ]
+    mults = [m for m in mults if m > 0]
+    if not mults:
+        return 1.0
+    return sum(mults) / len(mults)
+
+
+def _cfg_variance_mean(plugin: Any) -> float:
+    """个体差异区间的**中值**（取 ``cfg["value_variance"]``，不用写死的 1.02）。"""
+    raw = ""
+    try:
+        raw = str((plugin.cfg or {}).get("value_variance") or "")
+    except Exception:
+        raw = ""
+    low, _, high = raw.partition("-")
+    a, b = _lot_float(low, 0.0), _lot_float(high, 0.0)
+    if a > 0 and b > 0:
+        return (a + b) / 2.0
+    return 1.0
+
+
+def _cfg_variant_chance(plugin: Any) -> float:
+    """异色概率（``cfg["variant_chance"]``，站长可配）。"""
+    try:
+        return min(max(_lot_float((plugin.cfg or {}).get("variant_chance"), 0.0), 0.0), 1.0)
+    except Exception:                                                    # pragma: no cover
+        return 0.0
+
+
+def _cfg_income_per_cast(plugin: Any) -> float:
+    """**一竿的典型毛收入**（按站长配置现算，给限定竿/饵换算价值用）。
+
+    口径：当前生效的**钓点平均倍率** × **个体差异中值** × 自然品质期望倍率 ×
+    「中等稀有度鱼（稀有）」的均价。这是个**估算**，用于把「这根竿值几张票」摆出来；
+    真实收益永远由玩家自己那张图决定。
+    """
+    mid = _rarity_mean_value("稀有")
+    weights = _quality_weights(plugin)
+    total = sum(weights) or 1.0
+    q = sum(
+        weights[i] * EV_QUALITY_MULT.get(name, 1.0)
+        for i, name in enumerate(QUALITY_ORDER)               # noqa: F821
+        if i < len(weights)
+    ) / total
+    return mid * q * _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
+
+
 def _rarity_mean_value(rarity_spec: str) -> float:
     """某稀有度（或 ``all``）所有鱼种的基础价均值。"""
     spec = str(rarity_spec or "").strip()
@@ -232,7 +292,10 @@ def _fish_prize_payout(plugin: Any, param: str, count: int) -> float:
     else:
         mult = EV_QUALITY_MULT.get(quality, 1.0)
     variant_mult = _variant_expectation(plugin, variant)
-    per = _rarity_mean_value(rarity) * mult * variant_mult * EV_LOCATION_MULT * EV_VARIANCE
+    per = (
+        _rarity_mean_value(rarity) * mult * variant_mult
+        * _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
+    )
     return per * max(1, count)
 
 
@@ -288,6 +351,114 @@ def _variant_expectation(plugin: Any, variant: str) -> float:
     return (1.0 - chance) * 1.0 + chance * avg
 
 
+def _limited_rod_payout(plugin: Any, item_id: str, count: int) -> float:
+    """限定竿（``rod`` 档）的期望面值 **估算**（v1.18.63）。
+
+    它不进商店、价格是 0，所以不能像道具那样拿单价算。折算法：
+    「这根竿比玩家现有竿多出来的收益」× 剩余次数。收益 = 数值加成部分 +
+    特殊效果部分（异色多掷 / 每 N 竿神品 / 一竿两条），全都按**站长配置的**
+    价格与钓点倍率现算 —— 不用任何写死的常数。
+
+    只是给护栏和概率页一个数量级参考；真实发放就是发那件道具，一分不多。
+    """
+    item = (getattr(plugin, "items", None) or {}).get(str(item_id)) or {}
+    rod_id = str(item.get("rod") or "").strip()
+    uses = max(0, _lot_int(item.get("uses"), 0))
+    rod = (getattr(plugin, "rod_by_id", None) or {}).get(rod_id) if rod_id else None
+    if rod is None:
+        return 0.0
+    return _rod_value_estimate(plugin, rod, uses) * max(1, count)
+
+
+def _rod_value_estimate(plugin: Any, rod: dict[str, Any], uses: int) -> float:
+    """一根竿用 ``uses`` 次大概能多赚多少（数值加成 + 特殊效果，都按配置现算）。"""
+    per = _cfg_income_per_cast(plugin)
+    value_part = max(0.0, _lot_float(rod.get("value_bonus"), 0.0)) * per
+    special = rod.get("special") if isinstance(rod.get("special"), dict) else {}
+    # ① 异色多掷 N 次：把「(1-(1-p)^(N+1)) - p」这份概率增量 × 异色平均超额收益
+    extra_rolls = max(0, _lot_int(special.get("variant_extra"), 0))
+    variant_part = 0.0
+    if extra_rolls:
+        p = _cfg_variant_chance(plugin)
+        new_p = 1 - (1 - p) ** (extra_rolls + 1) if 0 < p < 1 else p
+        avg = _variant_expectation(plugin, "")
+        variant_part = max(0.0, new_p - p) * max(0.0, avg - 1.0) * per
+    # ② 每 N 竿一次神品
+    every = max(0, _lot_int(special.get("myth_every"), 0))
+    myth_part = 0.0
+    if every > 0:
+        weights = _quality_weights(plugin)
+        total = sum(weights) or 1.0
+        natural = sum(
+            weights[i] * EV_QUALITY_MULT.get(name, 1.0)
+            for i, name in enumerate(QUALITY_ORDER)           # noqa: F821
+            if i < len(weights)
+        ) / total
+        myth_part = (
+            _rarity_mean_value("稀有")
+            * max(0.0, EV_QUALITY_MULT.get("神品", 1.0) - natural)
+            * _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
+            / every
+        )
+    # ③ 一竿两条：每竿多一条的钱
+    double_part = per if _lot_float(special.get("double"), 0.0) > 0 else 0.0
+    # ④ 拉线必完美：只多一点点（保饵 + 不脱钩），按饵价粗估
+    perfect_part = 0.0
+    if _lot_float(special.get("perfect"), 0.0) > 0:
+        bait_price = max(
+            (_lot_float((b or {}).get("price"), 0.0) for b in (getattr(plugin, "baits", None) or {}).values()),
+            default=0.0,
+        )
+        perfect_part = bait_price * 0.15
+    return max(0.0, (value_part + variant_part + myth_part + double_part + perfect_part)) * max(0, uses)
+
+
+def _limited_bait_payout(plugin: Any, item_id: str, count: int) -> float:
+    """限定饵（``bait`` 档里的 ``special`` 饵）的期望面值估算（v1.18.63）。"""
+    item = (getattr(plugin, "items", None) or {}).get(str(item_id)) or {}
+    bait_id = str(item.get("bait") or "").strip()
+    uses = max(0, _lot_int(item.get("uses"), 0))
+    bait = (getattr(plugin, "baits", None) or {}).get(bait_id) if bait_id else None
+    if bait is None:
+        return 0.0
+    return _bait_value_estimate(plugin, bait, uses) * max(1, count)
+
+
+def _bait_value_estimate(plugin: Any, bait: dict[str, Any], uses: int) -> float:
+    """一个饵用 ``uses`` 次大概能多赚多少（按配置现算）。"""
+    special = bait.get("special") if isinstance(bait.get("special"), dict) else {}
+    per = _cfg_income_per_cast(plugin)
+    if _lot_float(special.get("all_pool"), 0.0) > 0:
+        # 全图池：按全鱼池均价 vs 典型一竿，取差额（多半是负的 = 不值钱）
+        pool = globals().get("FISH_POOL") or []
+        if pool:
+            avg = sum(_lot_float((f or {}).get("value"), 0.0) for f in pool) / len(pool)
+            avg *= _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
+            weights = _quality_weights(plugin)
+            total = sum(weights) or 1.0
+            q = sum(
+                weights[i] * EV_QUALITY_MULT.get(name, 1.0)
+                for i, name in enumerate(QUALITY_ORDER)       # noqa: F821
+                if i < len(weights)
+            ) / total
+            return max(0.0, avg * q) * max(0, uses)
+        return 0.0
+    if _lot_float(special.get("legend_only"), 0.0) > 0:
+        # 只抽传说：按传说均价 × 自然品质算（品质不额外给）
+        weights = _quality_weights(plugin)
+        total = sum(weights) or 1.0
+        q = sum(
+            weights[i] * EV_QUALITY_MULT.get(name, 1.0)
+            for i, name in enumerate(QUALITY_ORDER)           # noqa: F821
+            if i < len(weights)
+        ) / total
+        return (
+            _rarity_mean_value("传说") * q
+            * _cfg_avg_location_mult(plugin) * _cfg_variance_mean(plugin)
+        ) * max(0, uses)
+    return 0.0
+
+
 def prize_payout(
     plugin: Any, row: dict[str, Any], jackpot_gold: int = 0, jackpot_prize: str = ""
 ) -> float:
@@ -313,6 +484,12 @@ def prize_payout(
         item = (getattr(plugin, "items", None) or {}).get(str(row.get("param") or ""))
         return extra_gold + _lot_float((item or {}).get("price"), 0.0) * count
     if kind == "bait":
+        # 限定饵（凭证）与普通饵分开算：凭证没有价格，值的是「那种饵的特权」
+        item = (getattr(plugin, "items", None) or {}).get(str(row.get("param") or ""))
+        if item is not None and str(item.get("bait") or "").strip():
+            return extra_gold + _limited_bait_payout(
+                plugin, str(row.get("param") or ""), count
+            )
         bait = (getattr(plugin, "baits", None) or {}).get(str(row.get("param") or ""))
         return extra_gold + _lot_float((bait or {}).get("price"), 0.0) * count
     if kind == "reward":
@@ -327,6 +504,8 @@ def prize_payout(
             bait = (getattr(plugin, "baits", None) or {}).get(bait_id)
             total += _lot_float((bait or {}).get("price"), 0.0) * num
         return total
+    if kind == "rod":
+        return extra_gold + _limited_rod_payout(plugin, str(row.get("param") or ""), count)
     return float(extra_gold)
 
 

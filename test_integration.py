@@ -390,7 +390,7 @@ async def main():
     legend = next(f for f in mod.FISH_POOL if f["rarity"] == "传说")
     orig_roll = mod._roll_species if hasattr(mod, "_roll_species") else None
     orig = plugin._roll_species
-    plugin._roll_species = lambda bait_id, location_id, weather=None: legend
+    plugin._roll_species = lambda bait_id, location_id, weather=None, **kw: legend
     saved_escape = dict(plugin.escape_map)
     plugin.escape_map = {k: 0.0 for k in plugin.escape_map}  # 关掉逃脱，保证确定性
     try:
@@ -446,7 +446,7 @@ async def main():
 
     # -----------------------------------------------------------------
     print("\n[6] 跨群保护")
-    plugin._roll_species = lambda bait_id, location_id, weather=None: legend
+    plugin._roll_species = lambda bait_id, location_id, weather=None, **kw: legend
     plugin.escape_map = {k: 0.0 for k in plugin.escape_map}
     try:
         p = await plugin._load_player("90004")

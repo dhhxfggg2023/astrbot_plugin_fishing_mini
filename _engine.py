@@ -324,11 +324,37 @@ class EngineMixin:
                         yield _r
                     return
 
+            # --- v1.18.63：扣「限用道具」一次的用量（大鱼乐抽到的体验版竿/秘饵）---
+            # 这些道具买不到（uses > 0 不进商店），抽到就直接生效；每抛一竿消耗 1 次，
+            # 用完就消失。备注拼进 bait_note（收尾时随结果一起说，见下面的 cast.bait_note /
+            # 结果正文）—— 不额外多发一条消息，免得白白吃掉被动回复的次数。
+            _limited_notes = _use_limited_items(player, self.items)
+
             # --- 自动挂饵 / 自动补货 / 自动用手气道具（见 _auto_supply）---
             bait_id, _supply_notes = self._auto_supply(
                 player, times=1, wanted=bait_name
             )
-            bait_note = "\n".join(_supply_notes)
+            bait_note = "\n".join(_supply_notes + _limited_notes)
+
+            # --- 限定竿/饵的**特权**（v1.18.63）---
+            # 竿：异色多掷 / 每 N 竿一次神品 / 拉线必完美 / 一竿两条
+            # 饵：全图鱼口 / 只抽传说
+            # 全部由「当前生效的那根竿 / 那种饵」决定 —— 抽到凭证就有次数，用完自动失效。
+            _rod_now = self._rod(player)
+            _rod_fx = _rod_now.get("special") if isinstance(_rod_now.get("special"), dict) else {}
+            _bait_now = self.baits.get(bait_id) or {}
+            _bait_fx = _bait_now.get("special") if isinstance(_bait_now.get("special"), dict) else {}
+            # 神品节流：每 myth_every 竿才给一次（计数存在玩家身上，跨竿持续）
+            _myth_every = max(0, int(_safe_number(_rod_fx.get("myth_every"), 0.0)))
+            _myth_hit = False
+            if _myth_every > 0:
+                _cast_no = _safe_int(player.get("limited_rod_casts"), 0, 0) + 1
+                if _cast_no >= _myth_every:
+                    _cast_no = 0
+                    _myth_hit = True
+                player["limited_rod_casts"] = _cast_no
+            elif "limited_rod_casts" in player:
+                player.pop("limited_rod_casts", None)
 
             # --- 费用 ---
             # 鱼饵在下竿时只扣库存（买的时候已经付过钱），不再重复收饵钱；
@@ -414,9 +440,14 @@ class EngineMixin:
 
             # ---- 抽鱼种（按当前钓点的鱼池 + 今日天气）----
             loc = self._location(player)
-            rod = self._rod(player)
+            rod = _rod_now
             weather = self._weather(player)
-            fish = self._roll_species(bait_id, loc["id"], weather)
+            # 限定饵的「全图鱼口 / 只抽传说」在这里生效（都没配就是老行为）
+            fish = self._roll_species(
+                bait_id, loc["id"], weather,
+                all_pool=_safe_number(_bait_fx.get("all_pool"), 0.0) > 0,
+                legend_only=_safe_number(_bait_fx.get("legend_only"), 0.0) > 0,
+            )
             # 手气 = 一次性储备 + 玉佩这类「持续 N 竿」的加成，两者**叠加**
             # （来源不同、寿命不同，见 _calc._effective_luck）；
             # 本次抛竿读一次，收尾时消耗（一次性清空 + 玉佩竿数 -1，见 _consume_luck）
@@ -430,7 +461,13 @@ class EngineMixin:
             # 鱼竿的「拉线手感」（高阶竿：窗口更长 / 更不容易跑）在这里生效
             spec = self._apply_rod_pull_bonus(self._interaction_window(fish, weather), rod)
             # 变异只在上钩瞬间掷一次；命中后普通鱼也会变成「惊喜」
+            # ⚠️ 限定竿「异色猎手」（v1.18.63）：多掷 N 次取第一个命中 ——
+            #    概率从 p 提到 1-(1-p)^(N+1)，但**仍是看脸**，不是必出。
             variant = self._roll_variant()
+            for _ in range(max(0, int(_safe_number(_rod_fx.get("variant_extra"), 0.0)))):
+                if variant:
+                    break
+                variant = self._roll_variant()
             weather_luck = _safe_number((weather or {}).get("luck"), 0.0)
             rod_value = _safe_number(rod.get("value_bonus"), 0.0)
             loc_value = _safe_number(loc.get("value_mult"), 1.0)
@@ -448,6 +485,10 @@ class EngineMixin:
                     cfg=cfg,
                     floor=floor,
                 )
+                if _myth_hit:
+                    # 限定竿「星陨」：这一竿的个体品质直接是神品（第 70 百分位）
+                    quality_mult = _myth_quality_mult()
+                    bait_note = (bait_note + "\n" if bait_note else "") + "☄️ 星陨之赐：这一竿必出神品"
                 catch = _new_instance(
                     fish["id"],
                     quality_mult,
@@ -471,6 +512,9 @@ class EngineMixin:
                 spec["rod_value_bonus"] = rod_value
                 spec["location_mult"] = loc_value
                 spec["codex_mult"] = codex_mult
+                # 限定竿「瞬手」：拉线必判完美（见 _judge_pull）
+                if _safe_number(_rod_fx.get("perfect"), 0.0) > 0:
+                    spec["perfect_pull"] = 1.0
                 # ⚠️ **边产生边 yield**：提示要先送到玩家手里，他才来得及在窗口内
                 # 发「拉」。以前这里是先攒成 messages 再一起吐，纯文本平台直接没法拉
                 # （见 _interactions._iter_minigame 的说明）。
@@ -536,6 +580,45 @@ class EngineMixin:
                 perfect=rating == "完美",
                 bait_id=bait_id,
             )
+
+            # --- 限定竿「双尾」：一次成功上钩算两条（v1.18.63）---
+            # 第二条走**和第一条完全一样的**记录路径（图鉴/成就/里程碑/最佳纪录都认），
+            # 背包满了就只留一条（并说清楚），免得把背包撑爆。
+            if _safe_number(_rod_fx.get("double"), 0.0) > 0:
+                _cap = _backpack_capacity(player, cfg)
+                if len(player.get("inventory") or []) < _cap:
+                    _q2 = _roll_quality_mult(
+                        self.cfg["quality_weights"],
+                        bait_luck=_safe_number((self.baits.get(bait_id) or {}).get("luck"), 0.0)
+                        + gear_luck + weather_luck,
+                        extra_luck=luck,
+                        cfg=cfg,
+                        floor=floor,
+                    )
+                    _second = _new_instance(
+                        catch.get("fish_id"), _q2,
+                        value_bonus=rod_value, location_mult=loc_value,
+                        variant=catch.get("variant"), codex_mult=codex_mult,
+                    )
+                    if _second is not None:
+                        await self._finalize_catch(
+                            event, player, _second, user_id,
+                            perfect=rating == "完美", bait_id=bait_id,
+                        )
+                        async for _r in self._say_msg(
+                            event, "cast.double",
+                            event.plain_result(
+                                "🎣 双尾竿：同一竿又上来一条 —— "
+                                + _instance_line(_second)
+                            ),
+                        ):
+                            yield _r
+                else:
+                    async for _r in self._say_msg(
+                        event, "cast.double_full",
+                        event.plain_result("🎣 双尾竿本想再来一条，背包满了（先 /钓鱼 卖）"),
+                    ):
+                        yield _r
 
             # --- 偶尔来一段小插曲（触发条件不对外说明）---
             async for reply in self._maybe_trigger_story(event, user_id):

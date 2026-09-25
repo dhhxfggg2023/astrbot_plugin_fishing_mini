@@ -298,7 +298,8 @@ async def main():
     )
 
     plugin = make_plugin(cfg)
-    check(len(plugin.rods) == 8, f"鱼竿 {len(plugin.rods)} 种（v1.18.15 加了龙纹鲤竿/归墟竿）")
+    check(len(plugin.rods) == 12,
+      f"鱼竿 {len(plugin.rods)} 种（v1.18.15 的 8 根 + v1.18.63 大鱼乐 4 根限定竿）")
     check(len(plugin.locations) == 19, f"钓点 {len(plugin.locations)} 个（v1.18.8 加了星陨湖/万水归墟/龙宫）")
     check(
         len(plugin.backpack_upgrades) == 7,
@@ -5520,6 +5521,74 @@ async def main():
         "概率" not in body and "彩蛋" not in body and "触发" not in body,
         "插曲不提概率、也不自报身份",
     )
+
+    # --- v1.18.63：插曲的**选项按钮**必须真的挂上去 ---
+    # 站长报「事件的按钮怎么没了」。根因：`_event_rows()` 按「story」行的模板现算了
+    # 每个选项的按钮，但 `_maybe_trigger_story` 把结果（`_rows`）丢掉了，只把文案交给
+    # `_say(..., "story.prompt")`；而 story.prompt 自己没配按钮，继承链兜底到
+    # `story.result`（继续钓 / 看背包）——**选项按钮就没了**。
+    #
+    # ⚠️ 不能断言「抛竿那条消息的键盘」：QQ 一条入站消息只有**第一条**回复能挂键盘，
+    #    插曲往往是第 3~5 条，它拿不到名额（这是平台限制，不是 bug）。
+    #    所以这里**直接跑 `_maybe_trigger_story` 里那一行**：给它一条干净的消息
+    #    （名额空着），看它挂上去的到底是「选项」还是兜底的「继续钓/看背包」。
+    api_story = FakeApi()
+    plugin_sb = make_plugin(dict(story_cfg, story_chance=1.0, easter_egg_chance=0.0))
+    ev_sb = PlatEvent("89102", api=api_story, mid="MID-STORY-OPT")
+    _sb_entry = None
+    _kb_labels_got: list[str] = []
+    _kb_datas: list[str] = []
+    for _try in range(8):
+        ev_sb = PlatEvent("89102", api=api_story, mid=f"MID-STORY-OPT-{_try}")
+        _before_calls = len(api_story.calls)
+        _sb_it = plugin_sb._maybe_trigger_story(ev_sb, "89102")
+        async for _r in _sb_it:
+            pass                    # 只要把这一轮跑完（文案不看，只看挂上去的按钮）
+        _p_sb = await plugin_sb._load_player("89102")
+        _sb_entry = _p_sb.get("event") or None
+        if not _sb_entry:
+            continue
+        # 只认**插曲提示**那条消息的键盘：连载会先发一条「前情提要」（story.recap），
+        # 它带的是 story.result 的兜底按钮（继续钓/看背包）—— 那是**另一条消息**，
+        # 混在一起看会误判成「插曲挂了兜底按钮」。判定：含 `/钓鱼 事件 N` 的才是提示。
+        _this_round = [
+            _c for _c in api_story.calls[_before_calls:]
+            if any(
+                "/钓鱼 事件" in str((_b.get("action") or {}).get("data") or "")
+                for _r in (((_c.get("keyboard") or {}).get("content") or {}).get("rows") or [])
+                for _b in (_r.get("buttons") or [])
+            )
+        ]
+        for _call in _this_round:
+            _kb = _call.get("keyboard") or {}
+            for _row in (_kb.get("content") or {}).get("rows", []) or []:
+                for _b in _row.get("buttons", []) or []:
+                    _kb_labels_got.append(
+                        str((_b.get("render_data") or {}).get("label") or "")
+                    )
+                    _kb_datas.append(str((_b.get("action") or {}).get("data") or ""))
+        break
+    _sb_def = mod.EVENT_BY_ID.get(str((_sb_entry or {}).get("id") or "")) or {}
+    _sb_labels = [str(c.get("label") or "") for c in (_sb_def.get("choices") or [])]
+    check(
+        bool(_sb_labels) and all(
+            f"/钓鱼 事件 {i}" in _kb_datas for i in range(1, len(_sb_labels) + 1)
+        ),
+        f"插曲挂了「每个选项一个」的按钮 -> 指令 {_kb_datas}（这一局的选项：{_sb_labels}）",
+    )
+    check(
+        bool(_sb_labels) and all(lb in _kb_labels_got for lb in _sb_labels),
+        f"按钮文案就是选项文案 -> 按钮 {_kb_labels_got}",
+    )
+    check(
+        len(_kb_labels_got) == len(_sb_labels) and bool(_sb_labels),
+        f"选项数 = 按钮数（没有多出「继续钓/看背包」那种兜底按钮）-> "
+        f"{len(_kb_labels_got)} 个按钮 / {len(_sb_labels)} 个选项",
+    )
+    check(
+        bool(_kb_labels_got) and "继续钓" not in _kb_labels_got and "看背包" not in _kb_labels_got,
+        f"挂上去的不是 story.result 的兜底按钮 -> {_kb_labels_got}",
+    )
     ev_def = mod.EVENT_BY_ID[story["id"]]
     check(
         len(ev_def["choices"]) == 2
@@ -6114,7 +6183,8 @@ async def main():
     await plugin_b._save_player(p)
     legend = next(f for f in mod.FISH_POOL if f["rarity"] == "传说")
     orig_roll_b = plugin_b._roll_species
-    plugin_b._roll_species = lambda bait_id, location_id, weather=None: legend
+    # ⚠️ 要收 **kwargs：_roll_species 从 v1.18.63 起多了限定饵的两个开关
+    plugin_b._roll_species = lambda bait_id, location_id, weather=None, **kw: legend
     saved_random = mod.random.random
     mod.random.random = lambda: 0.0  # 必定脱钩，逼出「鱼跑了」分支
     try:
@@ -8462,7 +8532,7 @@ async def main():
     make_plugin()
     _fish_default = len(str(mod.DEFAULTS["fish_defs"]).splitlines())
     check(
-        len(mod.FISH_POOL) == _fish_default and len(mod.RODS) == 8,
+        len(mod.FISH_POOL) == _fish_default and len(mod.RODS) == 12,
         f"复位后鱼池/鱼竿恢复默认（{len(mod.FISH_POOL)} 条鱼 / {len(mod.RODS)} 种竿）",
     )
 
@@ -8720,8 +8790,8 @@ async def main():
     plugin_r = make_plugin()
     cfg_r = plugin_r.cfg
     check(
-        len(plugin_r.items) == 13,
-        f"道具 13 种（v1.18.16 从 7 件扩到 13 件）-> {len(plugin_r.items)}",
+        len(plugin_r.items) == 19,
+        f"道具 19 种（13 件常规 + 4 张竿凭证 + 2 张饵凭证）-> {len(plugin_r.items)}",
     )
     check(
         abs(mod._safe_number(plugin_r.items["coral_deco"]["effects"].get("decorate"), 0) - 0.20) < 1e-9,
@@ -8738,6 +8808,270 @@ async def main():
     check(
         abs(mod._safe_number(plugin_r.items["lucky_jade"]["effects"].get("quality_floor"), 0) - 2.0) < 1e-9,
         "锦鲤玉佩 quality_floor=2.0（v1.18.23 起改成「接下来 20 竿至少珍品」）",
+    )
+
+    # --- v1.18.63：大鱼乐限定竿（新做的两根，不卖、只抽）---
+    # 站长：「给大鱼乐加入限定的特殊道具，金币买不到的特殊效果的鱼竿
+    #       （可以是体验版和完整版，只能用几次那种），概率要比现在的大奖还要低」
+    check(
+        bool(plugin_r.rod_by_id.get("tide_rod")) and bool(plugin_r.rod_by_id.get("star_rod")),
+        f"新做的两根限定竿在竿表里 -> {[r['id'] for r in plugin_r.rods if r.get('uses')]}",
+    )
+    check(
+        len(mod._shop_visible_rods(plugin_r.rods)) == 8,
+        f"限定竿**不进商店**（商店 8 根，表里共 {len(plugin_r.rods)} 根）",
+    )
+    _LIMITED = {
+        "tide_rod": 20, "star_rod": 30, "quick_rod": 25, "twin_rod": 20,
+    }
+    _passes = {f"{rid}_pass": rid for rid in _LIMITED}
+    check(
+        all(
+            (plugin_r.items.get(pid) or {}).get("rod") == rid
+            and (plugin_r.items.get(pid) or {}).get("uses") == uses
+            for pid, rid in _passes.items()
+            for uses in (_LIMITED[rid],)
+        ),
+        "四张竿凭证的次数与竿对得上 -> "
+        + "、".join(f"{rid} {_LIMITED[rid]} 次" for rid in _LIMITED),
+    )
+    check(
+        all(k not in plugin_r._item_list() for k in _passes),
+        "四张「竿凭证」都不在商店里（只能抽到）",
+    )
+    # 站长定的设计口径：**数值一律低于同级金币竿**，靠「异化」区分
+    _top = plugin_r.rod_by_id["void_rod"]
+    check(
+        all(
+            mod._safe_number(plugin_r.rod_by_id[rid].get("value_bonus"), 0)
+            < mod._safe_number(_top.get("value_bonus"), 0)
+            for rid in _LIMITED
+        ),
+        "四根限定竿的价值加成全都低于顶配归墟竿 "
+        f"({mod._safe_number(_top.get('value_bonus'), 0):.0%}) -> "
+        + "、".join(
+            f"{rid} {mod._safe_number(plugin_r.rod_by_id[rid].get('value_bonus'), 0):.0%}"
+            for rid in _LIMITED
+        ),
+    )
+    check(
+        all(plugin_r.rod_by_id[rid].get("special") for rid in _LIMITED),
+        "四根限定竿每根都带一个「特殊效果」（不是纯数值竿）",
+    )
+    check(
+        all(plugin_r.rod_by_id[rid].get("special") for rid in _LIMITED)
+        and set(_LIMITED) == {
+            "tide_rod", "star_rod", "quick_rod", "twin_rod",
+        },
+        f"四根竿的特权分别是 -> "
+        + "、".join(
+            f"{rid}:{'+'.join(plugin_r.rod_by_id[rid]['special'])}" for rid in _LIMITED
+        ),
+    )
+
+    # 奖池：**每一档单看都是亏的**（名义价值 < 它出现所需的期望张数）
+    _prizes = mod.LOTTERY.parse_prize_rows(cfg_r.get("lottery_prizes"))
+    _by_id = {str(r.get("id")): r for r in _prizes}
+    _total_w = sum(float(r.get("weight") or 0) for r in _prizes)
+    _price = mod._safe_int(cfg_r.get("lottery_ticket_price"), 0)
+    _lossy: list[str] = []
+    for pid in _passes:
+        _p = float(_by_id[pid]["weight"]) / _total_w
+        _val = mod.LOTTERY.prize_payout(plugin_r, _by_id[pid])
+        # 期望：抽到它要 1/p 张票，这些票值 (1/p)×票价；它本身只值 _val
+        if _val >= (1 / _p) * _price:
+            _lossy.append(f"{pid} 名义 {_val:,.0f} 金 vs 期望成本 {(1 / _p) * _price:,.0f} 金")
+    check(
+        not _lossy,
+        f"限定奖**每一档都是亏的**（抽到也不回本）-> 问题项 {_lossy or '无'}",
+    )
+    check(
+        _by_id["tide_rod_pass"]["kind"] == "rod"
+        and _by_id["abyss_bait_pass"]["kind"] == "bait",
+        "竿档用 rod、饵档用 bait",
+    )
+    # 价值越高 -> 概率越低（按价值分池）
+    _val_pairs = sorted(
+        ((mod.LOTTERY.prize_payout(plugin_r, _by_id[pid]), pid) for pid in _passes),
+        reverse=True,
+    )
+    check(
+        _val_pairs[0][0] > _val_pairs[-1][0]
+        and float(_by_id[_val_pairs[0][1]]["weight"]) < float(_by_id[_val_pairs[-1][1]]["weight"]),
+        f"价值最高的档位概率最低 -> {_val_pairs[0][1]}（{_val_pairs[0][0]:,.0f} 金）"
+        f" 权重 {_by_id[_val_pairs[0][1]]['weight']} ＜ "
+        f"{_val_pairs[-1][1]} 权重 {_by_id[_val_pairs[-1][1]]['weight']}",
+    )
+
+    # --- 生效与消耗：抽到就顶替装备中的竿，用完消失、自动换回 ---
+    _rp = mod._default_player("89401")
+    _rp["equipped_rod"] = "bamboo"
+    check(
+        plugin_r._active_limited_rod(_rp) is None and plugin_r._rod(_rp)["id"] == "bamboo",
+        "没有限定竿时用的还是装备的竿",
+    )
+    _rp["items"] = {"tide_rod_pass": 1}
+    check(
+        (plugin_r._active_limited_rod(_rp) or {}).get("id") == "tide_rod"
+        and plugin_r._rod(_rp)["id"] == "tide_rod",
+        "抽到限定竿后**直接生效**（顶替装备中的竹竿，不用先装备）",
+    )
+    check(
+        "剩 20 次" in plugin_r._rod_label(_rp),
+        f"界面上标出剩余次数 -> {plugin_r._rod_label(_rp)}",
+    )
+    _lines = mod._use_limited_items(_rp, plugin_r.items)
+    check(
+        _rp["limited_uses"]["tide_rod_pass"] == 19 and any("还可用 19 次" in x for x in _lines),
+        f"抛一竿扣 1 次 -> {_lines}",
+    )
+    _rp["limited_uses"]["tide_rod_pass"] = 1
+    _lines = mod._use_limited_items(_rp, plugin_r.items)
+    check(
+        "tide_rod_pass" not in _rp["items"]
+        and plugin_r._rod(_rp)["id"] == "bamboo"
+        and any("用完" in x for x in _lines),
+        f"用完后自动换回原来的竿 -> {_lines}",
+    )
+
+    # --- 机制验证：四根竿的特权真的会在抛竿时生效（v1.18.63）---
+    _mx = mod._default_player("89501")
+    _mx["equipped_rod"] = "bamboo"
+    _mx["items"] = {"tide_rod_pass": 1}
+    _tide_rod = plugin_r.rod_by_id["tide_rod"]
+    check(
+        mod._rod_special(_tide_rod, "variant_extra") == 2,
+        f"潮汐竿的 variant_extra=2 -> {_tide_rod.get('special')}",
+    )
+    _cfg_mx = dict(_CFG)
+    _cfg_mx["easter_egg_chance"] = 0.0
+    _cfg_mx["item_drop_chance"] = 0.0
+    _plain_fish = next(f for f in mod.FISH_POOL if f["rarity"] == "常见")
+
+    # ① 异色多掷：主掷判不中、多掷判中 -> 仍然拿到异色
+    _calls = {"n": 0}
+
+    def _fake_variant():
+        _calls["n"] += 1
+        return "golden" if _calls["n"] == 2 else None
+
+    _p_mx = make_plugin(_cfg_mx)
+    _p_mx._roll_variant = _fake_variant
+    _pm = await _p_mx._load_player("89502")
+    _pm["equipped_rod"] = "bamboo"
+    _pm["items"] = {"tide_rod_pass": 1}
+    await _p_mx._save_player(_pm)
+    _orig_mx_roll = _p_mx._roll_species
+    _p_mx._roll_species = lambda *a, **kw: _plain_fish
+    try:
+        await cast(_p_mx, FakeEvent("89502"))
+    finally:
+        _p_mx._roll_species = _orig_mx_roll
+    check(
+        _calls["n"] >= 2,
+        f"潮汐竿真的多掷了异色（掷了 {_calls['n']} 次；普通竿只掷 1 次）",
+    )
+
+    # ② 星陨竿：每 12 竿一次神品（计数跨竿累计）
+    _p_my = make_plugin(_cfg_mx)
+    _pmy = await _p_my._load_player("89503")
+    _pmy["equipped_rod"] = "bamboo"
+    _pmy["items"] = {"star_rod_pass": 1}
+    _pmy["limited_uses"] = {"star_rod_pass": 99}
+    await _p_my._save_player(_pmy)
+    _orig_my_roll = _p_my._roll_species
+    _p_my._roll_species = lambda *a, **kw: _plain_fish
+    _got_myth = False
+    try:
+        for _i in range(12):
+            await cast(_p_my, FakeEvent("89503"))
+            _now = await _p_my._load_player("89503")
+            if any(
+                str(f.get("quality")) == "神品" for f in (_now.get("inventory") or [])
+            ):
+                _got_myth = True
+                break
+    finally:
+        _p_my._roll_species = _orig_my_roll
+    check(
+        _got_myth,
+        "星陨竿：连抛 12 竿内必出一次神品（自然爆率是 0，出得来就说明特权生效）",
+    )
+
+    # ③ 瞬手竿：拉线必判完美
+    _spec_perfect = {"center": 0.5, "half": 0.17, "perfect_pull": 1.0}
+    check(
+        plugin_r._judge_pull(0.99, _spec_perfect)[0] == "完美"
+        and plugin_r._judge_pull(0.0, _spec_perfect)[0] == "完美",
+        "瞬手竿：落点在最边上也判「完美」",
+    )
+    check(
+        plugin_r._judge_pull(0.99, {"center": 0.5, "half": 0.17})[0] != "完美",
+        "对照：普通竿落点在边上不是完美",
+    )
+
+    # ④ 双尾竿：那一竿应该进两条
+    _p_tw = make_plugin(_cfg_mx)
+    _ptw = await _p_tw._load_player("89504")
+    _ptw["equipped_rod"] = "bamboo"
+    _ptw["items"] = {"twin_rod_pass": 1}
+    _ptw["limited_uses"] = {"twin_rod_pass": 99}
+    _ptw["inventory"] = []
+    await _p_tw._save_player(_ptw)
+    _orig_tw_roll = _p_tw._roll_species
+    _p_tw._roll_species = lambda *a, **kw: _plain_fish
+    try:
+        await cast(_p_tw, FakeEvent("89504"))
+    finally:
+        _p_tw._roll_species = _orig_tw_roll
+    _ptw = await _p_tw._load_player("89504")
+    check(
+        len(_ptw.get("inventory") or []) >= 2,
+        f"双尾竿：一竿进了 {len(_ptw.get('inventory') or [])} 条（普通竿只会 1 条）",
+    )
+
+    # ⑤ 限定饵：全图鱼口 / 只抽传说
+    _abyss = plugin_r.baits.get("abyss_secret") or {}
+    _vip = plugin_r.baits.get("vip_bait") or {}
+    check(
+        mod._bait_special(_abyss, "all_pool") > 0 and mod._bait_special(_vip, "legend_only") > 0,
+        f"两种限定饵的特权 -> all_pool={mod._bait_special(_abyss, 'all_pool')}"
+        f"／legend_only={mod._bait_special(_vip, 'legend_only')}",
+    )
+    check(
+        "abyss_secret" not in plugin_r._bait_list() and "vip_bait" not in plugin_r._bait_list(),
+        f"限定饵不进鱼饵店 -> 店里只有 {len(plugin_r._bait_list())} 种",
+    )
+    _pool_all = {
+        plugin_r._roll_species("none", "novice", None, all_pool=True)["id"] for _ in range(60)
+    }
+    _pool_legend = {
+        plugin_r._roll_species("none", "novice", None, legend_only=True)["rarity"]
+        for _ in range(40)
+    }
+    check(
+        len(_pool_all) > 3,
+        f"全图鱼口：新手村也能抽到多种（60 次抽到 {len(_pool_all)} 种）",
+    )
+    check(_pool_legend == {"传说"}, f"贵客饵只出传说 -> {_pool_legend}")
+
+    # --- 中奖发放：rod 档发的是一件「限用凭证」 ---
+    _lot_plugin = make_plugin()
+    _lp = mod._default_player("89402")
+    _rec = _lot_plugin._lottery_apply_prize(
+        _lp, {"id": "tide_rod_pass", "kind": "rod", "param": "tide_rod_pass",
+              "count": 1, "desc": "潮汐竿·体验"}
+    )
+    check(
+        _lp["items"].get("tide_rod_pass") == 1 and "潮汐竿" in str(_rec.get("line")),
+        f"中奖后背包里出现这张凭证 -> {_rec.get('line')}",
+    )
+    _bad_rec = _lot_plugin._lottery_apply_prize(
+        _lp, {"id": "x", "kind": "rod", "param": "不存在的凭证", "count": 1, "desc": "x"}
+    )
+    check(
+        "不存在" in str(_bad_rec.get("line")),
+        f"奖表里写错凭证 id 时给一句解释（不让玩家白抽）-> {_bad_rec.get('line')}",
     )
 
     # --- 个体品质最高档：只能洗髓丹洗出来（v1.18.7 加档、v1.18.8 起叫「神品」）---
@@ -9949,8 +10283,8 @@ async def main():
     print("\n[10x] 道具重设：13 件、带解锁等级、heal 能用（v1.18.16）")
     item_plugin = make_plugin()
     check(
-        len(item_plugin.items) == 13,
-        f"出厂 {len(item_plugin.items)} 件道具（重设前 7 件）",
+        len(item_plugin.items) == 19,
+        f"出厂 {len(item_plugin.items)} 件道具（13 件常规 + 6 张限定凭证）",
     )
     _gated = {
         iid: int(it.get("unlock_level", 1))
@@ -10732,7 +11066,7 @@ async def main():
         f"{sorted({r['kind']} for r in _lot_rows)}",
     )
     check(
-        {"fish", "gold", "item", "bait", "reward", "baitpack", "none"} == set(_lot.PRIZE_KINDS),
+        {"fish", "gold", "item", "bait", "reward", "baitpack", "rod", "none"} == set(_lot.PRIZE_KINDS),
         f"支持的奖级类型齐了（{len(_lot.PRIZE_KINDS)} 种，站长能写进奖表的词）",
     )
 
@@ -11438,7 +11772,7 @@ async def main():
     _enum = _ep.enum_tables(_epp)
     check(
         len(_enum["fish"]) >= 200 and len(_enum["baits"]) >= 8
-        and len(_enum["items"]) >= 10 and len(_enum["rods"]) == 8
+        and len(_enum["items"]) >= 10 and len(_enum["rods"]) == 12
         and len(_enum["locations"]) == 19 and len(_enum["titles"]) >= 5
         and len(_enum["variants"]) >= 5 and len(_enum["achievements"]) >= 40,
         f"枚举表齐全 -> 鱼 {len(_enum['fish'])}｜鱼饵 {len(_enum['baits'])}｜"
@@ -11786,6 +12120,8 @@ async def main():
         sorted(mod.SCENE_PARENT)
         == sorted(["cast.hit", "cast.junk", "help.page", "location.list", "bag.list",
                    "pull.hook", "story.prompt",
+                   # v1.18.63：限定竿「双尾」的两条回复也继承 cast 的按钮
+                   "cast.double", "cast.double_full",
                    # v1.18.13：商店拆成三家，两家货架 / 两条用法说明 / 拆店提示
                    # 都继承「共用按钮组」，所以老配置里给 shop.list 配的按钮照样生效
                    "shop.bait_list", "shop.item_list",

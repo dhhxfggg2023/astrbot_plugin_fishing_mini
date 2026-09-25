@@ -431,6 +431,17 @@ DEFAULTS: dict[str, Any] = {
         "竿身缠着一条活鲤纹，握上去就知道什么叫稳|0.15|1.00",
         "void_rod|归墟竿|🕳️|1200000|0.36|0.30|62|"
         "竿梢细得几乎看不见，鱼线却再也挣不断|0.10|0.90",
+        # ---- v1.18.63：大鱼乐**限定竿**（新做的四根，不卖、只抽）----
+        # ⚠️ 设计口径（站长定的）：
+        #   · 数值**一律低于**同级金币竿（价值加成 ≤12%），靠「异化」区分，不靠堆数值；
+        #   · 每根都用**牺牲一块**换一个特权 —— 不牺牲就等于白送，会数值膨胀；
+        #   · 第 11 段 = 1（限定竿，不进商店 / 不算「鱼竿买齐」成就）；
+        #   · 第 12 段 = 特殊效果，键见 _calc.SPECIAL_KEYS。
+        # 段位：id|名称|emoji|价格|价值加成|幸运加成|解锁等级|描述|窗口加成|逃脱系数|限定|特殊效果
+        "tide_rod|潮汐竿|🌊|0|0.10|0.08|1|异色猎手：异色判定多掷 2 次（0.5%→约 1.5%）。代价：价值只有顶配竿的 1/3|0.10|0.95|1|variant_extra=2",
+        "star_rod|星陨竿|☄️|0|0.12|0.00|1|星陨：每 12 竿有 1 竿的个体品质直接是神品。代价：手气归零，只有 12% 价值加成|0.00|1.00|1|myth_every=12",
+        "quick_rod|瞬手竿|🪶|0|0.08|0.00|1|瞬手：拉线一律判「完美」，饵不被咬掉、绝不脱钩。代价：手气归零、价值很低|0.25|0.85|1|perfect",
+        "twin_rod|双尾竿|🎣|0|0.05|0.06|1|双尾：一次成功上钩算两条。代价：价值垫底 + 更容易跑（逃脱×1.08）|0.00|1.08|1|double",
     ],
     # 钓点定义由 LOCATIONS 生成（见文件下方 _location_def_lines()），此处留空占位
     "location_defs": [],
@@ -501,6 +512,16 @@ DEFAULTS: dict[str, Any] = {
         "gold_small|8|gold||5000|回本 5,000 金　🪙 五等奖",
         "fish_rare|3|fish|稀有:珍品|1|稀有鱼 · 珍品　🐡 六等奖",
         "bait_pack|2|baitpack|worm:20,bread:30|1|鱼饵包：蚯蚓 ×20 + 面包屑 ×30　🪱",
+        # ---- v1.18.63：大鱼乐限定竿/饵（站长：「每件都要有被用的价值」+「不能正收入」）----
+        # 概率按**配置现算的名义价值**分池：值越多张票，概率越低，
+        # 而且每一档单看也是亏的（最贵的双尾竿名义 ≈3 张票 < 它出现所需的期望张数）。
+        # 这 6 档加起来只占期望 ~20 金/张，整套期望仍 < 票价。
+        "tide_rod_pass|0.8|rod|tide_rod_pass|1|🌊 潮汐竿（异色猎手，20 次）",
+        "quick_rod_pass|0.25|rod|quick_rod_pass|1|🪶 瞬手竿（必完美拉线，25 次）",
+        "abyss_bait_pass|1.5|bait|abyss_bait_pass|1|🕳️ 深渊秘饵（全图鱼口，8 次）",
+        "vip_bait_pass|0.05|bait|vip_bait_pass|1|👑 贵客饵（只抽传说，6 次）",
+        "star_rod_pass|0.012|rod|star_rod_pass|1|☄️ 星陨竿（每 12 竿一次神品，30 次）",
+        "twin_rod_pass|0.007|rod|twin_rod_pass|1|🎣 双尾竿（一竿两条，20 次）",
         "blank|52|none||0|谢谢惠顾　（牌子翻过来写着「再来一张」）",
     ]),
     #: **哪一个奖级算「头奖」**（填奖表行首的 id；留空 = 不设头奖）。
@@ -603,6 +624,14 @@ DEFAULTS: dict[str, Any] = {
         "深海里捞上来的东西，腥得吓人，专招大物",
         "dragon_bait|龙涎|🐉|300|1|0.78|0.3,0.8,2.0,6.0,14.0|62|void_rod|"
         "龙宫檐下凝的一滴，寻常鱼闻了不敢靠近",
+        # ---- v1.18.63：大鱼乐**限定饵**（新做的两种，不卖、只抽）----
+        # 第 11 段 = 特殊效果；带特殊效果的饵**不进商店**（_shop_visible_baits）。
+        # ⚠️ 牺牲换特权：深渊秘饵稀有度权重全是 1（比面包屑还差），
+        #    贵客饵只抽传说但品质按自然爆率算 —— 都不是「更强的龙涎」。
+        "abyss_secret|深渊秘饵|🕳️|0|1|0.00|1,1,1,1,1|1||"
+        "大鱼乐限定：这一竿从全地图鱼池抽（哪里都能出大物），但稀有度权重全 1|all_pool=1",
+        "vip_bait|贵客饵|👑|0|1|0.00|1,1,1,1,1|1||"
+        "大鱼乐限定：这一竿只从「传说」里抽（品质仍看脸）|legend_only=1",
     ],
     # 道具：id|名称|emoji|单价|说明|效果|解锁等级（见 _parse_effects）
     #   meat/spirit/sheen/value_up = 喂鱼（一次性，永久加成）
@@ -637,6 +666,21 @@ DEFAULTS: dict[str, Any] = {
         "pearl_comb|珍珠梳|🪮|9000|喂鱼：这条鱼的投喂上限 +10 次|feed_bonus=10|50",
         "coral_king|珊瑚王座|👑|40000|摆进鱼缸：72 小时内挂机产出 +45%|decorate=0.45|52",
         "hot_soup|姜汤|🍲|400|喝一口：回复体力（体力已满时不消耗）|heal=10|3",
+        # ---- v1.18.63：大鱼乐**限定竿**的发奖载体（商店不卖，只能抽）----
+        # 第 9 段 = 限用次数；第 10 段 = 它顶替哪根竿。
+        # 「体验版 / 完整版」= 同一个机制、不同次数与不同竿。
+        "tide_rod_pass|潮汐竿·凭证|🌊|0|大鱼乐限定：顶替当前鱼竿（限用 20 次，用完消失）|"
+        "|1|0|20|tide_rod|",
+        "star_rod_pass|星陨竿·凭证|☄️|0|大鱼乐限定：顶替当前鱼竿（限用 30 次，用完消失）|"
+        "|1|0|30|star_rod|",
+        "quick_rod_pass|瞬手竿·凭证|🪶|0|大鱼乐限定：顶替当前鱼竿（限用 25 次，用完消失）|"
+        "|1|0|25|quick_rod|",
+        "twin_rod_pass|双尾竿·凭证|🎣|0|大鱼乐限定：顶替当前鱼竿（限用 20 次，用完消失）|"
+        "|1|0|20|twin_rod|",
+        "abyss_bait_pass|深渊秘饵·凭证|🕳️|0|大鱼乐限定：限用 8 次（每一竿都按那种饵的特权抽）|"
+        "|1|0|8||abyss_secret",
+        "vip_bait_pass|贵客饵·凭证|👑|0|大鱼乐限定：限用 6 次（每一竿都按那种饵的特权抽）|"
+        "|1|0|6||vip_bait",
     ],
     # ---- 可调数值表：想改物价 / 爆率 / 属性范围，改这里（或 WebUI）即可 ----
     # 鱼种品质：出现权重（越大越常见）、价值倍数、拉线难度、三维范围
@@ -2373,6 +2417,28 @@ RODS: list[dict[str, Any]] = [
      "value_bonus": 0.36, "luck_bonus": 0.30, "unlock_level": 62,
      "window_bonus": 0.10, "escape_factor": 0.90,
      "desc": "竿梢细得几乎看不见，鱼线却再也挣不断"},
+    # v1.18.63：大鱼乐的四根限定竿（`uses=1` = 限定竿：不进商店、不算「鱼竿买齐」）。
+    # ⚠️ 数值必须与 DEFAULTS["rod_defs"] 逐项一致（[6n] 钉住了）；special 也要照抄。
+    {"id": "tide_rod", "name": "潮汐竿", "emoji": "🌊", "price": 0,
+     "value_bonus": 0.10, "luck_bonus": 0.08, "unlock_level": 1,
+     "window_bonus": 0.10, "escape_factor": 0.95, "uses": 1,
+     "special": {"variant_extra": 2.0},
+     "desc": "异色猎手：异色判定多掷 2 次（0.5%→约 1.5%）"},
+    {"id": "star_rod", "name": "星陨竿", "emoji": "☄️", "price": 0,
+     "value_bonus": 0.12, "luck_bonus": 0.00, "unlock_level": 1,
+     "window_bonus": 0.00, "escape_factor": 1.00, "uses": 1,
+     "special": {"myth_every": 12.0},
+     "desc": "星陨：每 12 竿有 1 竿的个体品质直接是神品"},
+    {"id": "quick_rod", "name": "瞬手竿", "emoji": "🪶", "price": 0,
+     "value_bonus": 0.08, "luck_bonus": 0.00, "unlock_level": 1,
+     "window_bonus": 0.25, "escape_factor": 0.85, "uses": 1,
+     "special": {"perfect": 1.0},
+     "desc": "瞬手：拉线一律判「完美」，饵不会被咬掉、绝不脱钩"},
+    {"id": "twin_rod", "name": "双尾竿", "emoji": "🎣", "price": 0,
+     "value_bonus": 0.05, "luck_bonus": 0.06, "unlock_level": 1,
+     "window_bonus": 0.00, "escape_factor": 1.08, "uses": 1,
+     "special": {"double": 1.0},
+     "desc": "双尾：一次成功上钩算两条"},
 ]
 ROD_BY_ID: dict[str, dict[str, Any]] = {rod["id"]: rod for rod in RODS}
 DEFAULT_ROD = "bamboo"
@@ -3510,15 +3576,29 @@ class FishingPlugin(
         self.title_by_id = {t["id"]: t for t in self.titles}
 
     def _item_list(self) -> list[str]:
-        """道具 id 列表（按单价升序，界面上先看到便宜的）。"""
+        """**商店里**的道具 id 列表（按单价升序，界面上先看到便宜的）。
+
+        ``uses > 0`` 的限用道具不进这张表 —— 它们不是买来的（见
+        `_calc._shop_visible_items` 的说明）。用 `self.items` 仍能拿到全部道具。
+        """
         return sorted(
-            self.items,
+            _shop_visible_items(self.items),
             key=lambda iid: (_safe_int(self.items[iid].get("price"), 0, 0), iid),
         )
 
+    def _limited_item_list(self) -> list[str]:
+        """只能抽到、不能买的限用道具（大鱼乐奖池里那些「特殊道具」）。"""
+        return sorted(
+            iid for iid, spec in self.items.items()
+            if _safe_int((spec or {}).get("uses"), 0, 0) > 0
+        )
+
     def _bait_list(self) -> list[str]:
-        """除空钩外可购买的鱼饵 id 列表。"""
-        return [bid for bid in self.baits if bid != "none"]
+        """**鱼饵店里**能买到的饵 id（带特殊效果的限定饵不进这张表，v1.18.63）。
+
+        用 `self.baits` 仍能拿到全部饵；这里只给「货架 / 可购买」用。
+        """
+        return _shop_visible_baits(self.baits)
 
 
     def _aquarium_capacity(self, player: dict[str, Any]) -> int:
@@ -3868,7 +3948,9 @@ class FishingPlugin(
         # ---- 装备与地图 ----
         if len(rod_ids) >= 2:
             unlock("rod_2")
-        if len(rod_ids) >= len(self.rods):
+        # ⚠️ 「鱼竿买齐」只算**能买到的**竿（v1.18.63）：限定竿（潮汐竿/星陨竿）
+        #    不卖、只能抽，算进去会让这个成就永远拿不到。
+        if len(rod_ids) >= len(_shop_visible_rods(self.rods)):
             unlock("rod_all")
         if len(loc_ids) >= 2:
             unlock("loc_2")
@@ -3941,24 +4023,46 @@ class FishingPlugin(
         bait_id: str,
         location_id: str,
         weather: dict[str, Any] | None = None,
+        *,
+        all_pool: bool = False,
+        legend_only: bool = False,
     ) -> dict[str, Any]:
         """在指定钓点按权重抽鱼种。
 
         鱼饵改变各稀有度的命中权重；天气在此基础上再叠一层加成。
+
+        ``all_pool`` / ``legend_only`` 是**限定饵**的特权（v1.18.63）：
+        前者从全图鱼池抽（不受当前钓点限制），后者只抽「传说」档。
         """
         bait = self.baits.get(bait_id) or self.baits.get("none") or {}
         mults: dict[str, float] = bait.get("rarity_mult") or {}
         weather_mults: dict[str, float] = (weather or {}).get("rarity_mult") or {}
 
+        if all_pool:
+            source = [(fish, float(fish.get("weight") or 1.0)) for fish in FISH_POOL]
+        else:
+            source = list(_location_pool(location_id))
+        if legend_only:
+            only = [item for item in source if str(item[0].get("rarity")) == "传说"]
+            if only:
+                source = only
+            else:
+                # 这张图一条传说都没有：退回**全图**里的传说（不然贵客饵会白烧）
+                source = [
+                    (fish, float(fish.get("weight") or 1.0))
+                    for fish in FISH_POOL
+                    if str(fish.get("rarity")) == "传说"
+                ] or source
+
         weighted: list[tuple[dict[str, Any], float]] = []
-        for fish, weight in _location_pool(location_id):
+        for fish, weight in source:
             mult = _safe_number(mults.get(fish["rarity"]), 1.0)
             mult *= _safe_number(weather_mults.get(fish["rarity"]), 1.0)
             weighted.append((fish, float(weight) * max(0.0, mult)))
 
         total = sum(w for _, w in weighted)
         if total <= 0:
-            pool = _location_pool(location_id)
+            pool = source or _location_pool(location_id)
             return pool[0][0] if pool else FISH_POOL[0]
         point = random.uniform(0, total)
         cumulative = 0.0
@@ -3968,8 +4072,46 @@ class FishingPlugin(
                 return fish
         return weighted[-1][0]
 
+    def _active_limited_rod(self, player: dict[str, Any]) -> dict[str, Any] | None:
+        """玩家背包里「还有剩余次数」的限定竿（v1.18.63），没有就返回 None。
+
+        站长要的「金币买不到的特殊鱼竿（体验版/完整版、只能用几次）」：
+        它们由大鱼乐抽到，在背包里、还有次数期间**顶替**当前装备的竿
+        （所以抽到就能用，不用先装备）；次数用完就消失、自动换回原来的竿。
+        同时只认**一根**：多根都有次数时按「价值加成高的优先」（体验版先消耗掉）。
+        """
+        pocket = player.get("items")
+        if not isinstance(pocket, dict) or not pocket:
+            return None
+        state = player.get("limited_uses")
+        state = state if isinstance(state, dict) else {}
+        best: tuple[float, dict[str, Any]] | None = None
+        for item_id, count in pocket.items():
+            if _safe_int(count, 0, 0) <= 0:
+                continue
+            spec = self.items.get(str(item_id)) or {}
+            rod_id = str(spec.get("rod") or "").strip()
+            if not rod_id:
+                continue
+            total = _safe_int(spec.get("uses"), 0, 0)
+            if total <= 0:
+                continue
+            left = state.get(str(item_id))
+            left = total if left is None else _safe_int(left, total, 0)
+            if left <= 0:
+                continue
+            rod = self.rod_by_id.get(rod_id)
+            if rod is None:
+                continue          # 竿被站长从表里删了：这件道具就当没有
+            if best is None or _safe_number(rod.get("value_bonus"), 0.0) > best[0]:
+                best = (_safe_number(rod.get("value_bonus"), 0.0), rod)
+        return best[1] if best else None
+
     def _rod(self, player: dict[str, Any]) -> dict[str, Any]:
-        """玩家当前装备的鱼竿配置。"""
+        """玩家当前**生效**的鱼竿配置（限定竿有剩余次数时优先）。"""
+        limited = self._active_limited_rod(player)
+        if limited is not None:
+            return limited
         rod_id = player.get("equipped_rod")
         rod = self.rod_by_id.get(rod_id) if isinstance(rod_id, str) else None
         if rod is None:

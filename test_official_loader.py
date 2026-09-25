@@ -153,8 +153,10 @@ try:
 
     # 每个配置项都必须能被代码正确解析
     plugin = mod.FishingPlugin(context=FakeCtx(), config=dict(cfg))
-    check(len(plugin.baits) == 10, f"鱼饵解析 {len(plugin.baits)} 种（v1.18.15 加了深渊饵/龙涎）")
-    check(len(plugin.items) == 13, f"道具解析 {len(plugin.items)} 种（v1.18.16 重设后 13 件）")
+    check(len(plugin.baits) == 12,
+          f"鱼饵解析 {len(plugin.baits)} 种（v1.18.15 的深渊饵/龙涎 + v1.18.63 两种限定饵）")
+    check(len(plugin.items) == 19,
+          f"道具解析 {len(plugin.items)} 种（13 件常规 + 6 张限定凭证）")
     check(
         len(plugin.aquarium_slots) == 9,
         f"扩建栏位解析 {len(plugin.aquarium_slots)} 个（v1.18.17 再加 3 档终局缸）",

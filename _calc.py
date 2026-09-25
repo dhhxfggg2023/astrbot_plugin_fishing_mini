@@ -331,6 +331,10 @@ def _parse_bait_defs(raw: Any, *, warn: Any = None) -> dict[str, dict[str, Any]]
             "unlock_level": unlock,
             "need_rod": need_rod,
             "desc": desc,
+            # 第 11 段：**特殊效果**（v1.18.63），`键=值` 写法，可省略。
+            # 限定饵靠它换玩法特权（全图鱼口 / 只抽传说），而不是堆权重。
+            # 带特殊效果的饵**不进商店**（见 _shop_visible_baits）。
+            "special": _parse_special(parts[10]) if len(parts) > 10 else {},
         }
 
     if "none" not in baits:
@@ -448,6 +452,12 @@ def _parse_item_defs(raw: Any, *, warn: Any = None) -> dict[str, dict[str, Any]]
     道具的价格是**一口价**，但它的收益随鱼价水涨船高，所以后期道具必须靠等级门槛
     来卡「什么时候买才划算」，否则要么前期买亏、要么后期白菜价。
 
+    v1.18.63 起可再加第 9 段 **限用次数**（省略 / 0 = 永久道具）：
+    给大鱼乐那些「买不到、只能抽到」的特殊道具用 —— 每抛一竿消耗 1 次，
+    用完就消失。`uses > 0` 的道具**不进商店**（`_shop_visible_items`）。
+    第 10 段 **它对应的鱼竿 id**：填了就是「限定鱼竿」，在背包里且有剩余次数期间
+    顶替装备中的竿（见 `main._active_limited_rod`）。
+
     ⚠️ 坏行（段数不够 / id 或名字为空）会被**跳过**；传了 ``warn`` 时把「跳了几行、
     首条长什么样」说出来。以前这里是**一声不吭地 continue** —— 这正是「加了新道具、
     游戏里却看不到，日志里也没有任何线索」的祸根（对比 `_parse_button_defs` 会数坏行）。
@@ -485,6 +495,23 @@ def _parse_item_defs(raw: Any, *, warn: Any = None) -> dict[str, dict[str, Any]]
             #: 站长要求「道具的每日使用上限可配」—— 写在道具表里就能一件一件调，
             #: 不用为每件道具加一个全局配置键（那会把配置项撑爆）。
             "daily_limit": max(0, _to_int(parts[7], 0)) if len(parts) > 7 else 0,
+            #: 第 9 段：**限用次数**（v1.18.63，0 / 省略 = 永久道具）。
+            #: 给大鱼乐那些「买不到、只能抽到」的特殊道具用：每抛一竿消耗 1 次，
+            #: 用完就消失（见 `_use_limited_items`）。>0 的道具**不进商店**
+            #: （见 `_shop_visible_items`）—— 它们不是买来的，是抽来的。
+            "uses": max(0, _to_int(parts[8], 0)) if len(parts) > 8 else 0,
+            #: 第 10 段：**它其实是一根鱼竿**（v1.18.63）。填鱼竿 id 时：
+            #: 这件道具在背包里、还有剩余次数期间**顶替**玩家装备的竿
+            #: （见 `main._active_limited_rod`），用完就消失、自动换回原来的竿。
+            #: 站长要的「限定特殊鱼竿（体验版/完整版、只能用几次）」就是它 ——
+            #: 竿的定义仍写在 rod_defs 里（数值照常用编辑器改），道具只是**发奖的载体**。
+            "rod": parts[9].strip() if len(parts) > 9 else "",
+            #: 第 11 段：**它其实是一种鱼饵**（v1.18.63）。填鱼饵 id 时：
+            #: 这件道具在背包里、还有剩余次数期间，每抛一竿消耗 1 次，
+            #: 用完就消失（限定饵的发放载体，见 main._active_limited_bait）。
+            "bait": parts[10].strip() if len(parts) > 10 else "",
+            #: 第 12 段：道具自己的特殊效果（v1.18.63，留空即可）。
+            "special": _parse_special(parts[11]) if len(parts) > 11 else {},
         }
     if warn and (skipped or duplicate or unknown_fx):
         bits: list[str] = []
@@ -973,6 +1000,13 @@ def _parse_rod_defs(raw: Any, *, warn: Any = None) -> list[dict[str, Any]]:
                 "escape_factor": _clamp(_safe_number(parts[9], 1.0), 0.2, 1.0)
                 if len(parts) > 9
                 else 1.0,
+                # 第 11 段：限用次数（v1.18.63）。>0 = **限定竿**：不进商店、不算进
+                # 「鱼竿买齐」成就 —— 它是大鱼乐抽到的奖品，不是买的
+                # （见 _shop_visible_rods / main._active_limited_rod）。
+                "uses": max(0, _to_int(parts[10], 0)) if len(parts) > 10 else 0,
+                # 第 12 段：**特殊效果**（v1.18.63），`键=值;键=值` 写法，可省略。
+                # 限定竿靠它「异化」而不是堆数值 —— 能填的词见 ROD_SPECIAL_KEYS。
+                "special": _parse_special(parts[11]) if len(parts) > 11 else {},
             }
         )
     if not rods:
@@ -1731,6 +1765,161 @@ def _bait_consumed(
     return bool(every_cast) or bool(got_something) or bool(bait_eaten)
 
 
+def _parse_special(raw: Any) -> dict[str, float]:
+    """解析「特殊效果」列：``键=值;键=值``（v1.18.63）。
+
+    限定竿 / 限定饵靠它**异化**（换一个玩法特权），而不是继续堆价值/手气。
+    只看 ``键`` 在不在白名单里，值当数字；``完美'' 这种不需要值的写成 ``键`` 即可。
+
+    能填的词（竿）：``variant_extra=2`` 异色多掷 2 次 /
+    ``myth_every=12`` 每 12 竿一次神品 / ``perfect`` 拉线必判完美 /
+    ``double`` 一竿两条。
+    能填的词（饵）：``all_pool`` 从全图鱼池抽 / ``legend_only`` 只抽传说档。
+    """
+    out: dict[str, float] = {}
+    for chunk in str(raw or "").replace("，", ";").split(";"):
+        token = chunk.strip()
+        if not token:
+            continue
+        key, _, value = token.partition("=")
+        name = key.strip().lower()
+        if name not in SPECIAL_KEYS:
+            continue
+        out[name] = _safe_number(value, 1.0) if value.strip() else 1.0
+    return out
+
+
+#: 「特殊效果」列允许的键（唯一白名单：解析、编辑器提示、测试都用它）
+SPECIAL_KEYS: tuple[str, ...] = (
+    "variant_extra",   # 异色判定多掷几次（竿）
+    "myth_every",      # 每 N 竿有 1 竿个体品质直接神品（竿）
+    "perfect",         # 拉线一律判「完美」：保饵、不脱钩（竿）
+    "double",          # 一竿两条（竿）
+    "all_pool",        # 这一竿从全图鱼池抽（饵）
+    "legend_only",     # 这一竿只抽传说档（饵）
+)
+
+#: 每个键的中文说明（编辑器「特殊效果」列表头提示用）
+SPECIAL_HINTS: dict[str, str] = {
+    "variant_extra": "异色判定多掷 N 次（取最好）：2 = 0.5% 提到约 1.5%",
+    "myth_every": "每 N 竿有 1 竿的个体品质直接是神品（自然钓不到的那种）",
+    "perfect": "拉线一律判「完美」：饵不被咬掉、不会脱钩（写 1 即可）",
+    "double": "一次成功上钩算两条（每竿只触发一次）",
+    "all_pool": "这一竿从全地图鱼池抽（不再受当前钓点限制）",
+    "legend_only": "这一竿的鱼只从「传说」稀有度里抽（品质仍按自然爆率）",
+}
+
+
+def _rod_special(rod: Any, key: str, default: float = 0.0) -> float:
+    """读竿上的特殊效果值（没有就是 default）。"""
+    special = (rod or {}).get("special")
+    if not isinstance(special, dict):
+        return default
+    return _safe_number(special.get(key), default)
+
+
+def _bait_special(bait: Any, key: str, default: float = 0.0) -> float:
+    """读饵上的特殊效果值（没有就是 default）。"""
+    special = (bait or {}).get("special")
+    if not isinstance(special, dict):
+        return default
+    return _safe_number(special.get(key), default)
+
+
+def _shop_visible_baits(baits: Any) -> list[str]:
+    """鱼饵店里能买到的饵 id（带 ``special`` 的**限定饵**排除，v1.18.63）。
+
+    限定饵（深渊秘饵 / 贵客饵）只从大鱼乐抽到 —— 摆在货架上会让人以为攒钱就行。
+    """
+    return [
+        bid for bid, spec in (baits or {}).items()
+        if bid != "none" and not (spec or {}).get("special")
+    ]
+
+
+def _shop_visible_rods(rods: Any) -> list[dict[str, Any]]:
+    """鱼竿店里能买到的竿（``uses > 0`` 的**限定竿**排除，v1.18.63）。
+
+    限定竿（潮汐竿 / 星陨竿）是大鱼乐的奖品：它们写在 rod_defs 里（数值照常用
+    编辑器改），但**不进商店**、也不该算进「鱼竿买齐」那个成就。
+    """
+    out: list[dict[str, Any]] = []
+    for rod in rods or []:
+        if max(0, _safe_int((rod or {}).get("uses"), 0, 0)) > 0:
+            continue
+        out.append(rod)
+    return out
+
+
+def _shop_visible_items(items: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """商店里能买到的道具（``uses > 0`` 的限用道具**排除**，v1.18.63）。
+
+    限用道具是大鱼乐的奖品：它们不是买来的，摆在货架上只会让人以为「攒钱就行」。
+    """
+    return {
+        item_id: spec
+        for item_id, spec in (items or {}).items()
+        if max(0, _safe_int((spec or {}).get("uses"), 0, 0)) <= 0
+    }
+
+
+def _myth_quality_mult() -> float:
+    """最高一档（神品）的品质倍率 —— 取该档中上值（v1.18.63）。
+
+    自然爆率里神品权重是 0（只能靠洗髓丹洗出来），限定竿「星陨」每 N 竿直接给一次，
+    所以这里必须从**站长配置的档位表**里取，而不是写死一个数。
+    """
+    tiers = globals().get("QUALITY_TIERS") or []
+    if not tiers:
+        return 8.0
+    name, low, high, *_rest = tiers[-1]
+    return float(low) + (float(high) - float(low)) * 0.6
+
+
+def _use_limited_items(
+    player: dict[str, Any], items: dict[str, dict[str, Any]]
+) -> list[str]:
+    """扣掉「限用道具」一次的用量，返回要告诉玩家的那几行（v1.18.63）。
+
+    限用道具（``uses > 0``）是大鱼乐那些**买不到、只能抽到**的特殊家伙：
+    每抛一竿消耗 1 次，用完就从背包里消失。这里**按抛竿**算，而不是按
+    ``/钓鱼 用``：它们是「装备式的体验版」，玩家抽到就能直接用。
+    """
+    pocket = player.get("items")
+    if not isinstance(pocket, dict) or not pocket:
+        return []
+    lines: list[str] = []
+    for item_id in list(pocket):
+        spec = items.get(str(item_id)) or {}
+        total = max(0, _safe_int(spec.get("uses"), 0, 0))
+        if total <= 0:
+            continue
+        count = _safe_int(pocket.get(item_id), 0, 0)
+        if count <= 0:
+            continue          # 老存档里可能只有数量、没有剩余次数：当成没用过
+        state = player.get("limited_uses")
+        if not isinstance(state, dict):
+            state = {}
+            player["limited_uses"] = state
+        left = state.get(str(item_id))
+        if left is None:
+            left = total       # 第一次见到就补满（老存档 / 刚抽到的）
+        left = max(0, _safe_int(left, total, 0)) - 1
+        name = str(spec.get("name") or item_id)
+        emoji = str(spec.get("emoji") or "🎁")
+        if left > 0:
+            state[str(item_id)] = left
+            lines.append(f"　{emoji} {name} 还可用 {left} 次")
+            continue
+        # 用完了：整件从背包里拿掉（它本来就不是买来的，不留残渣）
+        state.pop(str(item_id), None)
+        pocket[str(item_id)] = count - 1
+        if _safe_int(pocket.get(str(item_id)), 0, 0) <= 0:
+            pocket.pop(str(item_id), None)
+        lines.append(f"　{emoji} {name} 用完了（共 {total} 次），这件限用道具已消失")
+    return lines
+
+
 def _multi_escape_chance(spec: dict[str, Any], cfg: dict[str, Any]) -> float:
     """连钓里这条要拉线的鱼「跑掉」的概率。
 
@@ -2381,6 +2570,22 @@ def _repair_player(raw: Any, user_id: str) -> tuple[dict[str, Any], bool]:
 
         player["rod_level"] = _safe_int(raw.get("rod_level"), 1, 1)
 
+        # --- 限定竿/饵（v1.18.63）---
+        # ⚠️ `_repair_player` 是**白名单式重建**：这里没列的键，每次读档都会被丢掉。
+        #    限定凭证的「剩余次数」与「星陨竿的神品计数」都存这两项里 ——
+        #    漏掉的话特权限额每竿都被清零，「每 12 竿一次神品」永远触发不了（踩过）。
+        _lu = raw.get("limited_uses")
+        player["limited_uses"] = (
+            {
+                str(k): max(0, _safe_int(v, 0, 0))
+                for k, v in _lu.items()
+                if isinstance(k, str) and _safe_int(v, 0, 0) >= 0
+            }
+            if isinstance(_lu, dict)
+            else {}
+        )
+        player["limited_rod_casts"] = max(0, _safe_int(raw.get("limited_rod_casts"), 0, 0))
+
         # --- 成就 ---
         raw_ach = raw.get("achievements")
         achievements: list[str] = []
@@ -2680,6 +2885,8 @@ REPLY_SCENES: tuple[tuple[str, str, str, str], ...] = (
     ("story", "system", "共用按钮组：小插曲（按选项生成，{label}/{n} 是模板占位符）", ""),
     # ---- 下竿 ----
     ("cast.hit", "cast", "钓到鱼之后那条结果", "cast"),
+    ("cast.double", "cast", "双尾竿触发：同一竿又上来一条（v1.18.63）", "cast"),
+    ("cast.double_full", "cast", "双尾竿触发但背包满了", "cast"),
     ("cast.junk", "cast", "这一竿钩上的是杂物", "cast"),
     ("cast.miss_none", "cast", "空竿：空钩没鱼理", ""),
     ("cast.miss_bait", "cast", "空竿：咬了一口又吐掉", ""),

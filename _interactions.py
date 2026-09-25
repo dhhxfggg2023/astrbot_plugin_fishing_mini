@@ -341,6 +341,7 @@ class InteractionsMixin:
         *,
         buttons: bool = True,
         keyboard_own: bool = True,
+        extra_rows: list[list[dict[str, Any]]] | None = None,
     ):
         """**统一输出出口**：先按场景叠加文案覆盖，再能发按钮就发按钮，否则退回纯文本。
 
@@ -371,6 +372,11 @@ class InteractionsMixin:
         单竿是「钓到鱼的结果」，连钓是战报，正好是事后最想点的那一排。
 
         用法：``async for r in self._say(event, text, "bag.list"): yield r``
+
+        ``extra_rows``（v1.18.63）：**调用方现算出来的按钮行**，优先于场景里配的。
+        给小插曲用：选项按钮是按这一局的选项现生成的（``_views._event_rows``），
+        而 ``story.prompt`` 这个场景本身没配按钮，继承链会兜底到 ``story.result``
+        （「继续钓 / 看背包」）—— 于是站长报的「事件的按钮怎么没了」就出现了。
         """
         text = self._scene_text(scene, text, values)
         # 每条指令的**第一条**回复带上「称呼」（昵称 / @昵称）——
@@ -382,7 +388,7 @@ class InteractionsMixin:
                 text = prefix + text
         rows: list[list[dict[str, Any]]] = []
         if buttons:
-            rows = self._scene_rows(scene) if scene else []
+            rows = list(extra_rows or []) or (self._scene_rows(scene) if scene else [])
             # 动态按钮排在最后：先「上一页 / 下一页」，再「再次使用」
             rows = rows + self._page_rows(scene, page) + self._again_rows(scene, again_values)
         if rows and await self._send_with_buttons(event, text, rows, own=keyboard_own):
@@ -697,6 +703,15 @@ class InteractionsMixin:
         """
         center = _clamp(_safe_number(spec.get("center"), 0.5), 0.0, 1.0)
         half = _clamp(_safe_number(spec.get("half"), 0.17), 0.01, 0.5)
+        # 限定竿「瞬手」（v1.18.63）：拉线一律判「完美」—— 饵不被咬掉、不脱钩。
+        # 它是**牺牲换来的**：那根竿手气归零、价值加成也低（见 rod_defs 第 12 段）。
+        if _safe_number(spec.get("perfect_pull"), 0.0) > 0:
+            return (
+                "完美",
+                float(self.cfg["perfect_bonus"]),
+                float(self.cfg["perfect_escape_factor"]),
+                "🎯",
+            )
         drift = abs(_clamp(pos, 0.0, 1.0) - center)
 
         if drift <= half * 0.5:
@@ -1049,12 +1064,18 @@ class InteractionsMixin:
         # 连载：先说一句「上次演到哪」，再抛这一话（单独一条消息，站长可单独配文案）
         recap = self._event_recap(story, player)
         if recap:
-            async for reply in self._say(event, recap, "story.recap"):
+            # ⚠️ `keyboard_own=False`（v1.18.63）：QQ 一条入站消息只有**第一条**回复能挂键盘，
+            #    而这条「前情提要」只是铺垫 —— 名额得留给紧跟其后的**选项**（那才是要点的）。
+            #    以前 recap 把名额吃掉，插曲提示就只能退回纯文本，玩家看到「事件没有按钮」。
+            async for reply in self._say(event, recap, "story.recap", keyboard_own=False):
                 yield reply
         text, _rows = self._event_prompt(
             story, order, text=self._event_text(story, player)
         )
-        async for reply in self._say(event, text, "story.prompt"):
+        # ⚠️ 把现算出来的**选项按钮**传进去（v1.18.63 修「事件的按钮怎么没了」）：
+        #    以前这里把 _rows 丢掉了，story.prompt 走继承兜底到 story.result，
+        #    结果插曲只剩「继续钓 / 看背包」，没有「选项」可点。
+        async for reply in self._say(event, text, "story.prompt", extra_rows=_rows):
             yield reply
 
     async def _broadcast(self, event: AstrMessageEvent, catch: dict[str, Any]) -> bool:

@@ -34,7 +34,30 @@ class ViewsMixin:
 
     def _rod_label(self, player: dict[str, Any]) -> str:
         rod = self._rod(player)
-        return f"{rod.get('emoji', '')}{rod.get('name', '鱼竿')}"
+        label = f"{rod.get('emoji', '')}{rod.get('name', '鱼竿')}"
+        left = self._limited_rod_left(player, str(rod.get("id") or ""))
+        # 限定竿（大鱼乐抽到的）标出剩余次数 —— 否则玩家不知道这根竿哪来的、
+        # 也不知道还剩几次（v1.18.63）
+        return f"{label}（限用·剩 {left} 次）" if left is not None else label
+
+    def _limited_rod_left(self, player: dict[str, Any], rod_id: str) -> int | None:
+        """这根竿如果是「限用竿」，返回剩余次数；不是（或没有）返回 None。"""
+        if not rod_id:
+            return None
+        pocket = player.get("items")
+        if not isinstance(pocket, dict):
+            return None
+        state = player.get("limited_uses")
+        state = state if isinstance(state, dict) else {}
+        for item_id, spec in (getattr(self, "items", None) or {}).items():
+            if str((spec or {}).get("rod") or "") != rod_id:
+                continue
+            if _safe_int(pocket.get(item_id), 0, 0) <= 0:
+                continue
+            total = _safe_int((spec or {}).get("uses"), 0, 0)
+            left = state.get(str(item_id))
+            return total if left is None else max(0, _safe_int(left, total, 0))
+        return None
 
     def _title_label(self, player: dict[str, Any]) -> str:
         """玩家当前戴的称号（v1.18.17，没戴返回空串）。
@@ -808,8 +831,17 @@ class ViewsMixin:
                 lines.append(f"　{bait['desc']}")
             hits.append((f"🪱 鱼饵「{bait.get('name')}」", lines))
 
-        # ---- 鱼竿 ----
-        for rod in self.rods:
+        # ---- 鱼竿（限定竿不卖，不进这家店；它有剩余次数时会顶替装备的竿）----
+        _active_rod = self._rod(player)
+        _active_limited = self._limited_rod_left(player, str(_active_rod.get("id") or ""))
+        if _active_limited is not None:
+            lines = [
+                f"　{_active_rod.get('emoji', '')}{_active_rod.get('name', '鱼竿')}"
+                f"（大鱼乐限定·剩 {_active_limited} 次）",
+                "　　现在生效的就是它（用完自动换回你装备的竿）",
+            ]
+            hits.append((f"🎣 鱼竿「{_active_rod.get('name')}」（限定中）", lines))
+        for rod in _shop_visible_rods(self.rods):
             if not matches(rod.get("name"), str(rod.get("id"))):
                 continue
             owned_rod = rod["id"] in (player.get("rods") or [DEFAULT_ROD])
@@ -1030,7 +1062,10 @@ class ViewsMixin:
             f"　价值+{rod['value_bonus']:.0%}　手气{_luck_stars(rod['luck_bonus'], 0.2)}"
             + self._rod_pull_text(rod)
             + (f"　需{rod['unlock_level']}级" if rod.get("unlock_level", 1) > 1 else "")
-            for rod in sorted(self.rods, key=lambda r: _safe_int(r.get("price"), 0, 0))
+            for rod in sorted(
+                _shop_visible_rods(self.rods),
+                key=lambda r: _safe_int(r.get("price"), 0, 0),
+            )
         ]
         bait_lines = [
             f"　{self.baits[b]['emoji']}{self.baits[b]['name']}　"
